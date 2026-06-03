@@ -25,11 +25,17 @@ def pump(app, seconds):
         time.sleep(0.02)
 
 
+TAB = sys.argv[2] if len(sys.argv) > 2 else None
+
 app = AppWindow()
 app.geometry("1100x720+0+0")
 pump(app, 0.6)
-app._on_start()           # show it mid-run with live logs
-pump(app, 1.2)
+if TAB:
+    app._show(TAB)
+    pump(app, 0.6)
+else:
+    app._on_start()       # show it mid-run with live logs
+    pump(app, 1.2)
 app.update_idletasks()
 subprocess.run(["import", "-window", "root", OUT], check=True)
 print("saved", OUT)

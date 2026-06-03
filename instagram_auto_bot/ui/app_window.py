@@ -17,6 +17,7 @@ from core.settings_store import SettingsStore
 from core.ui_bridge import LogQueue
 from ui.tab_account import AccountTab
 from ui.tab_brand import BrandTab
+from ui.tab_create import CreateTab
 from ui.widgets import LogPanel
 
 _STATE_LABELS = {
@@ -46,7 +47,8 @@ class AppWindow(ctk.CTk):
 
         self._tabs: dict[str, ctk.CTkFrame] = {}
         self._nav_buttons: dict[str, ctk.CTkButton] = {}
-        # The job Start runs. Replaced by the real pipeline in later stages.
+        self._active: str = "account"
+        # Fallback job for tabs without their own primary action (demo only).
         self._job = self._demo_job
 
         self._build_layout()
@@ -99,7 +101,8 @@ class AppWindow(ctk.CTk):
     def _register_tabs(self) -> None:
         self.add_tab("account", AccountTab(self._content, self.store))
         self.add_tab("brand", BrandTab(self._content, self.store))
-        # Later stages register: "create" (tab_create), "schedule" (tab_schedule).
+        self.add_tab("create", CreateTab(self._content, self.store, self.controller))
+        # Later stages register: "schedule" (tab_schedule).
         self._show("account")
 
     def add_tab(self, name: str, frame: ctk.CTkFrame, label: str | None = None) -> None:
@@ -117,12 +120,22 @@ class AppWindow(ctk.CTk):
         self._tabs[name].grid()
         for n, btn in self._nav_buttons.items():
             btn.configure(fg_color=("#3b82f6" if n == name else "transparent"))
+        self._active = name
+        refresh = getattr(self._tabs[name], "refresh_status", None)
+        if callable(refresh):
+            refresh()
 
     # ------------------------------------------------------------- controls
     def _on_start(self) -> None:
         if self.controller.is_active:
             return
-        self.log.info("작업 시작 / start requested")
+        # Route to the active tab's primary action if it has one (e.g. Create).
+        action = getattr(self._tabs.get(self._active), "primary_action", None)
+        if callable(action):
+            self.log.info("작업 시작 / start (%s)", self._active)
+            action()
+            return
+        self.log.info("데모 작업 시작 / demo start")
         self.controller.start(self._job, on_error=self._on_job_error)
 
     def _on_pause(self) -> None:

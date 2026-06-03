@@ -35,8 +35,11 @@ def main() -> int:
     app = AppWindow()
     pump(app, 0.3)
 
-    # Tab switching must not raise.
+    # Tab switching must not raise (incl. the Create tab and its status refresh).
     app._show("brand")
+    app._show("create")
+    pump(app, 0.2)
+    assert "create" in app._tabs
     app._show("account")
     pump(app, 0.2)
 

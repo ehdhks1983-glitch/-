@@ -18,7 +18,20 @@ GRAPH_API_VERSION: str = "v22.0"
 GRAPH_BASE_URL: str = "https://graph.facebook.com"
 # Resumable upload host used for Reels video bytes.
 RUPLOAD_BASE_URL: str = "https://rupload.facebook.com"
+# Instagram Graph host used for long-lived token refresh.
+INSTAGRAM_GRAPH_URL: str = "https://graph.instagram.com"
+TOKEN_REFRESH_PATH: str = "refresh_access_token"
 IG_SCOPES: list[str] = ["instagram_basic", "instagram_content_publish"]
+
+# Container status_code values returned while a media container is processing.
+IG_STATUS_FINISHED: str = "FINISHED"
+IG_STATUS_IN_PROGRESS: str = "IN_PROGRESS"
+IG_STATUS_ERROR: str = "ERROR"
+IG_STATUS_EXPIRED: str = "EXPIRED"
+# Graph error codes worth retrying (rate limit / transient app issues).
+TRANSIENT_ERROR_CODES: frozenset[int] = frozenset({1, 2, 4, 17, 32, 341, 613})
+# Carousel must contain 2-10 children (Meta limit).
+CAROUSEL_MIN, CAROUSEL_MAX = 2, 10
 
 
 def graph_url(*path: str) -> str:
