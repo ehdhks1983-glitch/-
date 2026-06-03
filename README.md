@@ -11,20 +11,21 @@
 
 ```
 centumhi-license-hub/
-├── backend/     # FastAPI + SQLAlchemy 2.0 + SQLite/PostgreSQL  ← Phase 1 (완료)
-├── frontend/    # Next.js 14 (App Router) + Tailwind + shadcn/ui ← Phase 2 (예정)
-└── docs/        # 통합 가이드 / 배포 문서
+├── backend/     # FastAPI + SQLAlchemy 2.0 + SQLite/PostgreSQL  (Phase 1, 3)
+├── frontend/    # Next.js 14 (App Router) + Tailwind            (Phase 2, 3)
+├── client/      # centumhi-license-client (봇용 파이썬 패키지)   (Phase 4)
+└── docs/        # API / 클라이언트 통합 / 배포 문서
 ```
 
 ## 진행 현황
 
 | Phase | 내용 | 상태 |
 |---|---|---|
-| **1** | 백엔드 코어 (모델·인증·제품/라이선스/검증 API·스케줄러·테스트) | ✅ 완료 (`pytest` 31 통과) |
-| 2 | 프론트엔드 (로그인·대시보드·키 발급/목록·활성화 현황) | ⬜ 예정 |
-| 3 | 만료 알림·카톡 연동·통계/감사 로그 뷰 | ⬜ 예정 |
-| 4 | `centumhi-license-client` 패키지 + 기존 봇 통합 PoC | ⬜ 예정 |
-| 5 | Railway/Vercel 배포 + 도메인·백업 | ⬜ 예정 |
+| **1** | 백엔드 코어 (모델·인증·제품/라이선스/검증 API·스케줄러·테스트) | ✅ 완료 (`pytest` 34 통과) |
+| **2** | 프론트엔드 (로그인·대시보드·키 발급/목록·상세·활성화 현황·계정·설정) | ✅ 완료 (`next build` 통과) |
+| **3** | 일일 만료 스윕(스케줄러)·감사 로그 뷰·통계 | ✅ 대부분 완료 / 카톡 연동은 stub (스킬서버 코드 필요) |
+| **4** | `centumhi-license-client` 패키지 + 라이브 연동 검증 | ✅ 완료 (테스트 9 + e2e) |
+| **5** | Dockerfile·Railway/Vercel 설정·배포 문서 | ✅ 설정·문서 준비 / 실제 배포는 계정·시크릿 필요 |
 
 ## 백엔드 빠른 시작
 
