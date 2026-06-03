@@ -10,14 +10,27 @@ import { analyzePrompt } from "@/lib/ai/analyzePrompt";
 import { clarifyQuestions, answersToContext, type ClarifyAnswer } from "@/lib/ai/clarifyQuestions";
 import { generateCopy } from "@/lib/ai/generateCopy";
 import { selectTemplate } from "@/lib/ai/selectTemplate";
+import { rateLimit, clientKey, sweep } from "@/lib/rateLimit";
 import type { BizInfo } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const MAX_PROMPT = 2000;
+const GENERATE_LIMIT = 12; // 분당 생성 횟수(IP 기준) — 토큰 비용 폭주 방지
+const GENERATE_WINDOW_MS = 60_000;
 
 export async function POST(req: Request) {
+  // rate limit (토큰 비용 폭주 방지)
+  sweep();
+  const rl = rateLimit(clientKey(req, "generate"), GENERATE_LIMIT, GENERATE_WINDOW_MS);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "요청이 많아요. 잠시 후 다시 시도해 주세요." },
+      { status: 429 },
+    );
+  }
+
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;

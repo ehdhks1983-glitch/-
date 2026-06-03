@@ -46,6 +46,8 @@ export default function ProjectPage() {
   const [questions, setQuestions] = useState<ClarifyQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [copy, setCopy] = useState<SectionCopy | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [publishedUrl, setPublishedUrl] = useState("");
 
   function persist(next: { biz: BizInfo; template: TemplateId; copy: SectionCopy }) {
     try {
@@ -130,6 +132,30 @@ export default function ProjectPage() {
     }
   }
 
+  async function publish() {
+    if (!biz || !copy) return;
+    setError("");
+    setPublishing(true);
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, title: biz.service_name, template, biz_info: biz, copy }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { slug?: string; error?: string };
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+      if (!res.ok) throw new Error(data?.error || "게시에 실패했어요. 잠시 후 다시 시도해 주세요.");
+      if (data.slug) setPublishedUrl(`${window.location.origin}/s/${data.slug}`);
+    } catch (e) {
+      setError(toMessage(e));
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   function switchTemplate(id: TemplateId) {
     setTemplate(id);
     if (biz && copy) persist({ biz, template: id, copy });
@@ -142,6 +168,7 @@ export default function ProjectPage() {
     setQuestions([]);
     setAnswers({});
     setError("");
+    setPublishedUrl("");
   }
 
   return (
@@ -152,29 +179,44 @@ export default function ProjectPage() {
           <Link href="/" className="font-bold tracking-tight">
             Prompt<span className="text-indigo-600">Site</span>
           </Link>
-          {phase === "preview" && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onRegenerate}
-                disabled={loading}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition hover:bg-slate-50 disabled:opacity-50"
-              >
-                {loading ? "생성 중…" : "다시 생성"}
-              </button>
-              <Link
-                href={`/project/${projectId}/preview`}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition hover:bg-slate-50"
-              >
-                전체화면
-              </Link>
-              <button
-                onClick={reset}
-                className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-slate-700"
-              >
-                처음부터
-              </button>
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            {phase === "preview" && (
+              <>
+                <button
+                  onClick={publish}
+                  disabled={publishing}
+                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {publishing ? "게시 중…" : "게시하기"}
+                </button>
+                <button
+                  onClick={onRegenerate}
+                  disabled={loading}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {loading ? "생성 중…" : "다시 생성"}
+                </button>
+                <Link
+                  href={`/project/${projectId}/preview`}
+                  className="hidden rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition hover:bg-slate-50 sm:block"
+                >
+                  전체화면
+                </Link>
+                <button
+                  onClick={reset}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition hover:bg-slate-50"
+                >
+                  처음부터
+                </button>
+              </>
+            )}
+            <Link
+              href="/dashboard"
+              className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-slate-700"
+            >
+              대시보드
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -302,6 +344,19 @@ export default function ProjectPage() {
         {/* PREVIEW */}
         {phase === "preview" && copy && (
           <div>
+            {publishedUrl && (
+              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                <span className="font-medium">게시 완료!</span>
+                <a
+                  href={publishedUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  {publishedUrl}
+                </a>
+              </div>
+            )}
             <div className="mb-4 flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-slate-500">템플릿</span>
               {TEMPLATE_META.map((m) => (
