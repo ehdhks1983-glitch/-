@@ -21,6 +21,7 @@ from ui_video_tab import VideoTab
 from ui_record_tab import RecordTab
 from ui_edit_tab import EditTab
 from ui_shorts_tab import ShortsTab
+from ui_planner_tab import PlannerTab
 
 
 class GifMakerApp(ctk.CTk):
@@ -128,6 +129,7 @@ class GifMakerApp(ctk.CTk):
         self._tabview.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 0))
 
         tabs = {
+            "📝 영상 기획": PlannerTab,
             "🖼️ 이미지 합치기": MergeTab,
             "🎬 영상 → 움짤": VideoTab,
             "📱 쇼츠 제작": ShortsTab,
@@ -145,13 +147,14 @@ class GifMakerApp(ctk.CTk):
             self._tab_instances[name] = instance
 
         # 편의 참조
+        self._planner_tab = self._tab_instances["📝 영상 기획"]
         self._merge_tab = self._tab_instances["🖼️ 이미지 합치기"]
         self._video_tab = self._tab_instances["🎬 영상 → 움짤"]
         self._shorts_tab = self._tab_instances["📱 쇼츠 제작"]
         self._record_tab = self._tab_instances["🔴 화면 녹화"]
         self._edit_tab = self._tab_instances["✏️ 편집"]
 
-        self._tabview.set("🖼️ 이미지 합치기")
+        self._tabview.set("📝 영상 기획")
 
     # ════════════════════════════════════════
     # 하단 상태바
