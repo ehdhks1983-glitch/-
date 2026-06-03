@@ -44,6 +44,11 @@ def t_edit():
     make_tab(EditTab)
 check("EditTab 생성", t_edit)
 
+def t_shorts():
+    from ui_shorts_tab import ShortsTab
+    make_tab(ShortsTab)
+check("ShortsTab 생성", t_shorts)
+
 root.destroy()
 
 # 전체 앱 생성 (실제 경로)
@@ -51,9 +56,9 @@ def t_app():
     from ui_app import GifMakerApp
     app = GifMakerApp()
     app.update_idletasks()
-    assert len(app._tab_instances) == 4, f"탭 개수 {len(app._tab_instances)}"
+    assert len(app._tab_instances) == 5, f"탭 개수 {len(app._tab_instances)}"
     app.destroy()
-check("전체 앱(GifMakerApp) 생성 + 4탭", t_app)
+check("전체 앱(GifMakerApp) 생성 + 5탭", t_app)
 
 passed = sum(1 for _, ok, _ in results if ok)
 total = len(results)

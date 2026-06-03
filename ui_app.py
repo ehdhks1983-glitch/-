@@ -20,6 +20,7 @@ from ui_merge_tab import MergeTab
 from ui_video_tab import VideoTab
 from ui_record_tab import RecordTab
 from ui_edit_tab import EditTab
+from ui_shorts_tab import ShortsTab
 
 
 class GifMakerApp(ctk.CTk):
@@ -112,6 +113,7 @@ class GifMakerApp(ctk.CTk):
         tabs = {
             "🖼️ 이미지 합치기": MergeTab,
             "🎬 영상 → 움짤": VideoTab,
+            "📱 쇼츠 제작": ShortsTab,
             "🔴 화면 녹화": RecordTab,
             "✏️ 편집": EditTab,
         }
@@ -128,6 +130,7 @@ class GifMakerApp(ctk.CTk):
         # 편의 참조
         self._merge_tab = self._tab_instances["🖼️ 이미지 합치기"]
         self._video_tab = self._tab_instances["🎬 영상 → 움짤"]
+        self._shorts_tab = self._tab_instances["📱 쇼츠 제작"]
         self._record_tab = self._tab_instances["🔴 화면 녹화"]
         self._edit_tab = self._tab_instances["✏️ 편집"]
 
@@ -187,6 +190,9 @@ class GifMakerApp(ctk.CTk):
         current = self._tabview.get()
         if "이미지" in current:
             self._merge_tab.add_files_from_drop(paths)
+        elif "쇼츠" in current:
+            for p in paths:
+                self._shorts_tab.add_file_from_drop(p)
         elif "영상" in current and paths:
             self._video_tab.add_file_from_drop(paths[0])
         elif "편집" in current and paths:
