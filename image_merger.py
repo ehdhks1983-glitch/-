@@ -330,8 +330,10 @@ def merge_images(
             progress(78, "워터마크 적용 중...")
             wm_frames = []
             for f in frames:
-                wm_frames.append(apply_to_frame(f))
-                f.close()
+                wf = apply_to_frame(f)
+                wm_frames.append(wf)
+                if wf is not f:      # 합성 실패로 원본이 그대로 오면 닫지 않음(저장 시 닫힌 이미지 방지)
+                    f.close()
             frames = wm_frames
     except Exception:
         pass

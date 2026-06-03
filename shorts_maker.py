@@ -70,7 +70,7 @@ def _run(cmd, timeout=300):
 
 def _audio_duration(path: str) -> float:
     try:
-        r = _run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+        r = _run([_ffprobe_path(), "-v", "quiet", "-show_entries", "format=duration",
                   "-of", "csv=p=0", path], timeout=30)
         return float(r.stdout.decode().strip())
     except Exception:
