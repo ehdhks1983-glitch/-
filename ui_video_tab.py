@@ -307,6 +307,14 @@ class VideoTab(ctk.CTkFrame):
         if self._format_var.get() != "mp4":
             self._shorts_check.configure(state="disabled")
 
+        # 📱 원클릭: MP4 + 쇼츠를 한 번에 설정
+        ctk.CTkButton(
+            fmt_frame, text="📱 쇼츠로 만들기 (한 번에 설정)",
+            height=30, font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#db2777", hover_color="#be185d",
+            command=self._apply_shorts_preset,
+        ).grid(row=2, column=0, columnspan=4, padx=6, pady=(8, 0), sticky="ew")
+
         # ── FPS ──
         ctk.CTkLabel(right, text="🎞️ FPS",
                      font=ctk.CTkFont(size=13, weight="bold")).grid(row=3, column=0, **pad)
@@ -1497,6 +1505,16 @@ class VideoTab(ctk.CTkFrame):
         end_str = f"{end:.1f}초" if end > 0 else "끝"
         dur = (end if end > 0 else (self._video_info.duration if self._video_info else 0)) - start
         self._duration_label.configure(text=f"구간: {start:.1f}초 ~ {end_str} ({dur:.1f}초)")
+
+    def _apply_shorts_preset(self):
+        """원클릭: 세로 쇼츠(MP4 9:16) 설정을 한 번에 적용"""
+        self._format_var.set("mp4")
+        self._shorts_var.set(True)
+        self._on_format_change()
+        self._status_label.configure(
+            text="📱 쇼츠 설정 완료! 영상 열고 '🚀 변환 시작'을 누르세요",
+            text_color="#3b82f6",
+        )
 
     def _on_format_change(self, val=None):
         """출력 포맷 변경 — MP4일 때만 쇼츠 옵션 활성화"""
