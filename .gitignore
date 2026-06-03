@@ -1,0 +1,29 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── 런타임/빌드 산출물 ──
+data/
+build/
+dist/
+output/
+_private/
+protected/
+ffmpeg/
+*.backup
+*.backup_*
+
+# ── 🔐 라이선스 비밀키 포함 (절대 공개 저장소에 올리지 말 것) ──
+license_manager.py
+license_generator.py
+SESSION_LOG.md
+
+# ── 로컬 테스트 전용 (미업로드 파일의 임시 스텁) ──
+recorder.py
+
+# ── 테스트 산출물 ──
+_test_assets/
+_test_out/
