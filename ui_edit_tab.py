@@ -533,7 +533,7 @@ class EditTab(ctk.CTkFrame):
             self.after(0, lambda: self._on_edit_done(output_path))
 
         except Exception as e:
-            self.after(0, lambda: self._on_edit_done(None, str(e)))
+            self.after(0, lambda e=e: self._on_edit_done(None, str(e)))
 
     def _on_edit_done(self, result: Optional[str], error: str = ""):
         self._working = False
@@ -622,7 +622,9 @@ class EditTab(ctk.CTkFrame):
         if not paths:
             return
         self._batch_paths = list(paths)
+        prev_fmt = self._format_var.get()
         self._load_file(self._batch_paths[0])
+        self._format_var.set(prev_fmt)  # 배치는 출력 포맷을 사용자 선택대로 유지
         self._file_label.configure(
             text=f"🗂 배치 {len(self._batch_paths)}개 (미리보기: 1번 파일)",
             text_color="white",

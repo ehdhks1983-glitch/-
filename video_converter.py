@@ -387,6 +387,13 @@ def _convert_to_gif(
     sub_filter = _build_subtitle_filters(job.subtitles, job.start_time, job.output_height)
     if sub_filter:
         filter_parts.append(sub_filter)
+    try:
+        from watermark import drawtext_filter
+        _wm_f = drawtext_filter(job.output_height or 480)
+        if _wm_f:
+            filter_parts.append(_wm_f)
+    except Exception:
+        pass
 
     base_filter = ",".join(filter_parts)
 
@@ -493,6 +500,13 @@ def _convert_to_webp(
     sub_filter = _build_subtitle_filters(job.subtitles, job.start_time, job.output_height)
     if sub_filter:
         filter_parts.append(sub_filter)
+    try:
+        from watermark import drawtext_filter
+        _wm_f = drawtext_filter(job.output_height or 480)
+        if _wm_f:
+            filter_parts.append(_wm_f)
+    except Exception:
+        pass
 
     vf = ",".join(filter_parts)
 
@@ -538,6 +552,13 @@ def _convert_to_apng(
     sub_filter = _build_subtitle_filters(job.subtitles, job.start_time, job.output_height)
     if sub_filter:
         filter_parts.append(sub_filter)
+    try:
+        from watermark import drawtext_filter
+        _wm_f = drawtext_filter(job.output_height or 480)
+        if _wm_f:
+            filter_parts.append(_wm_f)
+    except Exception:
+        pass
 
     vf = ",".join(filter_parts)
 
@@ -592,6 +613,12 @@ def _convert_to_mp4(
     # 자막 (쇼츠면 1920 높이 기준 정규화)
     out_h = 1920 if shorts else (job.output_height or 480)
     sub_filter = _build_subtitle_filters(job.subtitles, job.start_time, out_h)
+    try:
+        from watermark import drawtext_filter
+        wm_filter = drawtext_filter(out_h)
+    except Exception:
+        wm_filter = ""
+    overlay_filter = ",".join([x for x in (sub_filter, wm_filter) if x])
 
     # 비디오 필터/맵 구성
     if shorts:
@@ -604,8 +631,8 @@ def _convert_to_mp4(
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2[vmid]"
         )
         vlabel = "[vmid]"
-        if sub_filter:
-            fc += f";[vmid]{sub_filter}[vout]"
+        if overlay_filter:
+            fc += f";[vmid]{overlay_filter}[vout]"
             vlabel = "[vout]"
         video_args = ["-filter_complex", fc, "-map", vlabel]
     else:
@@ -616,8 +643,8 @@ def _convert_to_mp4(
         else:
             # H.264는 짝수 해상도 필요
             vf.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
-        if sub_filter:
-            vf.append(sub_filter)
+        if overlay_filter:
+            vf.append(overlay_filter)
         video_args = ["-vf", ",".join(vf), "-map", "0:v"]
 
     # 오디오 구성 (원본 유지 + 속도 변경 시 atempo)

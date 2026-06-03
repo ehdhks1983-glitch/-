@@ -76,13 +76,21 @@ class GifMakerApp(ctk.CTk):
             font=ctk.CTkFont(size=18, weight="bold"),
         ).grid(row=0, column=0, sticky="w", padx=16, pady=10)
 
-        # ℹ️ 정보 버튼
+        # 💧 워터마크 + ℹ️ 정보 버튼
+        btns = ctk.CTkFrame(header, fg_color="transparent")
+        btns.grid(row=0, column=2, sticky="e", padx=(0, 8), pady=10)
         ctk.CTkButton(
-            header, text="ℹ️ 정보", width=70, height=28,
+            btns, text="💧 워터마크", width=90, height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#0ea5e9", hover_color="#0284c7",
+            command=self._open_watermark,
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            btns, text="ℹ️ 정보", width=70, height=28,
             font=ctk.CTkFont(size=11),
             fg_color="gray25", hover_color="gray30",
             command=self._open_about,
-        ).grid(row=0, column=2, sticky="e", padx=(0, 8), pady=10)
+        ).pack(side="left")
 
         ctk.CTkLabel(
             header, text=f"v{APP_VERSION}",
@@ -94,6 +102,15 @@ class GifMakerApp(ctk.CTk):
         try:
             from about_dialog import AboutDialog
             dialog = AboutDialog(self)
+            dialog.focus()
+        except Exception:
+            pass
+
+    def _open_watermark(self):
+        """워터마크 설정 창 열기"""
+        try:
+            from watermark_dialog import WatermarkDialog
+            dialog = WatermarkDialog(self)
             dialog.focus()
         except Exception:
             pass

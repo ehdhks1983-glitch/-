@@ -9,6 +9,27 @@ from typing import List, Tuple, Optional, Callable
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
 
 
+def _load_text_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+    """한글 지원 폰트 로더 (malgun → nanum → dejavu → arial → 기본)"""
+    if bold:
+        paths = ["C:/Windows/Fonts/malgunbd.ttf", "malgunbd.ttf",
+                 "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arialbd.ttf"]
+    else:
+        paths = ["C:/Windows/Fonts/malgun.ttf", "malgun.ttf",
+                 "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "arial.ttf"]
+    for p in paths:
+        try:
+            return ImageFont.truetype(p, size)
+        except (OSError, IOError):
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
 # ════════════════════════════════════════
 # 프레임 로딩 / 저장
 # ════════════════════════════════════════
@@ -46,9 +67,19 @@ def save_frames(
     loop: int = 0,
     quality: int = 80,
 ):
-    """프레임 리스트 → 애니메이션 이미지 저장"""
+    """프레임 리스트 → 애니메이션 이미지 저장 (워터마크 자동 적용)"""
     if not frames:
         return
+
+    # ── 💧 워터마크 (전역 설정 켜져 있을 때만 새 프레임으로 합성) ──
+    _wm = None
+    try:
+        from watermark import watermark, apply_to_frame
+        if watermark.active:
+            _wm = [apply_to_frame(f) for f in frames]
+            frames = _wm
+    except Exception:
+        _wm = None
 
     if output_format == "gif":
         converted = []
@@ -81,6 +112,13 @@ def save_frames(
         )
         for r in rgba:
             r.close()
+
+    if _wm:
+        for f in _wm:
+            try:
+                f.close()
+            except Exception:
+                pass
 
 
 # ════════════════════════════════════════
@@ -281,13 +319,13 @@ def add_text(
     """
     result = []
 
-    try:
-        if font_path:
+    if font_path:
+        try:
             font = ImageFont.truetype(font_path, font_size)
-        else:
-            font = ImageFont.truetype("arial.ttf", font_size)
-    except (OSError, IOError):
-        font = ImageFont.load_default()
+        except (OSError, IOError):
+            font = _load_text_font(font_size)
+    else:
+        font = _load_text_font(font_size)
 
     for f in frames:
         img = f.copy()
@@ -384,10 +422,7 @@ def add_frame_numbers(
     result = []
     total = len(frames)
 
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except (OSError, IOError):
-        font = ImageFont.load_default()
+    font = _load_text_font(font_size)
 
     for i, f in enumerate(frames):
         img = f.copy()

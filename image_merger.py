@@ -323,6 +323,19 @@ def merge_images(
         progress(100, "❌ 변환 가능한 이미지가 없습니다")
         return None
 
+    # ── 💧 워터마크 적용 (전역 설정이 켜져 있을 때) ──
+    try:
+        from watermark import watermark, apply_to_frame
+        if watermark.active:
+            progress(78, "워터마크 적용 중...")
+            wm_frames = []
+            for f in frames:
+                wm_frames.append(apply_to_frame(f))
+                f.close()
+            frames = wm_frames
+    except Exception:
+        pass
+
     # ── 3) 출력 경로 결정 ──
     if not job.output_path:
         ext = "apng" if job.output_format == "apng" else job.output_format

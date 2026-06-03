@@ -222,6 +222,11 @@ def render_segment_frame(seg: ShortsSegment, caption_size: int = 56,
         cap_color = caption_color
 
     _draw_caption(canvas, seg.caption, cap_pos, caption_size, cap_color)
+    try:
+        from watermark import apply_to_frame
+        canvas = apply_to_frame(canvas)
+    except Exception:
+        pass
     return canvas
 
 
