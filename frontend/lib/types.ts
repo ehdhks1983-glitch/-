@@ -112,6 +112,27 @@ export interface ActivationListItem {
   is_conflict: boolean;
 }
 
+export type AuditEventType =
+  | "issue"
+  | "verify_success"
+  | "verify_fail"
+  | "revoke"
+  | "extend"
+  | "hwid_register"
+  | "hwid_conflict"
+  | "hwid_release"
+  | "login";
+
+export interface AuditLog {
+  id: number;
+  event_type: AuditEventType;
+  user_id: number | null;
+  hwid: string | null;
+  ip_address: string | null;
+  detail: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface TokenResponse {
   access_token: string;
   refresh_token: string;

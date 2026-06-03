@@ -39,6 +39,18 @@ export const STATUS_LABELS: Record<LicenseStatus, string> = {
   expired: "만료",
 };
 
+export const AUDIT_EVENT_LABELS: Record<string, string> = {
+  issue: "발급",
+  verify_success: "검증 성공",
+  verify_fail: "검증 실패",
+  revoke: "취소",
+  extend: "기간 연장",
+  hwid_register: "HWID 등록",
+  hwid_conflict: "HWID 충돌",
+  hwid_release: "HWID 해제",
+  login: "로그인",
+};
+
 export function daysUntil(iso: string | null | undefined): number | null {
   if (!iso) return null;
   const ms = new Date(iso).getTime() - Date.now();

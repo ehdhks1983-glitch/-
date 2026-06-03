@@ -1,6 +1,7 @@
 import { useAuth } from "@/store/auth";
 import type {
   ActivationListItem,
+  AuditLog,
   BulkIssueResponse,
   License,
   LicenseDetail,
@@ -140,6 +141,7 @@ export const api = {
   listLicenses: (filters: LicenseFilters = {}) =>
     request<Page<License>>(`/licenses${query(filters as Record<string, unknown>)}`),
   getLicense: (id: number) => request<LicenseDetail>(`/licenses/${id}`),
+  licenseLogs: (id: number) => request<AuditLog[]>(`/licenses/${id}/logs`),
   issueLicense: (body: IssuePayload) =>
     request<LicenseIssueResponse>("/licenses/issue", {
       method: "POST",

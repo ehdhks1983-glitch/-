@@ -98,3 +98,12 @@ def test_memo_update(client, admin_headers, product):
         f"/api/licenses/{lid}", headers=admin_headers, json={"memo": "갱신 메모"}
     )
     assert updated.json()["memo"] == "갱신 메모"
+
+
+def test_audit_logs_endpoint(client, admin_headers, product):
+    lid = _issue(client, admin_headers, product, plan="trial_7").json()["license_id"]
+    client.post(f"/api/licenses/{lid}/revoke", headers=admin_headers)
+    logs = client.get(f"/api/licenses/{lid}/logs", headers=admin_headers)
+    assert logs.status_code == 200
+    events = [e["event_type"] for e in logs.json()]
+    assert "issue" in events and "revoke" in events

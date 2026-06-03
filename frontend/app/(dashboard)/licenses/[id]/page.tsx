@@ -19,7 +19,12 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api } from "@/lib/api";
-import { PLAN_LABELS, formatDateKST, formatDateTimeKST } from "@/lib/utils";
+import {
+  AUDIT_EVENT_LABELS,
+  PLAN_LABELS,
+  formatDateKST,
+  formatDateTimeKST,
+} from "@/lib/utils";
 
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -42,8 +47,15 @@ export default function LicenseDetailPage() {
     queryKey: ["license", id],
     queryFn: () => api.getLicense(id),
   });
+  const logs = useQuery({
+    queryKey: ["license-logs", id],
+    queryFn: () => api.licenseLogs(id),
+  });
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ["license", id] });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["license", id] });
+    qc.invalidateQueries({ queryKey: ["license-logs", id] });
+  };
   const onError = (e: unknown) =>
     setError(e instanceof ApiError ? e.message : "작업 실패");
 
@@ -192,6 +204,37 @@ export default function LicenseDetailPage() {
               )}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>감사 로그</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ol className="space-y-3">
+            {logs.data?.map((log) => (
+              <li key={log.id} className="flex flex-wrap items-center gap-3 text-sm">
+                <span className="w-44 shrink-0 text-muted-foreground">
+                  {formatDateTimeKST(log.created_at)}
+                </span>
+                <span className="font-medium">
+                  {AUDIT_EVENT_LABELS[log.event_type] ?? log.event_type}
+                </span>
+                {log.hwid && (
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {log.hwid.slice(0, 16)}…
+                  </span>
+                )}
+                {log.ip_address && (
+                  <span className="text-xs text-muted-foreground">{log.ip_address}</span>
+                )}
+              </li>
+            ))}
+            {logs.data?.length === 0 && (
+              <li className="text-sm text-muted-foreground">감사 로그가 없습니다.</li>
+            )}
+          </ol>
         </CardContent>
       </Card>
     </div>

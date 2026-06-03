@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import CurrentUser, DbSession, client_ip
 from app.core.errors import ApiError
 from app.models.activation import Activation
-from app.models.audit_log import AuditEventType
+from app.models.audit_log import AuditEventType, AuditLog
 from app.models.license import License, LicenseStatus
 from app.models.product import Product
+from app.schemas.audit import AuditLogOut
 from app.schemas.common import Page
 from app.schemas.license import (
     ActivationOut,
@@ -214,6 +215,18 @@ def get_license(license_id: int, db: DbSession, _: CurrentUser):
     license_service.refresh_expiry_status(db, lic)
     db.commit()
     return _to_out(db, lic, detail=True)
+
+
+@router.get("/{license_id}/logs", response_model=list[AuditLogOut])
+def license_logs(license_id: int, db: DbSession, _: CurrentUser, limit: int = 100):
+    _get_license_or_404(db, license_id)
+    rows = db.scalars(
+        select(AuditLog)
+        .where(AuditLog.license_id == license_id)
+        .order_by(AuditLog.id.desc())
+        .limit(min(limit, 500))
+    )
+    return list(rows)
 
 
 @router.patch("/{license_id}", response_model=LicenseOut)
