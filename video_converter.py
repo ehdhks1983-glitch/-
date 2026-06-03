@@ -66,7 +66,7 @@ class ConvertJob:
     def __init__(self):
         self.input_path: str = ""
         self.output_path: str = ""
-        self.output_format: str = "gif"    # gif / webp / apng
+        self.output_format: str = "gif"    # gif / webp / apng / mp4
         self.start_time: float = 0.0       # 초
         self.end_time: float = 0.0         # 초 (0 = 끝까지)
         self.fps: int = 15                 # 출력 FPS
@@ -78,6 +78,7 @@ class ConvertJob:
         self.cancelled: bool = False
         self.subtitles: list = []          # List[Subtitle]
         self.output_height: int = 480      # 출력 높이 (자막 크기 정규화용)
+        self.shorts_vertical: bool = False  # MP4 쇼츠(세로 9:16) 모드
 
 
 def probe_video(path: str) -> Optional[VideoInfo]:
@@ -227,6 +228,8 @@ def convert_video(
         return _convert_to_webp(ff, job, total_duration, progress)
     elif job.output_format == "apng":
         return _convert_to_apng(ff, job, total_duration, progress)
+    elif job.output_format == "mp4":
+        return _convert_to_mp4(ff, job, total_duration, progress)
     else:
         return _convert_to_gif(ff, job, total_duration, progress)
 
@@ -550,6 +553,100 @@ def _convert_to_apng(
     return _run_ffmpeg_with_progress(ff, args, total_duration, progress, job)
 
 
+def _convert_to_mp4(
+    ff: str,
+    job: ConvertJob,
+    total_duration: float,
+    progress: Callable,
+) -> Optional[str]:
+    """
+    MP4(H.264 + AAC) 변환. 원본 오디오 유지.
+    shorts_vertical=True 면 9:16 세로 캔버스(1080×1920)에 블러 배경으로 맞춘다.
+    """
+    progress(5, "MP4 변환 중...")
+
+    speed = max(0.01, job.speed)
+    shorts = getattr(job, "shorts_vertical", False)
+
+    # 오디오 유무 확인
+    vinfo = probe_video(job.input_path)
+    has_audio = bool(vinfo and vinfo.has_audio)
+
+    # 품질(10~100) → CRF(약 18~32, 낮을수록 고화질)
+    q = max(10, min(100, job.quality))
+    crf = int(round(18 + (100 - q) * 0.16))
+
+    # 구간 옵션 (-ss 입력 앞, -t 입력 뒤)
+    ss_args = ["-ss", f"{job.start_time:.3f}"] if job.start_time > 0 else []
+    t_args = []
+    if job.end_time > 0:
+        t_args = ["-t", f"{(job.end_time - job.start_time):.3f}"]
+
+    # 비디오 전처리(속도/FPS)
+    pre = []
+    if speed != 1.0:
+        pre.append(f"setpts={1.0 / speed}*PTS")
+    pre.append(f"fps={job.fps}")
+    pre_str = ",".join(pre)
+
+    # 자막 (쇼츠면 1920 높이 기준 정규화)
+    out_h = 1920 if shorts else (job.output_height or 480)
+    sub_filter = _build_subtitle_filters(job.subtitles, job.start_time, out_h)
+
+    # 비디오 필터/맵 구성
+    if shorts:
+        TW, TH = 1080, 1920
+        fc = (
+            f"[0:v]{pre_str},split=2[bg][fg];"
+            f"[bg]scale={TW}:{TH}:force_original_aspect_ratio=increase,"
+            f"crop={TW}:{TH},boxblur=20:2[bgb];"
+            f"[fg]scale={TW}:{TH}:force_original_aspect_ratio=decrease[fgs];"
+            f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2[vmid]"
+        )
+        vlabel = "[vmid]"
+        if sub_filter:
+            fc += f";[vmid]{sub_filter}[vout]"
+            vlabel = "[vout]"
+        video_args = ["-filter_complex", fc, "-map", vlabel]
+    else:
+        vf = list(pre)
+        if job.width > 0:
+            h = job.height if job.height > 0 else -2
+            vf.append(f"scale={job.width}:{h}:flags=lanczos")
+        else:
+            # H.264는 짝수 해상도 필요
+            vf.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
+        if sub_filter:
+            vf.append(sub_filter)
+        video_args = ["-vf", ",".join(vf), "-map", "0:v"]
+
+    # 오디오 구성 (원본 유지 + 속도 변경 시 atempo)
+    if has_audio:
+        audio_args = ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"]
+        if speed != 1.0:
+            audio_args += ["-af", f"atempo={speed:.4f}"]
+    else:
+        audio_args = ["-an"]
+
+    args = (
+        ss_args
+        + ["-i", job.input_path]
+        + t_args
+        + video_args
+        + audio_args
+        + [
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-crf", str(crf),
+            "-preset", "veryfast",
+            "-movflags", "+faststart",
+            "-y", job.output_path,
+        ]
+    )
+
+    return _run_ffmpeg_with_progress(ff, args, total_duration, progress, job)
+
+
 def _run_ffmpeg_with_progress(
     ff: str,
     args: list,
@@ -698,5 +795,9 @@ def estimate_video_output_size(
         return int(total_frames * pixels_per_frame * q_ratio)
     elif output_format == "apng":
         return int(total_frames * pixels_per_frame * 1.2)
+    elif output_format == "mp4":
+        # H.264: 품질에 따라 대략 0.05~0.15 bytes/pixel
+        q_ratio = 0.05 + (quality / 100) * 0.1
+        return int(total_frames * pixels_per_frame * q_ratio)
 
     return int(total_frames * pixels_per_frame * 0.4)
