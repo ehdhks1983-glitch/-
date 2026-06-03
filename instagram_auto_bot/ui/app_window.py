@@ -18,6 +18,7 @@ from core.ui_bridge import LogQueue
 from ui.tab_account import AccountTab
 from ui.tab_brand import BrandTab
 from ui.tab_create import CreateTab
+from ui.tab_schedule import ScheduleTab
 from ui.widgets import LogPanel
 
 _STATE_LABELS = {
@@ -102,7 +103,7 @@ class AppWindow(ctk.CTk):
         self.add_tab("account", AccountTab(self._content, self.store))
         self.add_tab("brand", BrandTab(self._content, self.store))
         self.add_tab("create", CreateTab(self._content, self.store, self.controller))
-        # Later stages register: "schedule" (tab_schedule).
+        self.add_tab("schedule", ScheduleTab(self._content, self.store, self.controller))
         self._show("account")
 
     def add_tab(self, name: str, frame: ctk.CTkFrame, label: str | None = None) -> None:
