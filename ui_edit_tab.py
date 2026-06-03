@@ -31,6 +31,8 @@ class EditTab(ctk.CTkFrame):
         self._preview_after_id = None
         self._working: bool = False
         self._open_folder_btn = None
+        self._batch_paths: List[str] = []
+        self._result_preview_btn = None
 
         self._build_ui()
 
@@ -59,6 +61,13 @@ class EditTab(ctk.CTkFrame):
             file_frame, text="📂 파일 열기", height=36,
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self._open_file,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            file_frame, text="📂 여러 개", height=36, width=90,
+            font=ctk.CTkFont(size=12),
+            fg_color="gray30", hover_color="gray25",
+            command=self._open_batch,
         ).pack(side="left", padx=(0, 8))
 
         self._file_label = ctk.CTkLabel(
@@ -291,6 +300,15 @@ class EditTab(ctk.CTkFrame):
             wraplength=240, justify="left",
         ).grid(row=24, column=0, padx=12, pady=(0, 12), sticky="w")
 
+        # ── 🗂 배치(여러 파일) 변환 ──
+        self._batch_btn = ctk.CTkButton(
+            right, text="🗂 여러 파일 일괄 변환", height=40,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#7c3aed", hover_color="#6d28d9",
+            command=self._batch_convert,
+        )
+        self._batch_btn.grid(row=25, column=0, padx=12, pady=(0, 12), sticky="ew")
+
     # ════════════════════════════════════════
     # 파일 열기
     # ════════════════════════════════════════
@@ -522,6 +540,8 @@ class EditTab(ctk.CTkFrame):
         self._apply_btn.configure(state="normal")
         if hasattr(self, "_kakao_btn"):
             self._kakao_btn.configure(state="normal")
+        if hasattr(self, "_batch_btn"):
+            self._batch_btn.configure(state="normal")
 
         if result and Path(result).exists():
             size = format_filesize(Path(result).stat().st_size)
@@ -531,6 +551,7 @@ class EditTab(ctk.CTkFrame):
             )
             self._progress.set(1.0)
             self._show_open_folder(str(Path(result).parent))
+            self._show_result_preview(result)
         else:
             self._progress.set(0)
             self._status_label.configure(
@@ -587,6 +608,119 @@ class EditTab(ctk.CTkFrame):
             self.after(0, lambda: self._on_edit_done(result))
         except Exception as e:
             self.after(0, lambda e=e: self._on_edit_done(None, str(e)))
+
+    # ════════════════════════════════════════
+    # 🗂 배치(여러 파일) 변환 + 결과 미리보기
+    # ════════════════════════════════════════
+    def _open_batch(self):
+        """여러 파일 선택 → 첫 파일 미리보기 + 배치 목록 저장"""
+        from tkinter import filedialog
+        paths = filedialog.askopenfilenames(
+            title="여러 애니메이션 이미지 선택",
+            filetypes=[("애니메이션 이미지", "*.gif *.webp *.apng *.png"), ("모든 파일", "*.*")],
+        )
+        if not paths:
+            return
+        self._batch_paths = list(paths)
+        self._load_file(self._batch_paths[0])
+        self._file_label.configure(
+            text=f"🗂 배치 {len(self._batch_paths)}개 (미리보기: 1번 파일)",
+            text_color="white",
+        )
+        if hasattr(self, "_batch_btn"):
+            self._batch_btn.configure(text=f"🗂 {len(self._batch_paths)}개 일괄 변환")
+
+    def _batch_convert(self):
+        """배치 목록 전체에 현재 편집 설정 + 출력 포맷 적용"""
+        if self._working:
+            return
+        if not self._batch_paths:
+            self._status_label.configure(
+                text="⚠ '📂 여러 개'로 파일들을 먼저 선택하세요", text_color="#f59e0b")
+            return
+
+        self._working = True
+        self._apply_btn.configure(state="disabled")
+        if hasattr(self, "_kakao_btn"):
+            self._kakao_btn.configure(state="disabled")
+        self._batch_btn.configure(state="disabled")
+        self._progress.set(0)
+
+        edits = self._build_edits()
+        fmt = self._format_var.get()
+        threading.Thread(
+            target=self._run_batch,
+            args=(list(self._batch_paths), edits, fmt, self._output_dir.get()),
+            daemon=True,
+        ).start()
+
+    def _run_batch(self, paths, edits, fmt, out_dir):
+        from editor import load_frames, save_frames, apply_edits
+
+        total = len(paths)
+        done = []
+        for i, p in enumerate(paths):
+            self.after(0, lambda i=i, p=p: (
+                self._progress.set(i / total),
+                self._status_label.configure(text=f"일괄 변환 {i + 1}/{total} — {Path(p).name}"),
+            ))
+            try:
+                frames, durations, loop = load_frames(p)
+                ef, ed = apply_edits([f.copy() for f in frames], list(durations), edits)
+                for f in frames:
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
+                ext = "apng" if fmt == "apng" else fmt
+                out = generate_output_name(f"{Path(p).stem}_conv", ext, out_dir)
+                save_frames(ef, ed, out, fmt, loop)
+                for f in ef:
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
+                done.append(out)
+            except Exception:
+                continue
+        self.after(0, lambda: self._on_batch_done(done, total, out_dir))
+
+    def _on_batch_done(self, done, total, out_dir):
+        self._working = False
+        self._apply_btn.configure(state="normal")
+        if hasattr(self, "_kakao_btn"):
+            self._kakao_btn.configure(state="normal")
+        self._batch_btn.configure(state="normal")
+
+        if done:
+            self._progress.set(1.0)
+            self._status_label.configure(
+                text=f"✅ 일괄 변환 완료! {len(done)}/{total}개 생성", text_color="#22c55e")
+            self._show_open_folder(out_dir)
+        else:
+            self._progress.set(0)
+            self._status_label.configure(text="❌ 일괄 변환 실패", text_color="#ef4444")
+
+    def _show_result_preview(self, result: str):
+        """변환 결과를 미리보기 영역으로 불러오는 버튼 표시"""
+        if self._result_preview_btn:
+            try:
+                self._result_preview_btn.destroy()
+            except Exception:
+                pass
+
+        def preview():
+            self._load_file(result)
+            self._start_preview()
+
+        self._result_preview_btn = ctk.CTkButton(
+            self._status_label.master,
+            text="▶ 결과 미리보기", height=32,
+            font=ctk.CTkFont(size=12),
+            fg_color="#2563eb", hover_color="#1d4ed8",
+            command=preview,
+        )
+        self._result_preview_btn.grid(row=6, column=0, sticky="ew", padx=16, pady=(0, 8))
 
     # ════════════════════════════════════════
     # 유틸
