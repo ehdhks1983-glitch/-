@@ -31,7 +31,7 @@ export default async function DashboardPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const projects = await selectMyProjects(supabase);
+  const projects = await selectMyProjects(supabase, user.id);
 
   return (
     <div className="min-h-screen bg-slate-50">

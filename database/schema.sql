@@ -67,6 +67,12 @@ create policy "projects_owner_all" on public.projects
 drop policy if exists "projects_public_read" on public.projects;
 create policy "projects_public_read" on public.projects
   for select using (published = true);
+-- ⚠️ 한계: 이 정책은 게시물의 "모든 컬럼"(prompt·owner·biz_info 포함)을 anon 에 노출한다.
+--    공개 페이지엔 copy/template/language 만 필요하므로, 운영 단계에서는 다음 중 하나를 권장:
+--      (a) 공개 컬럼만 노출하는 VIEW(+ security_invoker), 또는
+--      (b) anon 의 컬럼 SELECT 권한 제한(GRANT), 또는
+--      (c) 이 정책 제거 + 서버에서 service_role 로만 조회 + leads_public_insert 를 SECURITY DEFINER 함수로 대체.
+--    참고: 앱 코드(selectMyProjects/ById)는 이 공개 정책과 섞이지 않도록 owner 를 명시적으로 필터한다.
 
 -- ───────────────────────── leads ─────────────────────────
 create table if not exists public.leads (

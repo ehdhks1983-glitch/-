@@ -18,7 +18,7 @@ export default async function LeadsPage({ params }: { params: Promise<{ projectI
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const project = await selectMyProjectById(supabase, projectId);
+  const project = await selectMyProjectById(supabase, projectId, user.id);
   if (!project) notFound();
 
   const leads = await selectLeads(supabase, projectId);

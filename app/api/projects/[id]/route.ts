@@ -27,7 +27,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   const { supabase, user } = await getAuthed();
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
   try {
-    const project = await selectMyProjectById(supabase, id);
+    const project = await selectMyProjectById(supabase, id, user.id);
     if (!project) return NextResponse.json({ error: "찾을 수 없어요." }, { status: 404 });
     return NextResponse.json({ project });
   } catch (err) {
@@ -56,7 +56,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (typeof body.title === "string") patch.title = body.title;
 
   try {
-    const project = await updateProject(supabase, id, patch);
+    const project = await updateProject(supabase, id, user.id, patch);
+    if (!project) return NextResponse.json({ error: "찾을 수 없어요." }, { status: 404 });
     return NextResponse.json({ id: project.id, slug: project.slug });
   } catch (err) {
     console.error("[api/projects/:id] PATCH 실패:", err);
@@ -70,7 +71,7 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   const { supabase, user } = await getAuthed();
   if (!user) return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
   try {
-    await deleteProject(supabase, id);
+    await deleteProject(supabase, id, user.id);
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[api/projects/:id] DELETE 실패:", err);

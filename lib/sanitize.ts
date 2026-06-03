@@ -24,36 +24,42 @@ export function sanitizeText(input: unknown, maxLen = 2000): string {
   return s;
 }
 
-/** SectionCopy 전체 정화 — 렌더 직전에 한 번 호출(미리보기/공개 페이지 공통). */
-export function sanitizeCopy(c: SectionCopy): SectionCopy {
+/** SectionCopy 전체 정화 — 렌더 직전에 한 번 호출(미리보기/공개 페이지 공통).
+ *  DB의 copy 가 비어있거나 일부만 있어도 크래시하지 않도록 누락 필드를 안전 처리한다. */
+export function sanitizeCopy(c: Partial<SectionCopy> | null | undefined): SectionCopy {
+  const safe = c ?? {};
   return {
     hero: {
-      headline: sanitizeText(c.hero.headline, 200),
-      subheadline: sanitizeText(c.hero.subheadline, 400),
-      cta: sanitizeText(c.hero.cta, 60),
+      headline: sanitizeText(safe.hero?.headline, 200),
+      subheadline: sanitizeText(safe.hero?.subheadline, 400),
+      cta: sanitizeText(safe.hero?.cta, 60),
     },
     problem: {
-      title: sanitizeText(c.problem.title, 200),
-      body: sanitizeText(c.problem.body, 1200),
+      title: sanitizeText(safe.problem?.title, 200),
+      body: sanitizeText(safe.problem?.body, 1200),
     },
     solution: {
-      title: sanitizeText(c.solution.title, 200),
-      body: sanitizeText(c.solution.body, 1200),
+      title: sanitizeText(safe.solution?.title, 200),
+      body: sanitizeText(safe.solution?.body, 1200),
     },
     features: {
-      title: sanitizeText(c.features.title, 200),
-      items: c.features.items.map((i) => ({
-        title: sanitizeText(i.title, 120),
-        description: sanitizeText(i.description, 400),
-      })),
+      title: sanitizeText(safe.features?.title, 200),
+      items: Array.isArray(safe.features?.items)
+        ? safe.features.items.map((i) => ({
+            title: sanitizeText(i?.title, 120),
+            description: sanitizeText(i?.description, 400),
+          }))
+        : [],
     },
-    faq: c.faq.map((f) => ({
-      question: sanitizeText(f.question, 200),
-      answer: sanitizeText(f.answer, 800),
-    })),
+    faq: Array.isArray(safe.faq)
+      ? safe.faq.map((f) => ({
+          question: sanitizeText(f?.question, 200),
+          answer: sanitizeText(f?.answer, 800),
+        }))
+      : [],
     cta: {
-      headline: sanitizeText(c.cta.headline, 200),
-      button: sanitizeText(c.cta.button, 60),
+      headline: sanitizeText(safe.cta?.headline, 200),
+      button: sanitizeText(safe.cta?.button, 60),
     },
   };
 }
