@@ -231,10 +231,13 @@ class CreateTab(ctk.CTkFrame):
         self.after(0, show)
 
     def _on_job_error(self, exc: BaseException) -> None:
+        from core.errors import humanize
+        msg = humanize(exc)
+
         def show():
             self._set_generating(False)
             self.pub_btn.configure(state="normal" if self._prepared else "disabled")
-            Toast(self.winfo_toplevel(), f"실패: {exc}", kind="error", duration_ms=5000)
+            Toast(self.winfo_toplevel(), msg, kind="error", duration_ms=6000)
         self.after(0, show)
 
     def _set_generating(self, busy: bool) -> None:

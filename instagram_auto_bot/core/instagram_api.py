@@ -45,6 +45,14 @@ class RateLimitError(InstagramAPIError):
     """Rate / quota related failure (Meta transient codes or self-imposed cap)."""
 
 
+class AuthError(InstagramAPIError):
+    """Token/permission failure - needs user re-authentication, not a retry."""
+
+
+class SecurityCheckpointError(AuthError):
+    """A security/validation checkpoint was detected. Never bypassed - alert user."""
+
+
 class MediaNotReadyError(InstagramAPIError):
     """Meta error 9007 - publish attempted before the container FINISHED."""
 
@@ -136,6 +144,10 @@ class InstagramAPI:
     def _error_for(code, msg, sub, fb, status) -> InstagramAPIError:
         if code == config.ERR_MEDIA_NOT_READY:
             return MediaNotReadyError(msg, code, sub, fb, status)
+        if sub in config.CHECKPOINT_SUBCODES:
+            return SecurityCheckpointError(msg, code, sub, fb, status)
+        if code in config.AUTH_ERROR_CODES:
+            return AuthError(msg, code, sub, fb, status)
         if code in config.TRANSIENT_ERROR_CODES:
             return RateLimitError(msg, code, sub, fb, status)
         return InstagramAPIError(msg, code, sub, fb, status)

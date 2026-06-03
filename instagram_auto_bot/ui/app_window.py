@@ -149,7 +149,11 @@ class AppWindow(ctk.CTk):
         self.controller.stop()
 
     def _on_job_error(self, exc: BaseException) -> None:
-        self.after(0, lambda: get_logger("ui").error("작업 실패 / job failed: %s", exc))
+        from core.errors import humanize
+        msg = humanize(exc)
+        get_logger("ui").error("작업 실패 / job failed: %s", exc)
+        from ui.widgets import Toast
+        self.after(0, lambda: Toast(self, msg, kind="error", duration_ms=6000))
 
     # ---------------------------------------------------------- state sync
     def _on_state_change(self, state: WorkerState) -> None:

@@ -30,6 +30,12 @@ IG_STATUS_ERROR: str = "ERROR"
 IG_STATUS_EXPIRED: str = "EXPIRED"
 # Graph error codes worth retrying (rate limit / transient app issues).
 TRANSIENT_ERROR_CODES: frozenset[int] = frozenset({1, 2, 4, 17, 32, 341, 613})
+# Token / permission errors - require user re-auth, never a silent retry.
+AUTH_ERROR_CODES: frozenset[int] = frozenset({10, 102, 190, 200, 463, 467, 803})
+# Subcodes that indicate a security checkpoint / validation gate. The official
+# API route should never hit a captcha; if one of these appears we PAUSE/STOP and
+# alert the user - we never attempt to bypass it.
+CHECKPOINT_SUBCODES: frozenset[int] = frozenset({458, 459, 460, 461})
 # Carousel must contain 2-10 children (Meta limit).
 CAROUSEL_MIN, CAROUSEL_MAX = 2, 10
 

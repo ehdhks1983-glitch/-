@@ -153,6 +153,9 @@ class Scheduler:
     def run_due(self, runner: Callable[[ScheduledPost], object],
                 now: Optional[datetime] = None, *, control=None) -> List[ScheduledPost]:
         """Run every due post via ``runner``; mark done/failed. Returns those run."""
+        from core.automation_controller import StopRequested
+        from core.instagram_api import AuthError
+
         ran: List[ScheduledPost] = []
         for post in self.due(now):
             if control is not None:
@@ -161,10 +164,20 @@ class Scheduler:
                 log.info("예약 발행 실행: '%s'", post.topic)
                 runner(post)
                 self.mark(post, STATUS_DONE)
+                ran.append(post)
+            except StopRequested:
+                raise  # user pressed Stop - not a post failure
+            except AuthError as exc:
+                # Token/permission/checkpoint problem: pointless and risky to keep
+                # firing the rest of the queue. Mark this one and abort the loop.
+                self.mark(post, STATUS_FAILED, str(exc))
+                ran.append(post)
+                log.error("인증/보안 오류로 스케줄러 중단: %s", exc)
+                raise
             except Exception as exc:  # noqa: BLE001 - recorded per post, loop continues
                 log.exception("예약 발행 실패: '%s' - %s", post.topic, exc)
                 self.mark(post, STATUS_FAILED, str(exc))
-            ran.append(post)
+                ran.append(post)
         return ran
 
     def run_forever(self, control, runner: Callable[[ScheduledPost], object], *,
