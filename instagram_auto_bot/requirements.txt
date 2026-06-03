@@ -1,0 +1,17 @@
+# Runtime dependencies for Instagram Auto Bot
+#
+# Provider SDKs are imported lazily (inside the provider classes), so the app
+# starts and the test-suite runs even if some are absent - but a production
+# build should install all of them so every provider is selectable.
+
+customtkinter>=5.2.2      # dark-mode desktop UI (requires system Tk)
+requests>=2.31            # Graph API + hosting HTTP calls
+Pillow>=10.0              # image ratio / crop / resize handling
+
+# Text AI providers (pluggable - user picks one in the UI)
+openai>=1.0               # text + image generation
+anthropic>=0.39           # Claude text generation
+google-generativeai>=0.8  # Gemini text generation
+
+# Image hosting (public URL for Meta API)
+cloudinary>=1.40
