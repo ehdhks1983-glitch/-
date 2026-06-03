@@ -273,6 +273,24 @@ class EditTab(ctk.CTkFrame):
         )
         self._apply_btn.grid(row=21, column=0, padx=12, pady=12, sticky="ew")
 
+        # ── ⚡ 원클릭 프리셋 ──
+        ctk.CTkLabel(right, text="⚡ 원클릭 프리셋",
+                     font=ctk.CTkFont(size=13, weight="bold")).grid(row=22, column=0, **pad)
+
+        self._kakao_btn = ctk.CTkButton(
+            right, text="🟡 카톡 이모티콘 만들기", height=40,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#FEE500", hover_color="#E5CC00", text_color="#3C1E1E",
+            command=self._make_kakao,
+        )
+        self._kakao_btn.grid(row=23, column=0, padx=12, pady=(0, 4), sticky="ew")
+
+        ctk.CTkLabel(
+            right, text="360×360 · 3초 이내 · WebP · 3MB 이하로 자동 변환",
+            font=ctk.CTkFont(size=10), text_color="gray55",
+            wraplength=240, justify="left",
+        ).grid(row=24, column=0, padx=12, pady=(0, 12), sticky="w")
+
     # ════════════════════════════════════════
     # 파일 열기
     # ════════════════════════════════════════
@@ -460,6 +478,8 @@ class EditTab(ctk.CTkFrame):
 
         self._working = True
         self._apply_btn.configure(state="disabled")
+        if hasattr(self, "_kakao_btn"):
+            self._kakao_btn.configure(state="disabled")
         self._progress.set(0)
         self._status_label.configure(text=action, text_color="white")
 
@@ -500,6 +520,8 @@ class EditTab(ctk.CTkFrame):
     def _on_edit_done(self, result: Optional[str], error: str = ""):
         self._working = False
         self._apply_btn.configure(state="normal")
+        if hasattr(self, "_kakao_btn"):
+            self._kakao_btn.configure(state="normal")
 
         if result and Path(result).exists():
             size = format_filesize(Path(result).stat().st_size)
@@ -515,6 +537,56 @@ class EditTab(ctk.CTkFrame):
                 text=f"❌ 편집 실패: {error}" if error else "❌ 편집 실패",
                 text_color="#ef4444",
             )
+
+    # ════════════════════════════════════════
+    # ⚡ 카카오톡 이모티콘 원클릭
+    # ════════════════════════════════════════
+    def _make_kakao(self):
+        """카카오톡 이모티콘 규격(360×360·3초·WebP·3MB)으로 원클릭 변환"""
+        if self._working or not self._frames:
+            if not self._frames:
+                self._status_label.configure(text="⚠ 파일을 먼저 열어주세요", text_color="#f59e0b")
+            return
+
+        self._working = True
+        self._apply_btn.configure(state="disabled")
+        self._kakao_btn.configure(state="disabled")
+        self._progress.set(0)
+        self._status_label.configure(text="카톡 이모티콘 변환 중...", text_color="white")
+
+        threading.Thread(target=self._run_kakao, daemon=True).start()
+
+    def _run_kakao(self):
+        try:
+            from editor import make_kakao_emoticon
+            from optimizer import optimize_webp
+
+            base = Path(self._file_path).stem if self._file_path else "emoticon"
+            out = generate_output_name(f"{base}_kakao", "webp", self._output_dir.get())
+
+            def prog(p, m):
+                self.after(0, lambda p=p, m=m: (
+                    self._progress.set(p / 100),
+                    self._status_label.configure(text=m),
+                ))
+
+            result = make_kakao_emoticon(self._file_path, out, on_progress=prog)
+
+            # 카톡 규격: 3MB 이하 보장
+            if result and Path(result).stat().st_size > 3000 * 1024:
+                self.after(0, lambda: self._status_label.configure(text="🎯 3MB 이하로 압축 중..."))
+                opt = optimize_webp(result, target_size_kb=2900)
+                if opt and opt != result:
+                    import shutil
+                    try:
+                        shutil.copy2(opt, result)
+                        Path(opt).unlink(missing_ok=True)
+                    except Exception:
+                        result = opt
+
+            self.after(0, lambda: self._on_edit_done(result))
+        except Exception as e:
+            self.after(0, lambda e=e: self._on_edit_done(None, str(e)))
 
     # ════════════════════════════════════════
     # 유틸

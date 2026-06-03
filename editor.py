@@ -491,3 +491,88 @@ def apply_edits(
         f, d = boomerang(f, d)
 
     return f, d
+
+
+# ════════════════════════════════════════
+# 길이 제한 / 카카오톡 이모티콘 프리셋
+# ════════════════════════════════════════
+
+def trim_to_duration(
+    frames: List[Image.Image],
+    durations: List[int],
+    max_ms: int = 3000,
+) -> Tuple[List[Image.Image], List[int]]:
+    """
+    누적 재생시간이 max_ms 이하가 되도록 뒤쪽 프레임을 잘라낸다 (최소 1프레임 보존).
+    선택된 프레임만 반환하며, 잘려나간 프레임은 호출자가 정리한다.
+    """
+    if not frames:
+        return frames, durations
+    kept_f: List[Image.Image] = []
+    kept_d: List[int] = []
+    acc = 0
+    for f, d in zip(frames, durations):
+        if kept_f and acc + d > max_ms:
+            break
+        kept_f.append(f)
+        kept_d.append(d)
+        acc += d
+    return kept_f, kept_d
+
+
+def make_kakao_emoticon(
+    input_path: str,
+    output_path: str,
+    size: int = 360,
+    max_ms: int = 3000,
+    quality: int = 90,
+    on_progress: Optional[Callable[[int, str], None]] = None,
+) -> Optional[str]:
+    """
+    기존 GIF/WebP/APNG → 카카오톡 이모티콘 규격으로 변환.
+    규격: 정사각형 size×size, 최대 max_ms(기본 3초), WebP.
+    (용량 3MB 제한은 호출 측에서 optimizer로 추가 처리)
+    """
+    def prog(p, m):
+        if on_progress:
+            on_progress(p, m)
+
+    def _close(imgs):
+        for x in imgs:
+            try:
+                x.close()
+            except Exception:
+                pass
+
+    prog(5, "프레임 로딩...")
+    frames, durations, loop = load_frames(input_path)
+    if not frames:
+        return None
+
+    try:
+        # 1) 정사각형(1:1) 센터 크롭
+        prog(25, "정사각형으로 자르는 중...")
+        cropped = crop_ratio(frames, "1:1")
+        if cropped is not frames:
+            _close(frames)
+
+        # 2) size×size 리사이즈
+        prog(45, f"{size}×{size} 크기로 변환 중...")
+        resized = [im.resize((size, size), Image.LANCZOS) for im in cropped]
+        _close(cropped)
+
+        # 3) max_ms 이내로 자르기
+        prog(65, f"{max_ms / 1000:.0f}초 이내로 맞추는 중...")
+        kept_f, kept_d = trim_to_duration(resized, durations, max_ms)
+        kept_ids = {id(x) for x in kept_f}
+        _close([x for x in resized if id(x) not in kept_ids])
+
+        # 4) WebP 저장
+        prog(85, "WebP로 저장 중...")
+        save_frames(kept_f, kept_d, output_path, "webp", loop, quality=quality)
+        _close(kept_f)
+
+        prog(100, "✅ 카톡 이모티콘 완성!")
+        return output_path
+    except Exception:
+        return None
