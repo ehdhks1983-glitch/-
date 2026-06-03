@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import auth, licenses, products, stats, users, verify
+from app.api import activations, auth, licenses, products, stats, users, verify
 from app.config import settings
 from app.core.errors import ApiError
 from app.schemas.common import ErrorResponse
@@ -75,6 +75,7 @@ for router in (
     users.router,
     products.router,
     licenses.router,
+    activations.router,
     verify.router,
     stats.router,
 ):
