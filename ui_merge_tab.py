@@ -456,10 +456,10 @@ class MergeTab(ctk.CTkFrame):
         # 💬 자막 (선택) — 영상 탭과 동일한 UI
         # ══════════════════════════════════════════
         ctk.CTkLabel(right, text="💬 자막 (선택)",
-                     font=ctk.CTkFont(size=13, weight="bold")).grid(row=15, column=0, **pad)
+                     font=ctk.CTkFont(size=13, weight="bold")).grid(row=17, column=0, **pad)
 
         sub_container = ctk.CTkFrame(right, fg_color="gray20", corner_radius=8)
-        sub_container.grid(row=16, column=0, padx=12, pady=(2, 4), sticky="ew")
+        sub_container.grid(row=18, column=0, padx=12, pady=(2, 4), sticky="ew")
 
         # 텍스트 입력
         sub_text_frame = ctk.CTkFrame(sub_container, fg_color="transparent")
@@ -574,10 +574,10 @@ class MergeTab(ctk.CTkFrame):
 
         # ── 출력 폴더 ──
         ctk.CTkLabel(right, text="📂 출력 폴더",
-                     font=ctk.CTkFont(size=13, weight="bold")).grid(row=17, column=0, **pad)
+                     font=ctk.CTkFont(size=13, weight="bold")).grid(row=19, column=0, **pad)
 
         out_frame = ctk.CTkFrame(right, fg_color="transparent")
-        out_frame.grid(row=18, column=0, **pad)
+        out_frame.grid(row=20, column=0, **pad)
 
         self._output_dir = ctk.StringVar(value=settings.get("output_dir"))
         self._out_entry = ctk.CTkEntry(
@@ -595,7 +595,7 @@ class MergeTab(ctk.CTkFrame):
         # 하단: 변환 버튼 + 진행률
         # ════════════════════════════════════════
         spacer = ctk.CTkFrame(right, fg_color="transparent", height=16)
-        spacer.grid(row=19, column=0)
+        spacer.grid(row=21, column=0)
 
         self._convert_btn = ctk.CTkButton(
             right, text="🚀 변환 시작", height=42,
@@ -603,7 +603,7 @@ class MergeTab(ctk.CTkFrame):
             fg_color="#2563eb", hover_color="#1d4ed8",
             command=self._start_convert,
         )
-        self._convert_btn.grid(row=20, column=0, padx=12, pady=8, sticky="ew")
+        self._convert_btn.grid(row=22, column=0, padx=12, pady=8, sticky="ew")
 
         self._cancel_btn = ctk.CTkButton(
             right, text="⏹ 취소", height=36,
@@ -611,18 +611,18 @@ class MergeTab(ctk.CTkFrame):
             fg_color="#dc2626", hover_color="#b91c1c",
             command=self._cancel_convert,
         )
-        self._cancel_btn.grid(row=21, column=0, padx=12, pady=(0, 4), sticky="ew")
+        self._cancel_btn.grid(row=23, column=0, padx=12, pady=(0, 4), sticky="ew")
         self._cancel_btn.grid_remove()
 
         self._progress = ctk.CTkProgressBar(right, height=14)
-        self._progress.grid(row=22, column=0, padx=12, pady=4, sticky="ew")
+        self._progress.grid(row=24, column=0, padx=12, pady=4, sticky="ew")
         self._progress.set(0)
 
         self._status_label = ctk.CTkLabel(
             right, text="이미지를 추가하세요",
             font=ctk.CTkFont(size=12), text_color="gray50",
         )
-        self._status_label.grid(row=23, column=0, padx=12, pady=(0, 8), sticky="w")
+        self._status_label.grid(row=25, column=0, padx=12, pady=(0, 8), sticky="w")
 
     # ════════════════════════════════════════
     # 이미지 관리
@@ -1176,7 +1176,7 @@ class MergeTab(ctk.CTkFrame):
             fg_color="#16a34a", hover_color="#15803d",
             command=open_folder,
         )
-        self._open_folder_btn.grid(row=24, column=0, padx=12, pady=(4, 8), sticky="ew")
+        self._open_folder_btn.grid(row=26, column=0, padx=12, pady=(4, 8), sticky="ew")
 
     # ════════════════════════════════════════
     # 💬 자막 관리 (영상 탭과 동일 규칙)
