@@ -95,3 +95,30 @@ export async function selectMyProjectById(
   if (error) throw new Error(error.message);
   return (data as ProjectRow) ?? null;
 }
+
+export interface ProjectPatch {
+  template?: TemplateId;
+  copy?: SectionCopy;
+  published?: boolean;
+  title?: string;
+}
+
+export async function updateProject(
+  supabase: SupabaseClient,
+  id: string,
+  patch: ProjectPatch,
+): Promise<ProjectRow> {
+  const { data, error } = await supabase
+    .from("projects")
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data as ProjectRow;
+}
+
+export async function deleteProject(supabase: SupabaseClient, id: string): Promise<void> {
+  const { error } = await supabase.from("projects").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}

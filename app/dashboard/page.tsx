@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { selectMyProjects } from "@/lib/db/projects";
+import LogoutButton from "@/components/LogoutButton";
+import DeleteProjectButton from "@/components/DeleteProjectButton";
 
 export const dynamic = "force-dynamic";
 
@@ -38,12 +40,15 @@ export default async function DashboardPage() {
           <Link href="/" className="font-bold tracking-tight">
             Prompt<span className="text-indigo-600">Site</span>
           </Link>
-          <Link
-            href="/project/new"
-            className="rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500"
-          >
-            + 새 페이지
-          </Link>
+          <div className="flex items-center gap-2">
+            <LogoutButton />
+            <Link
+              href="/project/new"
+              className="rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500"
+            >
+              + 새 페이지
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -69,7 +74,13 @@ export default async function DashboardPage() {
                     </div>
                     <p className="mt-1 text-sm text-slate-400">/s/{p.slug}</p>
                   </div>
-                  <div className="flex gap-2 text-sm">
+                  <div className="flex flex-wrap gap-2 text-sm">
+                    <Link
+                      href={`/project/${p.id}`}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium transition hover:bg-slate-50"
+                    >
+                      편집
+                    </Link>
                     <Link
                       href={`/s/${p.slug}`}
                       target="_blank"
@@ -83,6 +94,7 @@ export default async function DashboardPage() {
                     >
                       신청자
                     </Link>
+                    <DeleteProjectButton projectId={p.id} />
                   </div>
                 </div>
               </li>

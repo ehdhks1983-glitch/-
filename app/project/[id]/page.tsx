@@ -1,10 +1,11 @@
 "use client";
 
-// app/project/[id]/page.tsx  [신규]
-// 핵심 "딸깍" 화면: 프롬프트 입력 → (보완질문) → 생성 → 인라인 미리보기.
-// 생성 결과는 sessionStorage 에 저장해 /preview(전체화면)와 공유한다(Phase 3에서 DB로 교체).
+// app/project/[id]/page.tsx
+// 핵심 "딸깍" 화면: 프롬프트 입력 → (보완질문) → 생성 → 인라인 미리보기 → 게시.
+// id가 "new"가 아니면 저장본(DB)을 불러와 편집/재게시(업데이트)한다.
+// 미저장 결과는 sessionStorage 로 /preview(전체화면)와 공유.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import TemplateRenderer from "@/components/templates/TemplateRenderer";
@@ -20,6 +21,11 @@ interface GenerateResult {
   template: TemplateId;
   questions?: ClarifyQuestion[];
   copy?: SectionCopy;
+}
+
+interface AppStatus {
+  mock: boolean;
+  supabaseConfigured: boolean;
 }
 
 const EXAMPLES = [
@@ -46,14 +52,61 @@ export default function ProjectPage() {
   const [questions, setQuestions] = useState<ClarifyQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [copy, setCopy] = useState<SectionCopy | null>(null);
+
   const [publishing, setPublishing] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [savedProjectId, setSavedProjectId] = useState("");
 
-  function persist(next: { biz: BizInfo; template: TemplateId; copy: SectionCopy }) {
+  const [status, setStatus] = useState<AppStatus | null>(null);
+  const [bootLoading, setBootLoading] = useState(projectId !== "new");
+
+  // 마운트 시: 동작 상태 조회 + (기존 프로젝트면) 저장본 불러오기
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = (await fetch("/api/status").then((r) => r.json())) as AppStatus;
+        if (!cancelled) setStatus(s);
+      } catch {
+        // 상태 조회 실패는 무시(배너만 안 뜸)
+      }
+
+      if (projectId !== "new") {
+        try {
+          const res = await fetch(`/api/projects/${projectId}`);
+          if (res.status === 401) {
+            window.location.href = "/login";
+            return;
+          }
+          if (res.ok) {
+            const { project } = (await res.json()) as { project?: ProjectShape };
+            if (!cancelled && project?.copy) {
+              setBiz(project.biz_info);
+              setTemplate(project.template);
+              setCopy(project.copy);
+              setPrompt(project.prompt || "");
+              setSavedProjectId(project.id);
+              persist(project.id, { biz: project.biz_info, template: project.template, copy: project.copy });
+              setPhase("preview");
+            }
+          }
+        } catch {
+          // 불러오기 실패 → 입력 화면 유지
+        }
+      }
+      if (!cancelled) setBootLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  function persist(id: string, next: { biz: BizInfo; template: TemplateId; copy: SectionCopy }) {
     try {
-      sessionStorage.setItem(storageKey(projectId), JSON.stringify(next));
+      sessionStorage.setItem(storageKey(id), JSON.stringify(next));
     } catch {
-      // sessionStorage 불가 환경은 무시(미리보기 인라인은 그대로 동작)
+      // sessionStorage 불가 환경은 무시
     }
   }
 
@@ -77,7 +130,8 @@ export default function ProjectPage() {
       setPhase("clarify");
     } else if (r.copy) {
       setCopy(r.copy);
-      persist({ biz: r.biz, template: r.template, copy: r.copy });
+      persist(projectId, { biz: r.biz, template: r.template, copy: r.copy });
+      setPublishedUrl("");
       setPhase("preview");
     }
   }
@@ -137,18 +191,27 @@ export default function ProjectPage() {
     setError("");
     setPublishing(true);
     try {
-      const res = await fetch("/api/projects", {
-        method: "POST",
+      const isUpdate = Boolean(savedProjectId);
+      const res = await fetch(isUpdate ? `/api/projects/${savedProjectId}` : "/api/projects", {
+        method: isUpdate ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, title: biz.service_name, template, biz_info: biz, copy }),
+        body: JSON.stringify(
+          isUpdate
+            ? { template, copy, published: true, title: biz.service_name }
+            : { prompt, title: biz.service_name, template, biz_info: biz, copy },
+        ),
       });
-      const data = (await res.json().catch(() => ({}))) as { slug?: string; error?: string };
+      const data = (await res.json().catch(() => ({}))) as { id?: string; slug?: string; error?: string };
       if (res.status === 401) {
         window.location.href = "/login";
         return;
       }
       if (!res.ok) throw new Error(data?.error || "게시에 실패했어요. 잠시 후 다시 시도해 주세요.");
-      if (data.slug) setPublishedUrl(`${window.location.origin}/s/${data.slug}`);
+      if (data.id) setSavedProjectId(data.id);
+      if (data.slug) {
+        setPublishedUrl(`${window.location.origin}/s/${data.slug}`);
+        setCopied(false);
+      }
     } catch (e) {
       setError(toMessage(e));
     } finally {
@@ -156,9 +219,19 @@ export default function ProjectPage() {
     }
   }
 
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(publishedUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard 불가 환경 무시
+    }
+  }
+
   function switchTemplate(id: TemplateId) {
     setTemplate(id);
-    if (biz && copy) persist({ biz, template: id, copy });
+    if (biz && copy) persist(projectId, { biz, template: id, copy });
   }
 
   function reset() {
@@ -169,10 +242,28 @@ export default function ProjectPage() {
     setAnswers({});
     setError("");
     setPublishedUrl("");
+    setSavedProjectId("");
+  }
+
+  if (bootLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-400">
+        불러오는 중…
+      </div>
+    );
   }
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
+      {loading && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-white/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+            <p className="text-sm font-medium text-slate-600">AI가 작성 중이에요…</p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3">
@@ -187,14 +278,14 @@ export default function ProjectPage() {
                   disabled={publishing}
                   className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
                 >
-                  {publishing ? "게시 중…" : "게시하기"}
+                  {publishing ? "게시 중…" : savedProjectId ? "업데이트" : "게시하기"}
                 </button>
                 <button
                   onClick={onRegenerate}
                   disabled={loading}
                   className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition hover:bg-slate-50 disabled:opacity-50"
                 >
-                  {loading ? "생성 중…" : "다시 생성"}
+                  다시 생성
                 </button>
                 <Link
                   href={`/project/${projectId}/preview`}
@@ -221,6 +312,18 @@ export default function ProjectPage() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-8">
+        {status && (status.mock || !status.supabaseConfigured) && (
+          <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {status.mock && (
+              <span>
+                🧪 데모(목) 모드 — 키가 없어 입력과 무관하게 샘플 카피가 나와요. 실제 카피는
+                ANTHROPIC_API_KEY 연결 후 표시됩니다.{" "}
+              </span>
+            )}
+            {!status.supabaseConfigured && <span>게시·신청 수집은 Supabase 설정 후 활성화됩니다.</span>}
+          </div>
+        )}
+
         {error && (
           <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
@@ -351,10 +454,16 @@ export default function ProjectPage() {
                   href={publishedUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline"
+                  className="break-all underline"
                 >
                   {publishedUrl}
                 </a>
+                <button
+                  onClick={copyLink}
+                  className="rounded-md border border-emerald-300 bg-white px-2 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
+                >
+                  {copied ? "복사됨!" : "링크 복사"}
+                </button>
               </div>
             )}
             <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -384,6 +493,14 @@ export default function ProjectPage() {
       </main>
     </div>
   );
+}
+
+interface ProjectShape {
+  id: string;
+  template: TemplateId;
+  biz_info: BizInfo;
+  copy: SectionCopy;
+  prompt: string;
 }
 
 function toMessage(e: unknown): string {

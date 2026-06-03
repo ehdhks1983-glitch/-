@@ -147,7 +147,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function isMockMode(): boolean {
+export function isMockMode(): boolean {
   if (process.env.PROMPTSITE_MOCK === "1") return true;
   return !API_KEYS.anthropic && !API_KEYS.google && !API_KEYS.openai;
 }
