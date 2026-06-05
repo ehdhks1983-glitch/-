@@ -130,9 +130,9 @@ class GifMakerApp(ctk.CTk):
 
         tabs = {
             "📝 영상 기획": PlannerTab,
+            "📱 쇼츠 제작": ShortsTab,
             "🖼️ 이미지 합치기": MergeTab,
             "🎬 영상 → 움짤": VideoTab,
-            "📱 쇼츠 제작": ShortsTab,
             "🔴 화면 녹화": RecordTab,
             "✏️ 편집": EditTab,
         }
@@ -154,7 +154,21 @@ class GifMakerApp(ctk.CTk):
         self._record_tab = self._tab_instances["🔴 화면 녹화"]
         self._edit_tab = self._tab_instances["✏️ 편집"]
 
+        # 기획 → 쇼츠 연결 (기획서 장면을 쇼츠 탭으로 보냄)
+        try:
+            self._planner_tab._to_shorts = self._plan_to_shorts
+        except Exception:
+            pass
+
         self._tabview.set("📝 영상 기획")
+
+    def _plan_to_shorts(self, items):
+        """영상 기획 → 쇼츠 제작: 장면 자동 채우고 탭 전환"""
+        try:
+            self._shorts_tab.load_from_plan(items)
+            self._tabview.set("📱 쇼츠 제작")
+        except Exception:
+            pass
 
     # ════════════════════════════════════════
     # 하단 상태바

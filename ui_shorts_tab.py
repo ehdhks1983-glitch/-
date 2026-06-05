@@ -203,6 +203,22 @@ class ShortsTab(ctk.CTkFrame):
             self._segments.append(ShortsSegment(image_path=path, duration=3.0, template="blur"))
             self._refresh_list()
 
+    def load_from_plan(self, items: list):
+        """영상 기획 탭에서 넘어온 장면들(자막+나래이션)을 불러온다."""
+        self._segments = []
+        for it in items:
+            self._segments.append(ShortsSegment(
+                image_path="", duration=float(it.get("duration", 3.0)),
+                caption=it.get("caption", ""), narration=it.get("narration", ""),
+                template=it.get("template", "blur")))
+        self._selected = None
+        self._refresh_list()
+        if self._segments:
+            self._select(0)
+        self._status_label.configure(
+            text=f"📋 기획에서 장면 {len(self._segments)}개를 불러왔어요! 각 장면에 사진을 넣고 '🚀 쇼츠 만들기'를 누르세요",
+            text_color="#3b82f6")
+
     def _clear_all(self):
         self._segments.clear()
         self._selected = None

@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 # ─── 앱 기본 정보 ───
 APP_NAME = "GIF Maker Pro"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 WINDOW_SIZE = "1440x900"
 MIN_WINDOW_SIZE = (1200, 780)
 

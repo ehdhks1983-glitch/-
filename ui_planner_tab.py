@@ -18,6 +18,8 @@ class PlannerTab(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self._problem_idx = 0
         self._last_text = ""
+        self._last_plan = None
+        self._to_shorts = None
         self._build_ui()
 
     def _build_ui(self):
@@ -111,8 +113,15 @@ class PlannerTab(ctk.CTkFrame):
         self._out.insert("1.0", "왼쪽 입력을 채우고 '🎬 전체 기획서 생성'을 눌러주세요.\n\n"
                                 "팁: 상품/서비스와 고객 문제만 잘 적어도 후킹·대본·자막·업로드문구·검수까지 한 번에 나옵니다.")
 
+        self._send_btn = ctk.CTkButton(
+            right, text="📱 이 기획으로 쇼츠 만들기", height=40,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#db2777", hover_color="#be185d",
+            command=self._send_to_shorts)
+        self._send_btn.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
+
         self._status = ctk.CTkLabel(right, text="", font=ctk.CTkFont(size=11), text_color="gray55")
-        self._status.grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        self._status.grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
 
     # ─── 동작 ───
     def _get_target(self) -> str:
@@ -150,6 +159,7 @@ class PlannerTab(ctk.CTkFrame):
             plan = cp.generate_full_plan(inputs)
             text = cp.format_plan(plan)
             self._last_text = text
+            self._last_plan = plan
             self._out.delete("1.0", "end")
             self._out.insert("1.0", text)
             self._status.configure(
@@ -157,6 +167,26 @@ class PlannerTab(ctk.CTkFrame):
                 text_color="#22c55e")
         except Exception as e:
             self._status.configure(text=f"❌ 생성 실패: {e}", text_color="#ef4444")
+
+    def _send_to_shorts(self):
+        """기획서의 장면(자막+나래이션)을 쇼츠 제작 탭으로 보냄"""
+        if not self._last_plan:
+            self._status.configure(text="⚠ 먼저 '🎬 전체 기획서 생성'을 눌러주세요", text_color="#f59e0b")
+            return
+        plan = self._last_plan
+        structure = plan.get("structure", [])
+        scenes = plan.get("scenes", [])
+        items = []
+        for i, s in enumerate(structure):
+            caption = scenes[i]["subtitle"] if i < len(scenes) else cp._short(s["text"], 18)
+            items.append({"caption": caption, "narration": s["text"],
+                          "duration": 3.0, "template": "blur"})
+        if not items:
+            return
+        if callable(self._to_shorts):
+            self._to_shorts(items)
+        else:
+            self._status.configure(text="쇼츠 탭과 연결되지 않았어요", text_color="#ef4444")
 
     def _copy(self):
         text = self._out.get("1.0", "end-1c")
