@@ -105,8 +105,13 @@ class ShortsTab(ctk.CTkFrame):
         self._caption_box = ctk.CTkTextbox(right, height=50, font=ctk.CTkFont(size=12), wrap="word")
         self._caption_box.grid(row=4, column=0, **pad)
 
-        ctk.CTkLabel(right, text="나래이션 (음성으로 읽을 글)",
-                     font=ctk.CTkFont(size=12)).grid(row=5, column=0, **pad)
+        narr_h = ctk.CTkFrame(right, fg_color="transparent")
+        narr_h.grid(row=5, column=0, **pad)
+        ctk.CTkLabel(narr_h, text="나래이션 (음성으로 읽을 글)",
+                     font=ctk.CTkFont(size=12)).pack(side="left")
+        ctk.CTkButton(narr_h, text="🎙 AI 음성 설정", width=110, height=24,
+                      font=ctk.CTkFont(size=11), fg_color="#0ea5e9", hover_color="#0284c7",
+                      command=self._open_tts).pack(side="right")
         self._narr_box = ctk.CTkTextbox(right, height=60, font=ctk.CTkFont(size=12), wrap="word")
         self._narr_box.grid(row=6, column=0, **pad)
 
@@ -138,11 +143,11 @@ class ShortsTab(ctk.CTkFrame):
         vol_frame = ctk.CTkFrame(right, fg_color="transparent")
         vol_frame.grid(row=11, column=0, **pad)
         ctk.CTkLabel(vol_frame, text="음악 볼륨", font=ctk.CTkFont(size=12)).pack(side="left")
-        self._vol_var = ctk.IntVar(value=25)
+        self._vol_var = ctk.IntVar(value=18)
         ctk.CTkSlider(vol_frame, from_=0, to=100, variable=self._vol_var, width=130,
                       command=lambda _=None: self._vol_label.configure(
                           text=f"{self._vol_var.get()}%")).pack(side="left", padx=8)
-        self._vol_label = ctk.CTkLabel(vol_frame, text="25%", font=ctk.CTkFont(size=12), width=40)
+        self._vol_label = ctk.CTkLabel(vol_frame, text="18%", font=ctk.CTkFont(size=12), width=40)
         self._vol_label.pack(side="left")
 
         # ── 공통 ──
@@ -328,6 +333,14 @@ class ShortsTab(ctk.CTkFrame):
     # ════════════════════════════════════════
     # 배경음악 / 출력
     # ════════════════════════════════════════
+    def _open_tts(self):
+        """AI 음성(ElevenLabs) 설정 창 열기"""
+        try:
+            from tts_dialog import TTSDialog
+            TTSDialog(self).focus()
+        except Exception:
+            pass
+
     def _pick_bgm(self):
         from tkinter import filedialog
         f = filedialog.askopenfilename(

@@ -47,7 +47,7 @@ class ShortsProject:
     def __init__(self):
         self.segments: List[ShortsSegment] = []
         self.bgm_path: str = ""        # 배경음악 파일(선택)
-        self.bgm_volume: float = 0.25  # 0.0~1.0
+        self.bgm_volume: float = 0.18  # 0.0~1.0 (음성 위로 너무 크지 않게)
         self.fps: int = 30
         self.caption_size: int = 56    # 자막 기본 크기(1080 기준)
         self.caption_color: str = "#FFFFFF"
@@ -234,10 +234,21 @@ def render_segment_frame(seg: ShortsSegment, caption_size: int = 56,
 # 나래이션 (TTS)
 # ════════════════════════════════════════
 def generate_narration(text: str, out_wav: str) -> Optional[str]:
-    """글 → 음성 wav. 윈도우=SAPI, 그 외=espeak-ng. 실패 시 None."""
+    """글 → 음성. ElevenLabs(설정 시) → 시스템 음성(SAPI/espeak) 폴백. 실패 시 None."""
     text = (text or "").strip()
     if not text:
         return None
+    # 1) ElevenLabs (자연스러운 음성, 키 설정 시)
+    try:
+        from tts_engine import tts_settings, elevenlabs_tts
+        if tts_settings.use_elevenlabs:
+            mp3 = str(Path(out_wav).with_suffix(".mp3"))
+            r = elevenlabs_tts(text, mp3)
+            if r:
+                return r
+    except Exception:
+        pass
+    # 2) 시스템 음성 폴백 (윈도우 SAPI / espeak)
     try:
         if sys.platform == "win32":
             return _tts_windows(text, out_wav)
@@ -384,20 +395,33 @@ def build_shorts(project: ShortsProject,
 
         total_dur = _audio_duration(narration_track)
 
-        # 7) 배경음악 믹스(있으면)
+        # 7) 배경음악 믹스 — 페이드 + 더킹(음성 위로 음악 자동 낮춤)
         prog(85, "배경음악 합치는 중..." if project.bgm_path else "오디오 마무리...")
         final_audio = os.path.join(work, "final.m4a")
         bgm = project.bgm_path
         if bgm and Path(bgm).exists():
             vol = max(0.0, min(1.0, project.bgm_volume))
+            f_bgm = max(0.1, total_dur - 1.4)   # 배경음악 페이드아웃 시작
+            f_all = max(0.1, total_dur - 0.5)   # 전체 페이드아웃 시작
+            duck = (
+                f"[1:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+                f"volume={vol:.3f},afade=t=in:st=0:d=0.8,afade=t=out:st={f_bgm:.2f}:d=1.4[bg];"
+                f"[bg][0:a]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=350[bgd];"
+                f"[0:a][bgd]amix=inputs=2:duration=first:normalize=0[mx];"
+                f"[mx]afade=t=out:st={f_all:.2f}:d=0.5,alimiter=limit=0.95[a]"
+            )
             _run([ff, "-y", "-i", narration_track, "-stream_loop", "-1", "-i", bgm,
-                  "-filter_complex",
-                  f"[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={vol:.3f}[bg];"
-                  f"[0:a][bg]amix=inputs=2:duration=first:normalize=0[a]",
-                  "-map", "[a]", "-t", f"{total_dur:.3f}",
-                  "-c:a", "aac", "-b:a", "160k", final_audio], timeout=300)
-        if not Path(final_audio).exists():
-            _run([ff, "-y", "-i", narration_track, "-c:a", "aac", "-b:a", "160k",
+                  "-filter_complex", duck, "-map", "[a]", "-t", f"{total_dur:.3f}",
+                  "-c:a", "aac", "-b:a", "192k", final_audio], timeout=300)
+            if not Path(final_audio).exists():   # 더킹 실패 시 단순 믹스로 폴백
+                _run([ff, "-y", "-i", narration_track, "-stream_loop", "-1", "-i", bgm,
+                      "-filter_complex",
+                      f"[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={vol:.3f}[bg];"
+                      f"[0:a][bg]amix=inputs=2:duration=first:normalize=0[a]",
+                      "-map", "[a]", "-t", f"{total_dur:.3f}",
+                      "-c:a", "aac", "-b:a", "192k", final_audio], timeout=300)
+        if not Path(final_audio).exists():   # 최종 폴백: 나래이션만
+            _run([ff, "-y", "-i", narration_track, "-c:a", "aac", "-b:a", "192k",
                   final_audio], timeout=120)
 
         # 8) 영상 + 오디오 합치기

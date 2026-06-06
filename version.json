@@ -1,5 +1,5 @@
 {
-  "version": "1.4.1",
+  "version": "1.5.0",
   "download_url": "https://github.com/ehdhks1983-glitch/-/releases",
-  "message": "v1.4.1: 기획 → 쇼츠 연결! '이 기획으로 쇼츠 만들기' 한 번이면 대본·자막·나래이션이 쇼츠 제작 탭에 자동으로 들어갑니다. 탭 순서도 기획→쇼츠로 정리."
+  "message": "v1.5.0: 쇼츠 나래이션을 ElevenLabs 자연스러운 음성으로! 배경음악도 페이드+자동 더킹으로 깔끔하게 — 이제 업로드 가능한 품질입니다."
 }
