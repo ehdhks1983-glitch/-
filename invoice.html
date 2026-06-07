@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>숙박 인보이스 생성기 - 더브라운호텔</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Noto Sans KR', sans-serif;
+      background: #f0f4f8;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    /* ── 앱 헤더 ── */
+    .app-header {
+      background: linear-gradient(135deg, #1a237e 0%, #283593 50%, #1565c0 100%);
+      color: #fff;
+      padding: 18px 40px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 4px 20px rgba(26,35,126,0.35);
+    }
+    .app-header .logo { font-size: 28px; }
+    .app-header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+    .app-header p { font-size: 12px; opacity: 0.75; margin-top: 2px; }
+
+    /* ── 레이아웃 ── */
+    .container {
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 0;
+      min-height: calc(100vh - 72px);
+    }
+
+    /* ── 폼 패널 ── */
+    .form-panel {
+      background: #fff;
+      padding: 28px 24px;
+      overflow-y: auto;
+      max-height: calc(100vh - 72px);
+      border-right: 1px solid #e0e0e0;
+      box-shadow: 4px 0 15px rgba(0,0,0,0.06);
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1565c0;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin: 22px 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #e3f2fd;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .section-title:first-child { margin-top: 0; }
+
+    .form-group { margin-bottom: 12px; }
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      margin-bottom: 4px;
+    }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1.5px solid #dde3ec;
+      border-radius: 8px;
+      font-family: 'Noto Sans KR', sans-serif;
+      font-size: 13px;
+      color: #1a1a2e;
+      background: #fafbfd;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      outline: none;
+    }
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+      border-color: #1565c0;
+      box-shadow: 0 0 0 3px rgba(21,101,192,0.12);
+      background: #fff;
+    }
+    .form-group textarea { resize: vertical; min-height: 60px; }
+
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .radio-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 13px;
+      font-weight: 400;
+      color: #333;
+      cursor: pointer;
+      background: #f5f7fa;
+      border: 1.5px solid #dde3ec;
+      border-radius: 20px;
+      padding: 6px 14px;
+      transition: all 0.2s;
+    }
+    .radio-group input[type="radio"] { display: none; }
+    .radio-group input[type="radio"]:checked + span {
+      font-weight: 600;
+      color: #1565c0;
+    }
+    .radio-group label:has(input:checked) {
+      background: #e3f2fd;
+      border-color: #1565c0;
+    }
+
+    /* 계산 결과 박스 */
+    .calc-box {
+      background: linear-gradient(135deg, #e8f5e9, #f1f8e9);
+      border: 1.5px solid #a5d6a7;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin: 14px 0;
+    }
+    .calc-box .calc-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      padding: 3px 0;
+      color: #2e7d32;
+    }
+    .calc-box .calc-row.total {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1b5e20;
+      border-top: 1px solid #81c784;
+      margin-top: 6px;
+      padding-top: 8px;
+    }
+
+    /* 버튼 */
+    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+    .btn {
+      flex: 1;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 10px;
+      font-family: 'Noto Sans KR', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      min-width: 100px;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #1565c0, #1e88e5);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(21,101,192,0.3);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(21,101,192,0.4); }
+    .btn-success {
+      background: linear-gradient(135deg, #2e7d32, #43a047);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(46,125,50,0.3);
+    }
+    .btn-success:hover { transform: translateY(-1px); }
+    .btn-danger {
+      background: linear-gradient(135deg, #b71c1c, #e53935);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(183,28,28,0.25);
+    }
+    .btn-danger:hover { transform: translateY(-1px); }
+    .btn-ghost {
+      background: #f5f7fa;
+      color: #555;
+      border: 1.5px solid #dde3ec;
+    }
+    .btn-ghost:hover { background: #eee; }
+
+    /* ── 미리보기 패널 ── */
+    .preview-panel {
+      background: #e8ecf0;
+      overflow-y: auto;
+      max-height: calc(100vh - 72px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 30px 20px;
+      gap: 16px;
+    }
+
+    .preview-toolbar {
+      width: 100%;
+      max-width: 794px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .preview-toolbar h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #555;
+    }
+    .preview-toolbar .zoom-info {
+      font-size: 12px;
+      color: #888;
+    }
+
+    /* ── A4 인보이스 ── */
+    #invoice-preview {
+      width: 794px;
+      min-height: 1123px;
+      background: #fff;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+      padding: 60px 60px 50px;
+      font-family: 'Noto Sans KR', sans-serif;
+      color: #1a1a2e;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 인보이스 상단 헤더 */
+    .inv-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 28px;
+    }
+    .inv-title {
+      font-size: 36px;
+      font-weight: 900;
+      color: #1a237e;
+      letter-spacing: -1px;
+    }
+    .inv-title-sub {
+      font-size: 13px;
+      color: #555;
+      margin-top: 4px;
+      letter-spacing: 0.5px;
+    }
+    .inv-meta {
+      text-align: right;
+    }
+    .inv-meta .inv-number {
+      font-size: 15px;
+      font-weight: 700;
+      color: #1565c0;
+      background: #e3f2fd;
+      padding: 6px 14px;
+      border-radius: 20px;
+      display: inline-block;
+      margin-bottom: 8px;
+    }
+    .inv-meta .inv-date {
+      font-size: 12px;
+      color: #777;
+    }
+    .inv-meta .inv-date strong { color: #333; }
+
+    /* 청구처 박스 */
+    .inv-summary-box {
+      background: linear-gradient(135deg, #1a237e 0%, #1565c0 100%);
+      color: #fff;
+      border-radius: 12px;
+      padding: 20px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+    }
+    .inv-summary-box .bill-to { font-size: 13px; opacity: 0.85; margin-bottom: 4px; }
+    .inv-summary-box .bill-name { font-size: 22px; font-weight: 700; }
+    .inv-summary-box .total-label { font-size: 12px; opacity: 0.85; text-align: right; margin-bottom: 4px; }
+    .inv-summary-box .total-amount { font-size: 28px; font-weight: 900; text-align: right; }
+
+    /* 2단 정보 테이블 */
+    .inv-info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    .inv-table-box { border: 1.5px solid #e0e0e0; border-radius: 10px; overflow: hidden; }
+    .inv-table-box .table-head {
+      background: #f5f7fa;
+      padding: 8px 14px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #1565c0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .inv-table-box table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .inv-table-box table td {
+      padding: 7px 14px;
+      font-size: 12px;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: middle;
+    }
+    .inv-table-box table td:last-child { border-bottom: none; }
+    .inv-table-box table tr:last-child td { border-bottom: none; }
+    .inv-table-box table td.label { color: #777; width: 38%; }
+    .inv-table-box table td.value { font-weight: 500; color: #1a1a2e; }
+
+    /* 상세 내역 테이블 */
+    .inv-detail-section { margin-bottom: 22px; }
+    .inv-section-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #1565c0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #e3f2fd;
+    }
+    .inv-detail-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .inv-detail-table thead tr {
+      background: #1a237e;
+      color: #fff;
+    }
+    .inv-detail-table thead th {
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: left;
+    }
+    .inv-detail-table thead th:last-child { text-align: right; }
+    .inv-detail-table tbody tr { background: #fff; }
+    .inv-detail-table tbody tr:nth-child(even) { background: #fafbfd; }
+    .inv-detail-table tbody td {
+      padding: 10px 14px;
+      font-size: 13px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .inv-detail-table tbody td:last-child { text-align: right; font-weight: 600; }
+    .inv-detail-table tfoot tr { background: #e3f2fd; }
+    .inv-detail-table tfoot td {
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .inv-detail-table tfoot td:last-child { text-align: right; color: #1565c0; }
+
+    /* 결제 요약 + 도장 */
+    .inv-bottom-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    .inv-payment-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .inv-payment-table td {
+      padding: 8px 14px;
+      font-size: 12px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .inv-payment-table tr:last-child td { border-bottom: none; }
+    .inv-payment-table td.label { color: #777; width: 45%; }
+    .inv-payment-table td.value { font-weight: 500; }
+    .inv-payment-table tr.total-row { background: #fff3e0; }
+    .inv-payment-table tr.total-row td { font-size: 14px; font-weight: 700; color: #e65100; }
+
+    /* 공급자 확인 + 도장 영역 */
+    .inv-confirm-box {
+      border: 1.5px solid #e0e0e0;
+      border-radius: 10px;
+      padding: 16px;
+      position: relative;
+    }
+    .inv-confirm-box .confirm-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #1565c0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+    }
+    .inv-confirm-box .confirm-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .inv-confirm-box .confirm-row .c-label { color: #777; }
+    .inv-confirm-box .confirm-row .c-value { font-weight: 500; }
+    .inv-confirm-box .stamp-area {
+      position: absolute;
+      right: 20px;
+      bottom: 12px;
+    }
+
+    /* 도장 SVG */
+    .stamp-svg {
+      width: 90px;
+      height: 90px;
+      opacity: 0.85;
+    }
+
+    /* 비고 */
+    .inv-note-box {
+      border: 1.5px solid #fff3cd;
+      background: #fffdf0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 16px;
+    }
+    .inv-note-box .note-label { font-weight: 700; color: #f57f17; margin-bottom: 4px; font-size: 11px; }
+
+    /* 하단 안내 문구 */
+    .inv-footer {
+      margin-top: auto;
+      border-top: 2px solid #e3f2fd;
+      padding-top: 14px;
+      font-size: 10.5px;
+      color: #777;
+      text-align: center;
+      line-height: 1.7;
+    }
+    .inv-footer strong { color: #c62828; }
+
+    /* 로딩 오버레이 */
+    #loading-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #loading-overlay.show { display: flex; }
+    .spinner {
+      width: 50px; height: 50px;
+      border: 5px solid rgba(255,255,255,0.2);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading-overlay p { color: #fff; font-size: 16px; font-weight: 500; }
+
+    /* 토스트 */
+    #toast {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #1a237e;
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: 24px;
+      font-size: 14px;
+      font-weight: 500;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+      transition: transform 0.3s ease;
+      z-index: 10000;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+
+    /* 반응형 */
+    @media (max-width: 1200px) {
+      #invoice-preview { width: 680px; }
+    }
+    @media print { .form-panel, .preview-toolbar, .app-header { display: none !important; } }
+  </style>
+</head>
+<body>
+
+<!-- 앱 헤더 -->
+<header class="app-header">
+  <span class="logo">🏨</span>
+  <div>
+    <h1>숙박 인보이스 생성기</h1>
+    <p>더브라운호텔 | 숙박 이용 내역 확인용 인보이스 PDF 자동 생성</p>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- ── 폼 패널 ── -->
+  <aside class="form-panel">
+
+    <div class="section-title">📋 발행 정보</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>발행일</label>
+        <input type="date" id="issue-date" />
+      </div>
+      <div class="form-group">
+        <label>인보이스 번호</label>
+        <input type="text" id="inv-number" readonly style="background:#f0f4f8;color:#888;" />
+      </div>
+    </div>
+
+    <div class="section-title">👤 고객 정보</div>
+    <div class="form-group">
+      <label>고객명 (업체명 / 개인)</label>
+      <input type="text" id="customer-name" placeholder="예) ○○주식회사 / 홍길동" />
+    </div>
+
+    <div class="section-title">🛏 숙박 정보</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>입실일</label>
+        <input type="date" id="checkin-date" />
+      </div>
+      <div class="form-group">
+        <label>퇴실일</label>
+        <input type="date" id="checkout-date" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>객실 타입</label>
+      <input type="text" id="room-type" placeholder="예) 스탠다드 더블, 디럭스 트윈" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>숙박일수 (자동)</label>
+        <input type="number" id="nights" min="1" value="1" readonly style="background:#f0f4f8;color:#555;" />
+      </div>
+      <div class="form-group">
+        <label>1박 금액 (원)</label>
+        <input type="number" id="price-per-night" placeholder="100000" min="0" />
+      </div>
+    </div>
+
+    <div class="section-title">💳 결제 및 세금</div>
+    <div class="form-group">
+      <label>결제 방식</label>
+      <div class="radio-group" id="payment-method">
+        <label><input type="radio" name="payment" value="카드결제" checked /><span>카드결제</span></label>
+        <label><input type="radio" name="payment" value="현금" /><span>현금</span></label>
+        <label><input type="radio" name="payment" value="계좌이체" /><span>계좌이체</span></label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>부가세</label>
+      <div class="radio-group" id="vat-type">
+        <label><input type="radio" name="vat" value="포함" checked /><span>포함 (역산)</span></label>
+        <label><input type="radio" name="vat" value="별도" /><span>별도 (+10%)</span></label>
+      </div>
+    </div>
+
+    <!-- 계산 결과 -->
+    <div class="calc-box" id="calc-box">
+      <div class="calc-row"><span>숙박일수</span><span id="c-nights">- 박</span></div>
+      <div class="calc-row"><span>공급가액</span><span id="c-supply">- 원</span></div>
+      <div class="calc-row"><span>부가세 (10%)</span><span id="c-vat">- 원</span></div>
+      <div class="calc-row total"><span>청구 합계</span><span id="c-total">- 원</span></div>
+    </div>
+
+    <div class="form-group">
+      <label>비고</label>
+      <textarea id="note" placeholder="특이사항, 할인내용 등을 입력하세요."></textarea>
+    </div>
+
+    <div class="section-title">🏢 공급자 정보 (수정 가능)</div>
+    <div class="form-group">
+      <label>상호</label>
+      <input type="text" id="s-name" value="더브라운호텔" />
+    </div>
+    <div class="form-group">
+      <label>사업자등록번호</label>
+      <input type="text" id="s-reg" value="198-10-01756" />
+    </div>
+    <div class="form-group">
+      <label>주소</label>
+      <input type="text" id="s-addr" value="인천 서구 칠천왕로18 더브라운호텔" />
+    </div>
+    <div class="form-group">
+      <label>연락처</label>
+      <input type="text" id="s-tel" value="032-310-2400" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>대표자</label>
+        <input type="text" id="s-ceo" placeholder="대표자명" />
+      </div>
+      <div class="form-group">
+        <label>업태/종목</label>
+        <input type="text" id="s-biz" value="숙박업" />
+      </div>
+    </div>
+
+    <!-- 버튼 -->
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="updatePreview()">🔄 미리보기 갱신</button>
+      <button class="btn btn-success" onclick="downloadPDF()">⬇ PDF 다운로드</button>
+    </div>
+    <div class="btn-group" style="margin-top:8px;">
+      <button class="btn btn-ghost" onclick="resetForm()">🗑 초기화</button>
+      <button class="btn btn-ghost" onclick="saveDefaults()">💾 기본정보 저장</button>
+    </div>
+
+  </aside>
+
+  <!-- ── 미리보기 패널 ── -->
+  <main class="preview-panel">
+    <div class="preview-toolbar">
+      <h2>📄 미리보기 — A4 세로 (실제 크기 기준)</h2>
+      <span class="zoom-info">브라우저 확대/축소로 크기 조절 가능</span>
+    </div>
+
+    <!-- 인보이스 문서 -->
+    <div id="invoice-preview">
+
+      <!-- 제목 영역 -->
+      <div class="inv-header">
+        <div>
+          <div class="inv-title">숙박 인보이스</div>
+          <div class="inv-title-sub">ACCOMMODATION INVOICE</div>
+        </div>
+        <div class="inv-meta">
+          <div class="inv-number" id="p-inv-number">INV-20240101-001</div>
+          <div class="inv-date">발행일: <strong id="p-issue-date">-</strong></div>
+        </div>
+      </div>
+
+      <!-- 청구처 요약 박스 -->
+      <div class="inv-summary-box">
+        <div>
+          <div class="bill-to">청구처</div>
+          <div class="bill-name" id="p-customer">고객명 / 업체명</div>
+        </div>
+        <div>
+          <div class="total-label">청구 총액</div>
+          <div class="total-amount" id="p-total-amount">₩ 0</div>
+        </div>
+      </div>
+
+      <!-- 공급자 + 고객 2단 -->
+      <div class="inv-info-grid">
+        <div class="inv-table-box">
+          <div class="table-head">🏢 공급자 정보</div>
+          <table>
+            <tr><td class="label">상호</td><td class="value" id="p-s-name">-</td></tr>
+            <tr><td class="label">사업자번호</td><td class="value" id="p-s-reg">-</td></tr>
+            <tr><td class="label">주소</td><td class="value" id="p-s-addr" style="font-size:11px;">-</td></tr>
+            <tr><td class="label">연락처</td><td class="value" id="p-s-tel">-</td></tr>
+            <tr><td class="label">대표자</td><td class="value" id="p-s-ceo">-</td></tr>
+            <tr><td class="label">업태/종목</td><td class="value" id="p-s-biz">-</td></tr>
+          </table>
+        </div>
+        <div class="inv-table-box">
+          <div class="table-head">🛏 고객 / 숙박 정보</div>
+          <table>
+            <tr><td class="label">고객명</td><td class="value" id="p-cust-name">-</td></tr>
+            <tr><td class="label">입실일</td><td class="value" id="p-checkin">-</td></tr>
+            <tr><td class="label">퇴실일</td><td class="value" id="p-checkout">-</td></tr>
+            <tr><td class="label">숙박일수</td><td class="value" id="p-nights">-</td></tr>
+            <tr><td class="label">객실 타입</td><td class="value" id="p-room">-</td></tr>
+            <tr><td class="label">결제 방식</td><td class="value" id="p-payment">-</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <!-- 상세 내역 -->
+      <div class="inv-detail-section">
+        <div class="inv-section-title">📊 상세 내역</div>
+        <table class="inv-detail-table">
+          <thead>
+            <tr>
+              <th>품목</th>
+              <th>객실타입</th>
+              <th style="text-align:center;">박수</th>
+              <th style="text-align:right;">단가</th>
+              <th>공급가액</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>숙박요금</td>
+              <td id="p-d-room">-</td>
+              <td style="text-align:center;" id="p-d-nights">-</td>
+              <td style="text-align:right;" id="p-d-price">-</td>
+              <td id="p-d-supply">-</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="4" style="text-align:right; font-size:12px; color:#555;">공급가액 합계</td>
+              <td id="p-d-total">-</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <!-- 결제 요약 + 공급자 확인 -->
+      <div class="inv-bottom-grid">
+        <div>
+          <div class="inv-section-title">💰 결제 요약</div>
+          <table class="inv-payment-table">
+            <tr><td class="label">공급가액</td><td class="value" id="p-pay-supply">-</td></tr>
+            <tr><td class="label">부가세 (10%)</td><td class="value" id="p-pay-vat">-</td></tr>
+            <tr><td class="label">부가세 구분</td><td class="value" id="p-vat-type">-</td></tr>
+            <tr class="total-row"><td class="label">청구 합계</td><td class="value" id="p-pay-total">-</td></tr>
+            <tr><td class="label">결제 방식</td><td class="value" id="p-pay-method">-</td></tr>
+          </table>
+        </div>
+        <div>
+          <div class="inv-section-title">✅ 공급자 확인</div>
+          <div class="inv-confirm-box">
+            <div class="confirm-title">위와 같이 숙박 내역을 확인합니다</div>
+            <div class="confirm-row"><span class="c-label">상호</span><span class="c-value" id="p-c-name">-</span></div>
+            <div class="confirm-row"><span class="c-label">사업자번호</span><span class="c-value" id="p-c-reg">-</span></div>
+            <div class="confirm-row"><span class="c-label">주소</span><span class="c-value" id="p-c-addr" style="font-size:11px;">-</span></div>
+            <div class="confirm-row"><span class="c-label">연락처</span><span class="c-value" id="p-c-tel">-</span></div>
+            <div class="stamp-area">
+              <canvas id="stamp-canvas" width="90" height="90"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 비고 -->
+      <div class="inv-note-box" id="p-note-box" style="display:none;">
+        <div class="note-label">📝 비고</div>
+        <div id="p-note">-</div>
+      </div>
+
+      <!-- 하단 면책 문구 -->
+      <div class="inv-footer">
+        <strong>본 인보이스는 숙박 이용 내역 확인용으로 작성되었습니다.</strong><br/>
+        세금계산서 또는 카드매출전표가 필요한 경우 별도 발급/확인이 필요합니다.<br/>
+        This invoice is issued for accommodation confirmation purposes only and is not a tax invoice.
+      </div>
+
+    </div><!-- /invoice-preview -->
+  </main>
+
+</div><!-- /container -->
+
+<!-- 로딩 -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <p>PDF 생성 중입니다...</p>
+</div>
+
+<!-- 토스트 -->
+<div id="toast"></div>
+
+<script>
+  /* ───────────────── 초기화 ───────────────── */
+  document.addEventListener('DOMContentLoaded', () => {
+    const today = new Date();
+    document.getElementById('issue-date').value = fmt(today);
+    loadDefaults();
+    updateInvNumber();
+    updatePreview();
+
+    // 이벤트 바인딩
+    const inputs = document.querySelectorAll('#checkin-date, #checkout-date, #price-per-night');
+    inputs.forEach(el => el.addEventListener('input', () => { calcNights(); updatePreview(); }));
+    document.getElementById('issue-date').addEventListener('change', () => { updateInvNumber(); updatePreview(); });
+    document.querySelectorAll('input[name="payment"], input[name="vat"]').forEach(el =>
+      el.addEventListener('change', updatePreview)
+    );
+    const textInputs = document.querySelectorAll('#customer-name, #room-type, #note, #s-name, #s-reg, #s-addr, #s-tel, #s-ceo, #s-biz');
+    textInputs.forEach(el => el.addEventListener('input', updatePreview));
+
+    // 도장 그리기
+    drawStamp();
+  });
+
+  /* ───────────────── 유틸 ───────────────── */
+  function fmt(d) {
+    return d.toISOString().split('T')[0];
+  }
+  function fmtDate(str) {
+    if (!str) return '-';
+    const [y, m, d] = str.split('-');
+    return `${y}년 ${parseInt(m)}월 ${parseInt(d)}일`;
+  }
+  function fmtMoney(n) {
+    return n.toLocaleString('ko-KR') + ' 원';
+  }
+  function showToast(msg, duration = 2500) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), duration);
+  }
+
+  /* ───────────────── 박수 계산 ───────────────── */
+  function calcNights() {
+    const ci = document.getElementById('checkin-date').value;
+    const co = document.getElementById('checkout-date').value;
+    if (ci && co) {
+      const diff = Math.round((new Date(co) - new Date(ci)) / 86400000);
+      document.getElementById('nights').value = diff > 0 ? diff : 1;
+    }
+  }
+
+  /* ───────────────── 인보이스 번호 ───────────────── */
+  function updateInvNumber() {
+    const d = document.getElementById('issue-date').value.replace(/-/g, '') || fmt(new Date()).replace(/-/g, '');
+    document.getElementById('inv-number').value = `INV-${d}-001`;
+  }
+
+  /* ───────────────── 계산 ───────────────── */
+  function calculate() {
+    const nights = parseInt(document.getElementById('nights').value) || 0;
+    const pricePerNight = parseFloat(document.getElementById('price-per-night').value) || 0;
+    const vatType = document.querySelector('input[name="vat"]:checked').value;
+    const total = nights * pricePerNight;
+    let supply, vat, grandTotal;
+
+    if (vatType === '포함') {
+      supply = Math.round(total / 1.1);
+      vat = total - supply;
+      grandTotal = total;
+    } else {
+      supply = total;
+      vat = Math.round(total * 0.1);
+      grandTotal = total + vat;
+    }
+    return { nights, pricePerNight, total, supply, vat, grandTotal, vatType };
+  }
+
+  /* ───────────────── 폼 계산 결과 업데이트 ───────────────── */
+  function updateCalcBox(c) {
+    document.getElementById('c-nights').textContent = `${c.nights} 박`;
+    document.getElementById('c-supply').textContent = fmtMoney(c.supply);
+    document.getElementById('c-vat').textContent = fmtMoney(c.vat);
+    document.getElementById('c-total').textContent = fmtMoney(c.grandTotal);
+  }
+
+  /* ───────────────── 미리보기 갱신 ───────────────── */
+  function updatePreview() {
+    const c = calculate();
+    updateCalcBox(c);
+
+    const issueDate = document.getElementById('issue-date').value;
+    const invNum = document.getElementById('inv-number').value;
+    const customer = document.getElementById('customer-name').value || '(고객명 미입력)';
+    const checkin = document.getElementById('checkin-date').value;
+    const checkout = document.getElementById('checkout-date').value;
+    const roomType = document.getElementById('room-type').value || '-';
+    const payment = document.querySelector('input[name="payment"]:checked').value;
+    const note = document.getElementById('note').value;
+
+    const sName = document.getElementById('s-name').value;
+    const sReg  = document.getElementById('s-reg').value;
+    const sAddr = document.getElementById('s-addr').value;
+    const sTel  = document.getElementById('s-tel').value;
+    const sCeo  = document.getElementById('s-ceo').value || '-';
+    const sBiz  = document.getElementById('s-biz').value;
+
+    // 헤더
+    set('p-inv-number', invNum);
+    set('p-issue-date', fmtDate(issueDate));
+
+    // 요약 박스
+    set('p-customer', customer);
+    set('p-total-amount', '₩ ' + c.grandTotal.toLocaleString('ko-KR'));
+
+    // 공급자 정보
+    set('p-s-name', sName); set('p-s-reg', sReg); set('p-s-addr', sAddr);
+    set('p-s-tel', sTel); set('p-s-ceo', sCeo); set('p-s-biz', sBiz);
+
+    // 고객 숙박 정보
+    set('p-cust-name', customer);
+    set('p-checkin', fmtDate(checkin));
+    set('p-checkout', fmtDate(checkout));
+    set('p-nights', `${c.nights} 박`);
+    set('p-room', roomType);
+    set('p-payment', payment);
+
+    // 상세 내역
+    set('p-d-room', roomType);
+    set('p-d-nights', `${c.nights} 박`);
+    set('p-d-price', fmtMoney(c.pricePerNight));
+    set('p-d-supply', fmtMoney(c.supply));
+    set('p-d-total', fmtMoney(c.supply));
+
+    // 결제 요약
+    set('p-pay-supply', fmtMoney(c.supply));
+    set('p-pay-vat', fmtMoney(c.vat));
+    set('p-vat-type', c.vatType === '포함' ? '부가세 포함 (역산)' : '부가세 별도 (+10%)');
+    set('p-pay-total', fmtMoney(c.grandTotal));
+    set('p-pay-method', payment);
+
+    // 공급자 확인
+    set('p-c-name', sName); set('p-c-reg', sReg);
+    set('p-c-addr', sAddr); set('p-c-tel', sTel);
+
+    // 비고
+    const noteBox = document.getElementById('p-note-box');
+    if (note.trim()) {
+      noteBox.style.display = 'block';
+      set('p-note', note.trim());
+    } else {
+      noteBox.style.display = 'none';
+    }
+
+    // 도장 재그리기 (상호 변경 시)
+    drawStamp(sName);
+  }
+
+  function set(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
+  /* ───────────────── 도장 그리기 ───────────────── */
+  function drawStamp(hotelName) {
+    const canvas = document.getElementById('stamp-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = 90, H = 90;
+    const cx = W / 2, cy = H / 2;
+    const R = 40;
+
+    ctx.clearRect(0, 0, W, H);
+
+    const name = hotelName || document.getElementById('s-name').value || '더브라운호텔';
+
+    // 외원
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.strokeStyle = '#cc0000';
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+
+    // 내원
+    ctx.beginPath();
+    ctx.arc(cx, cy, R - 7, 0, Math.PI * 2);
+    ctx.strokeStyle = '#cc0000';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // 중앙 텍스트 (2줄)
+    ctx.fillStyle = '#cc0000';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const short = name.length <= 5;
+    if (short) {
+      ctx.font = `bold 13px 'Noto Sans KR', sans-serif`;
+      ctx.fillText(name, cx, cy - 1);
+    } else {
+      const mid = Math.ceil(name.length / 2);
+      const line1 = name.slice(0, mid);
+      const line2 = name.slice(mid);
+      ctx.font = `bold 12px 'Noto Sans KR', sans-serif`;
+      ctx.fillText(line1, cx, cy - 9);
+      ctx.fillText(line2, cx, cy + 9);
+    }
+
+    // 곡선 텍스트 (상단 호)
+    const arcText = '확 인';
+    ctx.font = `bold 9px 'Noto Sans KR', sans-serif`;
+    const arcR = R - 13;
+    const startAngle = -Math.PI * 0.45;
+    const spread = Math.PI * 0.9 / (arcText.length - 1);
+    arcText.split('').forEach((ch, i) => {
+      const angle = startAngle + i * spread - Math.PI / 2;
+      ctx.save();
+      ctx.translate(cx + arcR * Math.cos(angle + Math.PI/2), cy + arcR * Math.sin(angle + Math.PI/2));
+      ctx.rotate(angle + Math.PI/2 + Math.PI);
+      ctx.fillText(ch, 0, 0);
+      ctx.restore();
+    });
+  }
+
+  /* ───────────────── PDF 다운로드 ───────────────── */
+  async function downloadPDF() {
+    const customerName = document.getElementById('customer-name').value.trim() || '고객';
+    const issueDate = document.getElementById('issue-date').value.replace(/-/g, '');
+
+    updatePreview();
+
+    document.getElementById('loading-overlay').classList.add('show');
+
+    await new Promise(r => setTimeout(r, 300));
+
+    try {
+      // 폰트 로드 대기
+      await document.fonts.ready;
+
+      const el = document.getElementById('invoice-preview');
+      const canvas = await html2canvas(el, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+        onclone: (clonedDoc) => {
+          const clonedEl = clonedDoc.getElementById('invoice-preview');
+          if (clonedEl) {
+            clonedEl.style.boxShadow = 'none';
+          }
+        }
+      });
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+      const pageW = 210, pageH = 297;
+      const ratio = canvas.width / canvas.height;
+      const imgH = pageW / ratio;
+
+      if (imgH <= pageH) {
+        pdf.addImage(imgData, 'JPEG', 0, 0, pageW, imgH);
+      } else {
+        // 여러 페이지
+        const pxPerMm = canvas.width / pageW;
+        const pxPerPage = pageH * pxPerMm;
+        let offsetPx = 0;
+        while (offsetPx < canvas.height) {
+          const sliceHeight = Math.min(pxPerPage, canvas.height - offsetPx);
+          const sliceCanvas = document.createElement('canvas');
+          sliceCanvas.width = canvas.width;
+          sliceCanvas.height = sliceHeight;
+          sliceCanvas.getContext('2d').drawImage(canvas, 0, -offsetPx);
+          const sliceData = sliceCanvas.toDataURL('image/jpeg', 0.95);
+          if (offsetPx > 0) pdf.addPage();
+          pdf.addImage(sliceData, 'JPEG', 0, 0, pageW, sliceHeight / pxPerMm);
+          offsetPx += pxPerPage;
+        }
+      }
+
+      const fileName = `숙박_인보이스_${customerName}_${issueDate}.pdf`;
+      pdf.save(fileName);
+      showToast(`✅ PDF 저장 완료: ${fileName}`);
+    } catch (e) {
+      console.error(e);
+      showToast('❌ PDF 생성 중 오류가 발생했습니다.');
+    } finally {
+      document.getElementById('loading-overlay').classList.remove('show');
+    }
+  }
+
+  /* ───────────────── 초기화 ───────────────── */
+  function resetForm() {
+    if (!confirm('입력한 내용을 모두 초기화하시겠습니까?')) return;
+    document.getElementById('customer-name').value = '';
+    document.getElementById('checkin-date').value = '';
+    document.getElementById('checkout-date').value = '';
+    document.getElementById('room-type').value = '';
+    document.getElementById('nights').value = 1;
+    document.getElementById('price-per-night').value = '';
+    document.getElementById('note').value = '';
+    document.querySelector('input[name="payment"][value="카드결제"]').checked = true;
+    document.querySelector('input[name="vat"][value="포함"]').checked = true;
+    const today = fmt(new Date());
+    document.getElementById('issue-date').value = today;
+    updateInvNumber();
+    updatePreview();
+    showToast('🗑 초기화 완료');
+  }
+
+  /* ───────────────── 기본정보 저장/불러오기 ───────────────── */
+  function saveDefaults() {
+    const data = {
+      sName: document.getElementById('s-name').value,
+      sReg:  document.getElementById('s-reg').value,
+      sAddr: document.getElementById('s-addr').value,
+      sTel:  document.getElementById('s-tel').value,
+      sCeo:  document.getElementById('s-ceo').value,
+      sBiz:  document.getElementById('s-biz').value,
+    };
+    localStorage.setItem('invoiceDefaults', JSON.stringify(data));
+    showToast('💾 공급자 기본정보가 저장되었습니다.');
+  }
+
+  function loadDefaults() {
+    try {
+      const data = JSON.parse(localStorage.getItem('invoiceDefaults') || '{}');
+      if (data.sName) document.getElementById('s-name').value = data.sName;
+      if (data.sReg)  document.getElementById('s-reg').value  = data.sReg;
+      if (data.sAddr) document.getElementById('s-addr').value = data.sAddr;
+      if (data.sTel)  document.getElementById('s-tel').value  = data.sTel;
+      if (data.sCeo)  document.getElementById('s-ceo').value  = data.sCeo;
+      if (data.sBiz)  document.getElementById('s-biz').value  = data.sBiz;
+    } catch (e) { /* ignore */ }
+  }
+</script>
+
+</body>
+</html>
