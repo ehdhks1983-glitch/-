@@ -58,8 +58,10 @@ class ShortsProject:
 # ════════════════════════════════════════
 # 공통 실행 헬퍼
 # ════════════════════════════════════════
-def _run(cmd, timeout=300):
+def _run(cmd, timeout=300, cwd=None):
     kw = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "timeout": timeout}
+    if cwd:
+        kw["cwd"] = cwd
     if sys.platform == "win32":
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -186,8 +188,9 @@ def _draw_caption(canvas: Image.Image, text: str, position: str,
 
 
 def render_segment_frame(seg: ShortsSegment, caption_size: int = 56,
-                         caption_color: str = "#FFFFFF") -> Image.Image:
-    """세그먼트 1장을 1080×1920 프레임으로 렌더링 (미리보기에도 사용)"""
+                         caption_color: str = "#FFFFFF", with_caption: bool = True) -> Image.Image:
+    """세그먼트 1장을 1080×1920 프레임으로 렌더링 (미리보기에도 사용).
+    with_caption=False면 자막을 안 그림(빌드 시 ASS 전문 자막으로 입히기 위함)."""
     photo = None
     if seg.image_path and Path(seg.image_path).exists():
         try:
@@ -221,13 +224,66 @@ def render_segment_frame(seg: ShortsSegment, caption_size: int = 56,
             canvas = Image.new("RGB", (W, H), (20, 20, 20))
         cap_color = caption_color
 
-    _draw_caption(canvas, seg.caption, cap_pos, caption_size, cap_color)
+    if with_caption:
+        _draw_caption(canvas, seg.caption, cap_pos, caption_size, cap_color)
     try:
         from watermark import apply_to_frame
         canvas = apply_to_frame(canvas)
     except Exception:
         pass
     return canvas
+
+
+# ════════════════════════════════════════
+# 자막 (ASS / libass) — 전문 자막 렌더링
+# ════════════════════════════════════════
+def _filter_available(ff: str, name: str) -> bool:
+    try:
+        r = _run([ff, "-hide_banner", "-filters"], timeout=20)
+        return name in (r.stdout or b"").decode("utf-8", "replace")
+    except Exception:
+        return False
+
+
+def _ass_font() -> str:
+    return "Malgun Gothic" if sys.platform == "win32" else "NanumGothic"
+
+
+def _ass_time(s: float) -> str:
+    s = max(0.0, float(s))
+    h = int(s // 3600)
+    m = int((s % 3600) // 60)
+    sec = s % 60
+    return f"{h}:{m:02d}:{sec:05.2f}"
+
+
+def _build_ass_file(events: list, path: str, font: str, caption_size: int):
+    """events: [(start_sec, end_sec, text), ...] → 쇼츠 스타일 ASS 자막 파일"""
+    fs = max(60, min(170, int(caption_size * 1.7)))
+    outline = max(4, fs // 12)
+    shadow = max(2, fs // 26)
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {W}\nPlayResY: {H}\n"
+        "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Pop,{font},{fs},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,"
+        f"100,100,0,0,1,{outline},{shadow},2,80,80,300,1\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+    rows = [header]
+    for st, en, text in events:
+        t = (text or "").replace("\\", "").replace("{", "").replace("}", "").replace("\n", "\\N").strip()
+        if not t:
+            continue
+        anim = "{\\fad(120,120)\\fscx82\\fscy82\\t(0,160,\\fscx100\\fscy100)}"
+        rows.append(f"Dialogue: 0,{_ass_time(st)},{_ass_time(en)},Pop,,0,0,0,,{anim}{t}")
+    Path(path).write_text("\n".join(rows), encoding="utf-8")
 
 
 # ════════════════════════════════════════
@@ -318,6 +374,9 @@ def build_shorts(project: ShortsProject,
 
     work = tempfile.mkdtemp(prefix="shorts_")
     try:
+        use_ass = _filter_available(ff, "subtitles")
+        ass_events = []   # (start, end, caption)
+        cur_t = 0.0
         seg_clips: List[str] = []
         seg_audios: List[str] = []
         total = len(project.segments)
@@ -338,9 +397,13 @@ def build_shorts(project: ShortsProject,
                     narr_dur = _audio_duration(narr_wav)
 
             eff_dur = max(float(seg.duration), narr_dur + 0.4, 1.0)
+            if seg.caption.strip():
+                ass_events.append((cur_t, cur_t + eff_dur, seg.caption.strip()))
+            cur_t += eff_dur
 
-            # 2) 프레임 렌더 → PNG
-            frame = render_segment_frame(seg, project.caption_size, project.caption_color)
+            # 2) 프레임 렌더 → PNG (ASS 쓰면 자막은 마지막에 입힘)
+            frame = render_segment_frame(seg, project.caption_size, project.caption_color,
+                                         with_caption=not use_ass)
             png = os.path.join(work, f"f{i}.png")
             frame.save(png)
             frame.close()
@@ -424,11 +487,25 @@ def build_shorts(project: ShortsProject,
             _run([ff, "-y", "-i", narration_track, "-c:a", "aac", "-b:a", "192k",
                   final_audio], timeout=120)
 
-        # 8) 영상 + 오디오 합치기
+        # 8) 영상 + 오디오 합치기 (+ ASS 전문 자막 입히기)
         prog(93, "최종 합치는 중...")
         if not project.output_path:
             project.output_path = generate_output_name("shorts", "mp4")
-        r = _run([ff, "-y", "-i", video_only, "-i", final_audio,
+        ass_path = None
+        if use_ass and ass_events:
+            ass_path = os.path.join(work, "captions.ass")
+            _build_ass_file(ass_events, ass_path, _ass_font(), project.caption_size)
+        if ass_path and Path(ass_path).exists():
+            # 작업폴더 기준 상대경로로 호출(윈도우 경로 이스케이프 회피)
+            _run([ff, "-y", "-i", "video.mp4", "-i", "final.m4a",
+                  "-filter_complex", "[0:v]subtitles=captions.ass[v]",
+                  "-map", "[v]", "-map", "1:a",
+                  "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "veryfast",
+                  "-c:a", "aac", "-shortest", "-movflags", "+faststart",
+                  project.output_path], timeout=600, cwd=work)
+        if not Path(project.output_path).exists():
+            # 폴백: 자막 번인 없이 합치기
+            _run([ff, "-y", "-i", video_only, "-i", final_audio,
                   "-c:v", "copy", "-c:a", "aac", "-shortest",
                   "-movflags", "+faststart", project.output_path], timeout=300)
         if not Path(project.output_path).exists():
