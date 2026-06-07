@@ -43,12 +43,10 @@ from ui_merge_tab import MergeTab
 from ui_video_tab import VideoTab
 from ui_record_tab import RecordTab
 from ui_edit_tab import EditTab
-from ui_shorts_tab import ShortsTab
-from ui_planner_tab import PlannerTab
 
 total = 0
-for name, cls in [("PlannerTab", PlannerTab), ("MergeTab", MergeTab), ("VideoTab", VideoTab),
-                  ("ShortsTab", ShortsTab), ("RecordTab", RecordTab), ("EditTab", EditTab)]:
+for name, cls in [("MergeTab", MergeTab), ("VideoTab", VideoTab),
+                  ("RecordTab", RecordTab), ("EditTab", EditTab)]:
     frame = ctk.CTkFrame(root)
     inst = cls(frame)
     root.update_idletasks()

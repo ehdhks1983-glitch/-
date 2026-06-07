@@ -20,8 +20,6 @@ from ui_merge_tab import MergeTab
 from ui_video_tab import VideoTab
 from ui_record_tab import RecordTab
 from ui_edit_tab import EditTab
-from ui_shorts_tab import ShortsTab
-from ui_planner_tab import PlannerTab
 
 
 class GifMakerApp(ctk.CTk):
@@ -129,8 +127,6 @@ class GifMakerApp(ctk.CTk):
         self._tabview.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 0))
 
         tabs = {
-            "📝 영상 기획": PlannerTab,
-            "📱 쇼츠 제작": ShortsTab,
             "🖼️ 이미지 합치기": MergeTab,
             "🎬 영상 → 움짤": VideoTab,
             "🔴 화면 녹화": RecordTab,
@@ -147,28 +143,12 @@ class GifMakerApp(ctk.CTk):
             self._tab_instances[name] = instance
 
         # 편의 참조
-        self._planner_tab = self._tab_instances["📝 영상 기획"]
         self._merge_tab = self._tab_instances["🖼️ 이미지 합치기"]
         self._video_tab = self._tab_instances["🎬 영상 → 움짤"]
-        self._shorts_tab = self._tab_instances["📱 쇼츠 제작"]
         self._record_tab = self._tab_instances["🔴 화면 녹화"]
         self._edit_tab = self._tab_instances["✏️ 편집"]
 
-        # 기획 → 쇼츠 연결 (기획서 장면을 쇼츠 탭으로 보냄)
-        try:
-            self._planner_tab._to_shorts = self._plan_to_shorts
-        except Exception:
-            pass
-
-        self._tabview.set("📝 영상 기획")
-
-    def _plan_to_shorts(self, items):
-        """영상 기획 → 쇼츠 제작: 장면 자동 채우고 탭 전환"""
-        try:
-            self._shorts_tab.load_from_plan(items)
-            self._tabview.set("📱 쇼츠 제작")
-        except Exception:
-            pass
+        self._tabview.set("🖼️ 이미지 합치기")
 
     # ════════════════════════════════════════
     # 하단 상태바
@@ -224,9 +204,6 @@ class GifMakerApp(ctk.CTk):
         current = self._tabview.get()
         if "이미지" in current:
             self._merge_tab.add_files_from_drop(paths)
-        elif "쇼츠" in current:
-            for p in paths:
-                self._shorts_tab.add_file_from_drop(p)
         elif "영상" in current and paths:
             self._video_tab.add_file_from_drop(paths[0])
         elif "편집" in current and paths:

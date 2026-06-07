@@ -286,34 +286,16 @@ class VideoTab(ctk.CTkFrame):
         ctk.CTkLabel(right, text="📦 출력 포맷",
                      font=ctk.CTkFont(size=13, weight="bold")).grid(row=1, column=0, **pad)
 
-        self._format_var = ctk.StringVar(value=settings.get("video_output_format"))
+        _fmt = settings.get("video_output_format")
+        self._format_var = ctk.StringVar(value=_fmt if _fmt in ("gif", "webp", "apng") else "gif")
         fmt_frame = ctk.CTkFrame(right, fg_color="transparent")
         fmt_frame.grid(row=2, column=0, **pad)
-        for i, (text, val) in enumerate([("GIF", "gif"), ("WebP", "webp"), ("APNG", "apng"), ("MP4", "mp4")]):
+        for i, (text, val) in enumerate([("GIF", "gif"), ("WebP", "webp"), ("APNG", "apng")]):
             ctk.CTkRadioButton(
                 fmt_frame, text=text, variable=self._format_var, value=val,
                 font=ctk.CTkFont(size=12),
-                command=self._on_format_change,
-            ).grid(row=0, column=i, padx=6, sticky="w")
-
-        # 📱 쇼츠(세로 9:16) — MP4 선택 시에만 활성화
-        self._shorts_var = ctk.BooleanVar(value=False)
-        self._shorts_check = ctk.CTkCheckBox(
-            fmt_frame, text="📱 쇼츠 (세로 9:16, 오디오 유지)",
-            variable=self._shorts_var,
-            font=ctk.CTkFont(size=11),
-        )
-        self._shorts_check.grid(row=1, column=0, columnspan=4, padx=6, pady=(6, 0), sticky="w")
-        if self._format_var.get() != "mp4":
-            self._shorts_check.configure(state="disabled")
-
-        # 📱 원클릭: MP4 + 쇼츠를 한 번에 설정
-        ctk.CTkButton(
-            fmt_frame, text="📱 쇼츠로 만들기 (한 번에 설정)",
-            height=30, font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#db2777", hover_color="#be185d",
-            command=self._apply_shorts_preset,
-        ).grid(row=2, column=0, columnspan=4, padx=6, pady=(8, 0), sticky="ew")
+                command=self._on_settings_change,
+            ).grid(row=0, column=i, padx=8)
 
         # ── FPS ──
         ctk.CTkLabel(right, text="🎞️ FPS",
@@ -1506,25 +1488,6 @@ class VideoTab(ctk.CTkFrame):
         dur = (end if end > 0 else (self._video_info.duration if self._video_info else 0)) - start
         self._duration_label.configure(text=f"구간: {start:.1f}초 ~ {end_str} ({dur:.1f}초)")
 
-    def _apply_shorts_preset(self):
-        """원클릭: 세로 쇼츠(MP4 9:16) 설정을 한 번에 적용"""
-        self._format_var.set("mp4")
-        self._shorts_var.set(True)
-        self._on_format_change()
-        self._status_label.configure(
-            text="📱 쇼츠 설정 완료! 영상 열고 '🚀 변환 시작'을 누르세요",
-            text_color="#3b82f6",
-        )
-
-    def _on_format_change(self, val=None):
-        """출력 포맷 변경 — MP4일 때만 쇼츠 옵션 활성화"""
-        is_mp4 = self._format_var.get() == "mp4"
-        try:
-            self._shorts_check.configure(state="normal" if is_mp4 else "disabled")
-        except Exception:
-            pass
-        self._on_settings_change()
-
     def _on_settings_change(self, val=None):
         self._quality_label.configure(text=f"{self._quality_var.get()}%")
         self._update_warn()
@@ -1673,7 +1636,6 @@ class VideoTab(ctk.CTkFrame):
         job.speed = self._get_speed()
         job.loop = self._get_loop()
         job.subtitles = list(self._subtitles_data)  # 자막 복사
-        job.shorts_vertical = self._shorts_var.get()
 
         # 출력 높이 계산 (자막 크기 정규화용)
         if self._video_info and job.width > 0:
@@ -1825,7 +1787,6 @@ class VideoTab(ctk.CTkFrame):
             job.speed = base_job.speed
             job.loop = base_job.loop
             job.output_height = base_job.output_height
-            job.shorts_vertical = base_job.shorts_vertical
 
             # 자막 처리
             if self._split_sub_var.get() and base_job.subtitles:

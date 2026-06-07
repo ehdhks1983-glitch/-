@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 # ─── 앱 기본 정보 ───
-APP_NAME = "GIF Maker Pro"
-APP_VERSION = "1.7.0"
+APP_NAME = "영상 제작기"
+APP_VERSION = "1.0.0"
 WINDOW_SIZE = "1440x900"
 MIN_WINDOW_SIZE = (1200, 780)
 
