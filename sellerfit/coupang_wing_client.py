@@ -156,8 +156,10 @@ class CoupangWingClient:
                 }
 
                 url = self.api_base + path
-                if params:
-                    url += "?" + urlencode(params)
+                if query_str:
+                    # 서명에 사용한 query_str을 그대로 재사용 (인코딩 불일치 → 401 방지).
+                    # urlencode(params) 재호출 시 기본 quote_plus라 서명(quote)과 달라짐.
+                    url += "?" + query_str
 
                 log.debug(f"[WING] {method} {path} attempt={attempt}")
 
