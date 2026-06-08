@@ -196,6 +196,9 @@ def test_payload(product, pricing):
     check("searchTags 각 ≤20자",
           all(len(t) <= 20 for t in it.get("searchTags", [])))
     check("salePrice>0", it.get("salePrice", 0) > 0, f'got {it.get("salePrice")}')
+    check("outboundShippingTimeDay=2 (config 기본값)",
+          it.get("outboundShippingTimeDay") == 2,
+          f'got {it.get("outboundShippingTimeDay")!r} (B8: __dict__.get 제거 확인)')
     check("sellerProductName ≤100자", len(payload.get("sellerProductName", "")) <= 100)
     return payload
 

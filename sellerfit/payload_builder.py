@@ -190,7 +190,7 @@ class PayloadBuilder:
             "maximumBuyCount": str(self.reg.stock_qty),       # 판매 가능 재고
             "maximumBuyForPerson": str(self.reg.maximum_buy_for_person),
             "maximumBuyForPersonPeriod": "1",  # 1일
-            "outboundShippingTimeDay": self.reg.__dict__.get("outbound_days", 2),
+            "outboundShippingTimeDay": self.reg.outbound_shipping_time_day,
             "unitCount": 1,
             "adultOnly": "EVERYONE",
             "taxType": "TAX",

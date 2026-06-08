@@ -157,9 +157,12 @@ class ProductRegistrationConfig:
     max_images: int = field(default_factory=lambda: _env_int("MAX_IMAGES", 10))
 
     # 수량/구매 제한
-    maximum_buy_count: int = field(default_factory=lambda: _env_int("MAX_BUY_COUNT", 999))
     maximum_buy_for_person: int = 0
     stock_qty: int = field(default_factory=lambda: _env_int("STOCK_QTY", 999))
+
+    # 출고 소요일 (쿠팡 items.outboundShippingTimeDay)
+    outbound_shipping_time_day: int = field(
+        default_factory=lambda: _env_int("OUTBOUND_SHIPPING_TIME_DAY", 2))
 
     # 재시도
     retry_count: int = field(default_factory=lambda: _env_int("RETRY_COUNT", 3))
