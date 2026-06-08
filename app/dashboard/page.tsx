@@ -41,6 +41,12 @@ export default async function DashboardPage() {
             Prompt<span className="text-indigo-600">Site</span>
           </Link>
           <div className="flex items-center gap-2">
+            <Link
+              href="/dashboard/threads"
+              className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold transition hover:bg-slate-50"
+            >
+              🧵 Threads
+            </Link>
             <LogoutButton />
             <Link
               href="/project/new"

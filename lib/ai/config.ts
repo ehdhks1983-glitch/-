@@ -4,8 +4,8 @@
 
 export type Provider = "anthropic" | "google" | "openai";
 
-/** 파이프라인 작업 종류. analyze 체인은 clarify도 함께 사용한다. */
-export type TaskKind = "analyze" | "copy";
+/** 파이프라인 작업 종류. analyze 체인은 clarify도 함께 사용한다. threads = Threads 게시글 초안 생성. */
+export type TaskKind = "analyze" | "copy" | "threads";
 
 export interface ModelSpec {
   provider: Provider;
@@ -57,6 +57,12 @@ export const MODEL_CHAINS: Record<TaskKind, ModelSpec[]> = {
   analyze: [
     { provider: "anthropic", model: MODEL_IDS.claudeSecondary, maxTokens: 2048 },
     { provider: "google", model: MODEL_IDS.geminiSecondary, maxTokens: 2048 },
+    { provider: "openai", model: MODEL_IDS.openaiText, maxTokens: 2048 },
+  ],
+  // Threads 게시글 초안 = 자연스러운 사람 글. 품질·비용 절충: Sonnet → Gemini Pro → OpenAI
+  threads: [
+    { provider: "anthropic", model: MODEL_IDS.claudeSecondary, maxTokens: 2048 },
+    { provider: "google", model: MODEL_IDS.geminiPrimary, maxTokens: 2048 },
     { provider: "openai", model: MODEL_IDS.openaiText, maxTokens: 2048 },
   ],
 };

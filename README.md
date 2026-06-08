@@ -53,6 +53,51 @@ AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적
 3. **Project Settings → API** 에서 URL·anon 키를 복사해 `.env.local`(또는 Vercel)에 입력
 4. Auth → 이메일 가입을 사용하면 됩니다(기본). 확인 메일 설정은 Supabase Auth 설정에서 조정
 
+## Threads 자동발행 (공식 Meta API)
+
+`/dashboard/threads` — **내 Threads 계정에** 공식 API로 글을 예약/발행하는 기능. 모르는 사람을 자동 팔로우하거나 가짜 참여를 만들지 않습니다. **AI가 초안을 만들고, 사람이 검토해 발행**하는 구조이며, 계정당 보수적 일일 한도(기본 10, Meta 상한 250보다 낮음)를 둡니다.
+
+```
+연결  /api/threads/connect → Meta OAuth → /api/threads/callback (장기토큰 저장)
+초안  /api/threads/drafts   → AI 초안 N개 (저장 안 함, 검토용)
+큐    /api/threads/posts    → 초안 저장(draft) / 예약(scheduled)
+발행  /api/threads/cron     → 예약시각 도래분 공식 API로 발행 (스케줄러가 호출)
+```
+
+### 1) Meta 개발자 앱
+
+1. [developers.facebook.com](https://developers.facebook.com) → **Create App** → Threads use case 선택
+2. **Threads API** 설정에서 권한 `threads_basic`, `threads_content_publish` 추가
+3. **OAuth Redirect URI** 에 `https://내도메인/api/threads/callback` 을 정확히 등록
+4. 본인만 쓰면 **App Review 불필요** — 내 Threads 계정을 **테스터**로 추가하고 개발 모드로 사용. (다른 사용자에게 배포하려면 App Review 필요)
+
+### 2) 환경변수 (`.env.local` / Vercel)
+
+| 변수 | 필수 | 설명 |
+|---|---|---|
+| `THREADS_APP_ID` / `THREADS_APP_SECRET` | 연동 | Meta 앱 자격증명 |
+| `THREADS_REDIRECT_URI` | 연동 | 위 4)의 콜백 URL과 정확히 일치 |
+| `SUPABASE_SERVICE_ROLE_KEY` | 예약발행 | 크론이 토큰을 읽어 발행(서버 전용) |
+| `CRON_SECRET` | 예약발행 | `/api/threads/cron` 보호 키 |
+| `THREADS_DAILY_CAP` 등 | 선택 | 한도/길이 override (`lib/threads/config.ts`) |
+
+> 키가 없으면 연동은 비활성화되고, 앱과 초안 생성(목 모드)은 그대로 동작합니다.
+
+### 3) DB
+
+Supabase SQL Editor 에 **`database/threads.sql`** 전체를 실행하세요. (`threads_accounts` / `threads_posts` + RLS) 토큰은 RLS owner-only 로 보호되며 클라이언트로 내려가지 않습니다.
+
+### 4) 예약 발행 크론
+
+예약 글은 스케줄러가 `/api/threads/cron` 을 주기적으로 호출해야 발행됩니다(웹훅 아님).
+
+- **Vercel Cron**: `vercel.json` 에 5분 주기로 설정돼 있습니다. `CRON_SECRET` 을 환경변수에 넣으면 Vercel 이 `Authorization: Bearer` 로 자동 인증합니다. (주기 한도는 플랜에 따라 다름)
+- **외부 크론**(cron-job.org/GitHub Actions 등): `GET https://내도메인/api/threads/cron?secret=<CRON_SECRET>` 를 주기 호출.
+
+### ⚠️ 사용 원칙
+
+공식 API는 **방식**을 합법화할 뿐, 스팸까지 면제하지 않습니다. 정상적인 본인 콘텐츠를 합리적 주기로만 발행하세요(AI 글 24시간 도배 = 정책 위반). 이 기능은 본인/동의한 계정에만 발행하며, 자동 팔로우·가짜 참여 기능은 포함하지 않습니다.
+
 ## Vercel 배포
 
 Next.js는 Vercel에서 zero-config 입니다.
