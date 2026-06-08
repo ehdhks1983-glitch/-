@@ -1,5 +1,5 @@
 {
-  "version": "1.9.0",
+  "version": "1.9.1",
   "download_url": "https://github.com/ehdhks1983-glitch/-/releases",
-  "message": "v1.9.0: 새 탭 '✨ 사진 → 움짤' 추가! 사진 1장에 켄번스/줌/패닝 움직임을 입혀 영상처럼 움직이는 GIF·WebP를 만듭니다. 무료·오프라인."
+  "message": "v1.9.1: 영상 미리보기 '재생'이 멈춰 보이던 문제 수정(긴 영상도 부드럽게 재생) + 고DPI 화면 이미지 경고 제거(CTkImage 적용)."
 }

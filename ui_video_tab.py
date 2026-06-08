@@ -976,7 +976,6 @@ class VideoTab(ctk.CTkFrame):
                 size=(img.width, img.height),
             )
             self._preview_label.configure(image=self._preview_photo, text="")
-            img.close()
         except Exception:
             pass
 
@@ -1111,7 +1110,12 @@ class VideoTab(ctk.CTkFrame):
         )
 
     def _toggle_play(self):
-        if not self._video_info or not self._cached_frames:
+        if not self._video_info:
+            return
+        if not self._cached_frames:
+            self._status_label.configure(
+                text="⏳ 미리보기 준비 중이에요 — 잠시 후 다시 눌러주세요 (구간은 슬라이더로 바로 지정 가능)",
+                text_color="#f59e0b")
             return
         if self._preview_playing:
             self._stop_play()
@@ -1121,6 +1125,10 @@ class VideoTab(ctk.CTkFrame):
     def _start_play(self):
         self._preview_playing = True
         self._play_btn.configure(text="⏸ 정지")
+        # 현재 위치에서 가장 가까운 캐시 프레임부터 시작
+        cur = self._preview_current_time
+        self._play_idx = min(range(len(self._cached_frames)),
+                             key=lambda i: abs(self._cached_frames[i][0] - cur))
         self._play_next_frame()
 
     def _stop_play(self):
@@ -1134,26 +1142,24 @@ class VideoTab(ctk.CTkFrame):
             self._preview_after_id = None
 
     def _play_next_frame(self):
-        """재생 루프: 캐시 프레임을 순서대로 표시 (실제 FPS 기반)"""
+        """재생 루프: 캐시 프레임을 고정 ~12fps로 표시 (캐시가 듬성해도 항상 부드럽게, 끝나면 루프)"""
         if not self._preview_playing or not self._cached_frames:
             return
 
-        # 캐시 FPS 기반으로 다음 프레임 시간 계산
-        step = 1.0 / self._cache_fps
-        next_time = self._preview_current_time + step
+        n = len(self._cached_frames)
+        idx = getattr(self, "_play_idx", 0) % n
+        t = self._cached_frames[idx][0]
 
-        if next_time >= self._video_info.duration:
-            self._stop_play()
-            return
-
-        self._preview_current_time = next_time
-        self._preview_slider.set(next_time)
+        self._preview_current_time = t
+        try:
+            self._preview_slider.set(t)
+        except Exception:
+            pass
         self._update_preview_time_label()
-        self._show_cached_frame(next_time)
+        self._show_cached_frame(t)
 
-        # 실제 캐시 FPS 속도로 다음 프레임 (1/cache_fps 초 후)
-        delay_ms = int(1000 / self._cache_fps)
-        self._preview_after_id = self.after(delay_ms, self._play_next_frame)
+        self._play_idx = (idx + 1) % n  # 끝 → 처음 (루프)
+        self._preview_after_id = self.after(80, self._play_next_frame)
 
     def _mark_start(self):
         """현재 미리보기 시점을 시작으로 지정"""

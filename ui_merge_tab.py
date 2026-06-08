@@ -113,8 +113,7 @@ class MergeTab(ctk.CTkFrame):
             except Exception:
                 pass
             img.thumbnail((40, 40))
-            photo = ImageTk.PhotoImage(img)
-            img.close()
+            photo = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
             self._thumb_cache[path] = photo
             return photo
         except Exception:
@@ -132,8 +131,7 @@ class MergeTab(ctk.CTkFrame):
             except Exception:
                 pass
             img.thumbnail((60, 48))
-            photo = ImageTk.PhotoImage(img)
-            img.close()
+            photo = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
             self._mini_thumb_cache[path] = photo
             return photo
         except Exception:
@@ -778,10 +776,9 @@ class MergeTab(ctk.CTkFrame):
             # ✏️ 자막 미리보기 합성 (있을 때만)
             img = self._draw_subtitles_on_preview(img)
 
-            photo = ImageTk.PhotoImage(img)
+            photo = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
             self._preview_label.configure(image=photo, text="")
             self._preview_label._photo = photo  # GC 방지
-            img.close()
             self._frame_label.configure(text=f"{index+1}/{len(self._image_paths)}")
             self._preview_current_index = index  # 자막 갱신 시 재호출용
         except Exception:

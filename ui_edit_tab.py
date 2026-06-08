@@ -375,10 +375,9 @@ class EditTab(ctk.CTkFrame):
         try:
             img = self._frames[index].copy()
             img.thumbnail((500, 400), Image.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
+            photo = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
             self._preview_label.configure(image=photo, text="")
             self._preview_label._photo = photo
-            img.close()
             self._frame_label.configure(text=f"{index+1}/{len(self._frames)}")
         except Exception:
             pass
