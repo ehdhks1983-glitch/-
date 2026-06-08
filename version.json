@@ -1,5 +1,5 @@
 {
-  "version": "1.8.0",
+  "version": "1.8.1",
   "download_url": "https://github.com/ehdhks1983-glitch/-/releases",
-  "message": "v1.8.0: 화질 프리셋(최고화질/균형/빠른로딩) 추가. diff_mode·미세 디더·글로벌 팔레트로 화질↑, gifsicle 마무리·fps 상한으로 용량(로딩)↓. 블로그·웹은 WebP 추천."
+  "message": "v1.8.1: 큰 영상(4K·긴 영상)에서 미리보기 썸네일이 안 뜨던 문제 수정 — 첫 프레임을 즉시 표시하고, 프레임 캐시는 상한을 둬 안전하게 처리합니다."
 }

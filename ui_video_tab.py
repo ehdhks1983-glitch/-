@@ -799,7 +799,7 @@ class VideoTab(ctk.CTkFrame):
     # 🎬 영상 미리보기 (프레임 캐시 방식)
     # ════════════════════════════════════════
     def _extract_preview_cache(self):
-        """영상 로드 시 2fps로 전체 프레임을 한 번에 추출 → 메모리 캐시"""
+        """영상 로드 시: ① 첫 프레임을 빠르게 표시 → ② 스크럽/재생용 프레임 캐시(상한)"""
         if not self._video_path or not self._video_info:
             return
 
@@ -812,31 +812,29 @@ class VideoTab(ctk.CTkFrame):
             if not ff:
                 return
 
-            # 이전 캐시 정리
+            # 이전 캐시 정리 + 임시 폴더
             self._cleanup_cache()
-
-            # 임시 폴더 생성
             self._cache_temp_dir = _tf.mkdtemp(prefix="gifmaker_preview_")
 
-            # 미리보기 크기 결정
-            max_w = 640
+            # 미리보기 크기
             src_w = self._video_info.width
             src_h = self._video_info.height
-            scale_w = min(max_w, src_w)
-            scale_h = int(src_h * (scale_w / max(1, src_w)))
+            scale_w = min(640, src_w) if src_w else 640
+            scale_h = int(src_h * (scale_w / max(1, src_w))) if src_w else 360
+            scale_h = max(2, scale_h - (scale_h % 2))
 
-            # 캐시 FPS (영상 길이에 따라 조정)
-            duration = self._video_info.duration
-            if duration <= 10:
-                cache_fps = 4  # 짧은 영상: 4fps (더 촘촘)
-            elif duration <= 60:
-                cache_fps = 2  # 중간: 2fps
-            else:
-                cache_fps = 1  # 긴 영상: 1fps (메모리 절약)
+            # ── ① 첫 프레임 즉시 표시 (입력 앞 -ss = 전체 디코드 없이 빠른 시크 → 4K/대용량도 1~2초) ──
+            self._quick_preview_frame(ff, scale_w, scale_h)
 
+            # ── ② 스크럽/재생용 프레임 캐시 (총 프레임 수 상한 → 대용량/긴 영상 보호) ──
+            duration = max(0.1, self._video_info.duration)
+            cache_fps = 4 if duration <= 10 else 2 if duration <= 60 else 1
+            max_frames = 150
+            if duration * cache_fps > max_frames:
+                cache_fps = max(0.2, max_frames / duration)  # 긴 영상은 더 듬성하게
             self._cache_fps = cache_fps
-            output_pattern = os.path.join(self._cache_temp_dir, "f_%05d.jpg")
 
+            output_pattern = os.path.join(self._cache_temp_dir, "f_%05d.jpg")
             cmd = [
                 ff, "-y",
                 "-i", self._video_path,
@@ -844,15 +842,17 @@ class VideoTab(ctk.CTkFrame):
                 "-q:v", "5",  # 중간 품질 (빠른 추출)
                 output_pattern,
             ]
-
-            kwargs = {"stdout": _sp.PIPE, "stderr": _sp.PIPE, "timeout": 120}
+            kwargs = {"stdout": _sp.PIPE, "stderr": _sp.PIPE, "timeout": 180}
             if sys.platform == "win32":
                 si = _sp.STARTUPINFO()
                 si.dwFlags |= _sp.STARTF_USESHOWWINDOW
                 si.wShowWindow = _sp.SW_HIDE
                 kwargs["startupinfo"] = si
 
-            _sp.run(cmd, **kwargs)
+            try:
+                _sp.run(cmd, **kwargs)
+            except Exception:
+                pass  # 시간 초과/실패해도 ①의 첫 프레임은 이미 표시됨
 
             # 추출된 프레임 로드
             frame_files = sorted(Path(self._cache_temp_dir).glob("f_*.jpg"))
@@ -870,21 +870,59 @@ class VideoTab(ctk.CTkFrame):
 
             total = len(self._cached_frames)
             if total > 0:
-                # 첫 프레임 표시
-                self.after(0, lambda: self._show_cached_frame(0.0))
+                self.after(0, lambda: self._show_cached_frame(self._preview_current_time))
                 self.after(0, lambda t=total: self._status_label.configure(
                     text=f"✅ 영상 로드 완료 ({t}프레임 캐시됨)",
                     text_color="#22c55e",
                 ))
             else:
+                # 캐시는 비어도 첫 프레임은 떠 있음
                 self.after(0, lambda: self._status_label.configure(
-                    text="⚠ 미리보기 프레임 추출 실패", text_color="#f59e0b",
+                    text="✅ 영상 로드 완료", text_color="#22c55e",
                 ))
 
         except Exception:
             self.after(0, lambda: self._status_label.configure(
                 text="✅ 영상 로드 완료", text_color="#22c55e",
             ))
+
+    def _quick_preview_frame(self, ff, scale_w, scale_h):
+        """첫 프레임 1장만 빠르게 추출해 즉시 표시 (대용량·4K·긴 영상 대응)"""
+        try:
+            import subprocess as _sp
+            from PIL import Image as _PImg
+
+            one = os.path.join(self._cache_temp_dir, "first.jpg")
+            seek = "1" if (self._video_info.duration or 0) > 2 else "0"
+            cmd = [
+                ff, "-y",
+                "-ss", seek,           # 입력 앞 시크 = 전체 디코드 없이 즉시
+                "-i", self._video_path,
+                "-frames:v", "1",
+                "-vf", f"scale={scale_w}:{scale_h}",
+                "-q:v", "4",
+                one,
+            ]
+            kwargs = {"stdout": _sp.PIPE, "stderr": _sp.PIPE, "timeout": 30}
+            if sys.platform == "win32":
+                si = _sp.STARTUPINFO()
+                si.dwFlags |= _sp.STARTF_USESHOWWINDOW
+                si.wShowWindow = _sp.SW_HIDE
+                kwargs["startupinfo"] = si
+
+            _sp.run(cmd, **kwargs)
+            if os.path.exists(one):
+                img = _PImg.open(one)
+                img.load()
+                fc = img.copy()
+                img.close()
+                self.after(0, lambda im=fc: self._set_preview_image(im))
+                self.after(0, lambda: self._status_label.configure(
+                    text="✅ 미리보기 표시 (프레임 캐시 준비 중...)",
+                    text_color="#22c55e",
+                ))
+        except Exception:
+            pass
 
     def _cleanup_cache(self):
         """캐시 프레임 메모리 + 임시 폴더 정리"""
