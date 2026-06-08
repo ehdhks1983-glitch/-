@@ -226,6 +226,25 @@ def test_wing_response():
 
 
 # ═══════════════════════════════════════════════════════════════
+# 5) 기본 반품지/출고지 선택 (B6)
+# ═══════════════════════════════════════════════════════════════
+def test_center_selection():
+    section("5) 기본 반품지/출고지 선택 (B6: usable 우선)")
+    from coupang_metadata_collector import CoupangMetadataCollector as MC
+
+    pick = MC._pick_default([{"code": "C0", "usable": False},
+                             {"code": "C1", "usable": True}])
+    check("unusable 건너뛰고 usable 선택", pick and pick["code"] == "C1",
+          f"picked {pick}")
+    check("전부 usable면 첫번째",
+          MC._pick_default([{"code": "A", "usable": True},
+                            {"code": "B", "usable": True}])["code"] == "A")
+    check("usable 키 없으면 첫번째 (하위호환)",
+          MC._pick_default([{"code": "X"}, {"code": "Y"}])["code"] == "X")
+    check("빈 리스트 → None", MC._pick_default([]) is None)
+
+
+# ═══════════════════════════════════════════════════════════════
 # 러너
 # ═══════════════════════════════════════════════════════════════
 def main():
@@ -237,6 +256,7 @@ def main():
     pricing = test_pricing()
     test_payload(product, pricing)
     test_wing_response()
+    test_center_selection()
 
     total = len(_RESULTS)
     passed = sum(_RESULTS)

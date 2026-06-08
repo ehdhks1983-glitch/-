@@ -83,7 +83,7 @@ class CoupangMetadataCollector:
         returns = self.client.get_return_centers()
         result["return_centers"] = self._normalize_centers(returns, "return")
         if result["return_centers"]:
-            result["default_return_center"] = result["return_centers"][0]
+            result["default_return_center"] = self._pick_default(result["return_centers"])
             log.info(f"[META] ✅ 반품지 {len(result['return_centers'])}개 "
                      f"(기본: {result['default_return_center']['code']})")
         else:
@@ -94,7 +94,7 @@ class CoupangMetadataCollector:
         outbounds = self.client.get_outbound_centers()
         result["outbound_centers"] = self._normalize_centers(outbounds, "outbound")
         if result["outbound_centers"]:
-            result["default_outbound_center"] = result["outbound_centers"][0]
+            result["default_outbound_center"] = self._pick_default(result["outbound_centers"])
             log.info(f"[META] ✅ 출고지 {len(result['outbound_centers'])}개 "
                      f"(기본: {result['default_outbound_center']['code']})")
         else:
@@ -135,6 +135,16 @@ class CoupangMetadataCollector:
                 "raw": c,  # 원본 보존
             })
         return normalized
+
+    @staticmethod
+    def _pick_default(centers: List[Dict]) -> Optional[Dict]:
+        """기본 반품지/출고지 선택: 사용가능(usable) 우선, 없으면 첫 번째."""
+        if not centers:
+            return None
+        for c in centers:
+            if c.get("usable", True):
+                return c
+        return centers[0]
 
     # ═══════════════════════════════════════════════════════════
     # 캐시 입출력
