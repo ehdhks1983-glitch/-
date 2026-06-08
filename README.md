@@ -94,6 +94,8 @@ Supabase SQL Editor 에 **`database/threads.sql`** 전체를 실행하세요. (`
 - **Vercel Cron**: `vercel.json` 에 5분 주기로 설정돼 있습니다. `CRON_SECRET` 을 환경변수에 넣으면 Vercel 이 `Authorization: Bearer` 로 자동 인증합니다. (주기 한도는 플랜에 따라 다름)
 - **외부 크론**(cron-job.org/GitHub Actions 등): `GET https://내도메인/api/threads/cron?secret=<CRON_SECRET>` 를 주기 호출.
 
+> 크론은 예약 발행과 함께 **만료 임박(기본 7일 이내) 장기 토큰을 자동 갱신**합니다. 따라서 크론이 주기적으로 돌면 60일마다 재연결할 필요가 없습니다. (갱신 실패한 계정은 재연결 필요)
+
 ### ⚠️ 사용 원칙
 
 공식 API는 **방식**을 합법화할 뿐, 스팸까지 면제하지 않습니다. 정상적인 본인 콘텐츠를 합리적 주기로만 발행하세요(AI 글 24시간 도배 = 정책 위반). 이 기능은 본인/동의한 계정에만 발행하며, 자동 팔로우·가짜 참여 기능은 포함하지 않습니다.

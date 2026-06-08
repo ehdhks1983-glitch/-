@@ -15,6 +15,7 @@ import {
   countPublishedSince,
 } from "@/lib/threads/db";
 import { publishOne } from "@/lib/threads/publish";
+import { refreshExpiringTokens } from "@/lib/threads/refresh";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -43,6 +44,14 @@ async function run(req: Request): Promise<NextResponse> {
   const admin = createSupabaseAdmin();
   if (!admin) {
     return NextResponse.json({ error: "서버 관리자 키가 없어요(SUPABASE_SERVICE_ROLE_KEY)." }, { status: 503 });
+  }
+
+  // 0) 만료 임박 토큰 갱신 스윕. 실패해도 발행은 계속 진행한다.
+  let refresh = { checked: 0, refreshed: 0, failed: 0 };
+  try {
+    refresh = await refreshExpiringTokens(admin);
+  } catch (e) {
+    console.error("[api/threads/cron] 토큰 갱신 스윕 실패:", e);
   }
 
   const nowIso = new Date().toISOString();
@@ -101,7 +110,15 @@ async function run(req: Request): Promise<NextResponse> {
       }
     }
 
-    return NextResponse.json({ ok: true, processed: due.length, published, failed, skipped });
+    return NextResponse.json({
+      ok: true,
+      processed: due.length,
+      published,
+      failed,
+      skipped,
+      tokensRefreshed: refresh.refreshed,
+      tokensRefreshFailed: refresh.failed,
+    });
   } catch (err) {
     console.error("[api/threads/cron] 실패:", err);
     return NextResponse.json({ error: "크론 처리 중 문제가 발생했어요." }, { status: 500 });

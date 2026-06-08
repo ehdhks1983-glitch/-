@@ -300,3 +300,48 @@ export async function countPublishedLast24h(
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   return countPublishedSince(supabase, accountId, since);
 }
+
+/** 토큰 갱신이 필요한 계정(토큰 보유, 아직 만료 전, 만료 임박). admin 전용. */
+export interface RefreshableAccount {
+  id: string;
+  threads_user_id: string;
+  access_token: string;
+  token_expires_at: string | null;
+}
+
+/**
+ * 만료가 임박(now < token_expires_at <= within)한 계정 목록.
+ * 이미 만료된 토큰(갱신 불가)과 만료시각 미상(null)은 제외한다.
+ */
+export async function getAccountsNeedingRefresh(
+  admin: SupabaseClient,
+  withinIso: string,
+  nowIso: string,
+): Promise<RefreshableAccount[]> {
+  const { data, error } = await admin
+    .from("threads_accounts")
+    .select("id, threads_user_id, access_token, token_expires_at")
+    .not("token_expires_at", "is", null)
+    .gt("token_expires_at", nowIso)
+    .lte("token_expires_at", withinIso);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as RefreshableAccount[];
+}
+
+/** 계정 토큰/만료시각 갱신. admin 전용. */
+export async function updateAccountToken(
+  admin: SupabaseClient,
+  accountId: string,
+  accessToken: string,
+  expiresAt: string | null,
+): Promise<void> {
+  const { error } = await admin
+    .from("threads_accounts")
+    .update({
+      access_token: accessToken,
+      token_expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", accountId);
+  if (error) throw new Error(error.message);
+}
