@@ -1,0 +1,31 @@
+# 환경변수 (민감정보 — 절대 커밋 금지)
+.env
+
+# 생성물
+snapshots/
+cache/
+logs/
+*.json
+!*.example.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 빌드
+build/
+dist/
+*.spec
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
