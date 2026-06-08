@@ -40,12 +40,13 @@ print("  ✅ 검출기 자가 테스트: 의도적 충돌 정상 검출")
 probe.destroy()
 
 from ui_merge_tab import MergeTab
+from ui_motion_tab import MotionTab
 from ui_video_tab import VideoTab
 from ui_record_tab import RecordTab
 from ui_edit_tab import EditTab
 
 total = 0
-for name, cls in [("MergeTab", MergeTab), ("VideoTab", VideoTab),
+for name, cls in [("MergeTab", MergeTab), ("MotionTab", MotionTab), ("VideoTab", VideoTab),
                   ("RecordTab", RecordTab), ("EditTab", EditTab)]:
     frame = ctk.CTkFrame(root)
     inst = cls(frame)
