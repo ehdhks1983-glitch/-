@@ -98,13 +98,19 @@ export default function ThreadsManager(props: Props) {
     setDrafts((d) => d.filter((x) => x.id !== id));
   }
 
-  /** 초안 저장(draft) 또는 예약(scheduled). 성공 시 큐에 반영하고 초안에서 제거. */
+  /** 초안 저장(draft) 또는 예약(scheduled). img 가 있으면 IMAGE 글로 저장. 성공 시 큐 반영 + 초안 제거. */
   async function savePost(
     draftId: string,
     text: string,
+    img: string,
     opts: { schedule?: string | null },
   ): Promise<ThreadsPostRow | null> {
     const body: Record<string, unknown> = { text };
+    const imageUrl = img.trim();
+    if (imageUrl) {
+      body.mediaType = "IMAGE";
+      body.imageUrl = imageUrl;
+    }
     if (opts.schedule) {
       body.status = "scheduled";
       body.scheduledAt = opts.schedule;
@@ -124,25 +130,25 @@ export default function ThreadsManager(props: Props) {
     return r.data.post;
   }
 
-  async function onSaveDraft(draftId: string, text: string) {
+  async function onSaveDraft(draftId: string, text: string, img: string) {
     setBusy(true);
-    const post = await savePost(draftId, text, {});
+    const post = await savePost(draftId, text, img, {});
     setBusy(false);
     if (post) flash("초안으로 저장했어요.");
   }
 
-  async function onSchedule(draftId: string, text: string, localValue: string) {
+  async function onSchedule(draftId: string, text: string, img: string, localValue: string) {
     const iso = toIso(localValue);
     if (!iso) return fail("예약 시각을 현재 이후로 정해 주세요.");
     setBusy(true);
-    const post = await savePost(draftId, text, { schedule: iso });
+    const post = await savePost(draftId, text, img, { schedule: iso });
     setBusy(false);
     if (post) flash("예약했어요. 예약 시각에 자동 발행됩니다(크론 필요).");
   }
 
-  async function onPublishDraftNow(draftId: string, text: string) {
+  async function onPublishDraftNow(draftId: string, text: string, img: string) {
     setBusy(true);
-    const post = await savePost(draftId, text, {});
+    const post = await savePost(draftId, text, img, {});
     if (post) await publishNow(post.id);
     setBusy(false);
   }
@@ -296,9 +302,9 @@ export default function ThreadsManager(props: Props) {
                 maxText={maxText}
                 busy={busy}
                 canPublish={Boolean(account) && !capReached}
-                onSaveDraft={(text) => onSaveDraft(d.id, text)}
-                onSchedule={(text, val) => onSchedule(d.id, text, val)}
-                onPublishNow={(text) => onPublishDraftNow(d.id, text)}
+                onSaveDraft={(text, img) => onSaveDraft(d.id, text, img)}
+                onSchedule={(text, img, val) => onSchedule(d.id, text, img, val)}
+                onPublishNow={(text, img) => onPublishDraftNow(d.id, text, img)}
                 onDiscard={() => removeDraft(d.id)}
               />
             ))}
@@ -349,14 +355,17 @@ function DraftCard(props: {
   maxText: number;
   busy: boolean;
   canPublish: boolean;
-  onSaveDraft: (text: string) => void;
-  onSchedule: (text: string, localValue: string) => void;
-  onPublishNow: (text: string) => void;
+  onSaveDraft: (text: string, img: string) => void;
+  onSchedule: (text: string, img: string, localValue: string) => void;
+  onPublishNow: (text: string, img: string) => void;
   onDiscard: () => void;
 }) {
   const [text, setText] = useState(props.initialText);
+  const [img, setImg] = useState("");
   const [when, setWhen] = useState("");
   const over = text.length > props.maxText;
+  const imgBad = img.trim() !== "" && !/^https?:\/\//i.test(img.trim());
+  const disabled = props.busy || over || imgBad || !text.trim();
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -374,10 +383,22 @@ function DraftCard(props: {
           버리기
         </button>
       </div>
+      <input
+        type="url"
+        value={img}
+        onChange={(e) => setImg(e.target.value)}
+        placeholder="이미지 URL (선택) — 공개 https 주소"
+        className={`mt-2 w-full rounded-lg border bg-white px-3 py-1.5 text-sm outline-none ${
+          imgBad ? "border-red-300 focus:border-red-400" : "border-slate-200 focus:border-slate-400"
+        }`}
+      />
+      {imgBad && (
+        <p className="mt-1 text-xs text-red-500">http(s):// 로 시작하는 공개 이미지 주소를 입력해 주세요.</p>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
-          onClick={() => props.onSaveDraft(text)}
-          disabled={props.busy || over || !text.trim()}
+          onClick={() => props.onSaveDraft(text, img)}
+          disabled={disabled}
           className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium transition hover:bg-slate-100 disabled:opacity-50"
         >
           초안 저장
@@ -389,15 +410,15 @@ function DraftCard(props: {
           className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
         />
         <button
-          onClick={() => props.onSchedule(text, when)}
-          disabled={props.busy || over || !text.trim() || !when}
+          onClick={() => props.onSchedule(text, img, when)}
+          disabled={disabled || !when}
           className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium transition hover:bg-slate-100 disabled:opacity-50"
         >
           예약
         </button>
         <button
-          onClick={() => props.onPublishNow(text)}
-          disabled={props.busy || over || !text.trim() || !props.canPublish}
+          onClick={() => props.onPublishNow(text, img)}
+          disabled={disabled || !props.canPublish}
           title={!props.canPublish ? "계정 연결 및 일일 한도 확인" : ""}
           className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
         >
@@ -429,6 +450,7 @@ function QueueItem(props: {
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-slate-400">
+          {post.media_type === "IMAGE" && "🖼 이미지 · "}
           {post.status === "scheduled" && post.scheduled_at && `예약: ${fmtDate(post.scheduled_at)}`}
           {post.status === "published" && post.published_at && `발행: ${fmtDate(post.published_at)}`}
           {post.status === "failed" && post.error && `오류: ${post.error}`}

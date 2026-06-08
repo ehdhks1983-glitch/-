@@ -6,13 +6,19 @@
 
 import { NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/db/supabase-server";
-import { isThreadsConfigured, THREADS_DAILY_CAP, THREADS_CRON_BATCH } from "@/lib/threads/config";
+import {
+  isThreadsConfigured,
+  THREADS_DAILY_CAP,
+  THREADS_CRON_BATCH,
+  THREADS_PUBLISHING_STALE_MIN,
+} from "@/lib/threads/config";
 import {
   getDuePosts,
   claimForPublish,
   markPublished,
   markFailed,
   countPublishedSince,
+  requeueStalePublishing,
 } from "@/lib/threads/db";
 import { publishOne } from "@/lib/threads/publish";
 import { refreshExpiringTokens } from "@/lib/threads/refresh";
@@ -52,6 +58,15 @@ async function run(req: Request): Promise<NextResponse> {
     refresh = await refreshExpiringTokens(admin);
   } catch (e) {
     console.error("[api/threads/cron] 토큰 갱신 스윕 실패:", e);
+  }
+
+  // 0b) 중단되어 'publishing' 으로 멈춘 글 정리(실패 처리). 다음 실행에서 사용자가 재시도.
+  let staleFailed = 0;
+  try {
+    const staleBefore = new Date(Date.now() - THREADS_PUBLISHING_STALE_MIN * 60 * 1000).toISOString();
+    staleFailed = await requeueStalePublishing(admin, staleBefore);
+  } catch (e) {
+    console.error("[api/threads/cron] 중단 글 정리 실패:", e);
   }
 
   const nowIso = new Date().toISOString();
@@ -116,6 +131,7 @@ async function run(req: Request): Promise<NextResponse> {
       published,
       failed,
       skipped,
+      staleFailed,
       tokensRefreshed: refresh.refreshed,
       tokensRefreshFailed: refresh.failed,
     });

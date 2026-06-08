@@ -35,6 +35,13 @@ export const THREADS_REFRESH_BEFORE_DAYS = numEnv("THREADS_REFRESH_BEFORE_DAYS",
 /** 크론 1회 실행당 처리할 최대 게시물 수(과부하 방지). */
 export const THREADS_CRON_BATCH = numEnv("THREADS_CRON_BATCH", 20);
 
+/** 이미지/영상 컨테이너 처리 완료 대기 폴링: 최대 시도 / 간격(ms). 총 대기 ≈ attempts*interval. */
+export const THREADS_MEDIA_POLL_ATTEMPTS = numEnv("THREADS_MEDIA_POLL_ATTEMPTS", 10);
+export const THREADS_MEDIA_POLL_INTERVAL_MS = numEnv("THREADS_MEDIA_POLL_INTERVAL_MS", 3000);
+
+/** 'publishing' 으로 N분 이상 멈춘(중단된) 글은 실패 처리(크론 정리). */
+export const THREADS_PUBLISHING_STALE_MIN = numEnv("THREADS_PUBLISHING_STALE_MIN", 10);
+
 /** appId/secret/redirectUri 가 모두 있으면 true. 없으면 연동 비활성(앱은 정상 동작). */
 export function isThreadsConfigured(): boolean {
   return Boolean(THREADS.appId && THREADS.appSecret && THREADS.redirectUri);

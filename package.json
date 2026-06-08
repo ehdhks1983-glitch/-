@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:ai": "tsx scripts/test-ai.ts",
-    "test:threads": "tsx scripts/threads-test/01-client.ts && tsx scripts/threads-test/02-validate.ts && tsx scripts/threads-test/03-drafts.ts && tsx scripts/threads-test/04-publish.ts && tsx scripts/threads-test/05-db.ts && tsx scripts/threads-test/06-refresh.ts",
+    "test:threads": "tsx scripts/threads-test/01-client.ts && tsx scripts/threads-test/02-validate.ts && tsx scripts/threads-test/03-drafts.ts && tsx scripts/threads-test/04-publish.ts && tsx scripts/threads-test/05-db.ts && tsx scripts/threads-test/06-refresh.ts && tsx scripts/threads-test/07-image.ts",
     "demo": "tsx scripts/build-demo.tsx"
   },
   "dependencies": {

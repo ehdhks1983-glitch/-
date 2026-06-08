@@ -124,6 +124,19 @@ export async function getPublishingUsage(userId: string, token: string): Promise
   return { used: num(row.quota_usage), total: num(config.quota_total) || 250 };
 }
 
+export interface ContainerStatus {
+  /** EXPIRED | ERROR | FINISHED | IN_PROGRESS | PUBLISHED */
+  status: string;
+  error: string;
+}
+
+/** 미디어 컨테이너 처리 상태 조회(이미지/영상 발행 전 FINISHED 대기용). */
+export async function getContainerStatus(containerId: string, token: string): Promise<ContainerStatus> {
+  const p = new URLSearchParams({ fields: "status,error_message", access_token: token });
+  const json = await readJson(await fetch(`${THREADS.graphHost}/${enc(containerId)}?${p}`));
+  return { status: str(json.status), error: str(json.error_message) };
+}
+
 // ───────────────────────── 내부 유틸 ─────────────────────────
 
 type Json = Record<string, unknown>;

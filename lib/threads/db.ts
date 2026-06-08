@@ -345,3 +345,22 @@ export async function updateAccountToken(
     .eq("id", accountId);
   if (error) throw new Error(error.message);
 }
+
+/** 'publishing' 으로 olderThanIso 이전부터 멈춘(중단된) 글을 실패 처리. 반환=처리 건수. admin 전용. */
+export async function requeueStalePublishing(
+  admin: SupabaseClient,
+  olderThanIso: string,
+): Promise<number> {
+  const { data, error } = await admin
+    .from("threads_posts")
+    .update({
+      status: "failed",
+      error: "발행 처리가 중단되었습니다. 다시 시도해 주세요.",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("status", "publishing")
+    .lt("updated_at", olderThanIso)
+    .select("id");
+  if (error) throw new Error(error.message);
+  return data ? data.length : 0;
+}
