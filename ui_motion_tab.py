@@ -28,6 +28,7 @@ class MotionTab(ctk.CTkFrame):
         self._anim_idx = 0
         self._anim_playing = False
         self._anim_after = None
+        self._anim_target = (480, 600)
 
         self.grid_columnconfigure(0, weight=3)
         self.grid_columnconfigure(1, weight=2)
@@ -181,18 +182,23 @@ class MotionTab(ctk.CTkFrame):
         self._status_label.configure(
             text="✅ 사진 로드됨 — 효과 고르고 '움짤 만들기'", text_color="#22c55e")
 
+    def _display_size(self, iw, ih):
+        """라벨 영역에 비율 유지로 맞추는 크기 — 정적/애니 미리보기 크기를 통일"""
+        lw = self._preview_label.winfo_width()
+        lh = self._preview_label.winfo_height()
+        if lw < 50 or lh < 50:
+            lw, lh = 900, 560
+        scale = min((lw - 8) / max(1, iw), (lh - 8) / max(1, ih))
+        return max(2, int(iw * scale)), max(2, int(ih * scale))
+
     def _show_preview(self):
         if not self._preview_img:
             return
         try:
-            im = self._preview_img.copy()
-            w = self._preview_label.winfo_width()
-            h = self._preview_label.winfo_height()
-            if w < 50 or h < 50:
-                w, h = 480, 320
-            im.thumbnail((w - 4, h - 4), Image.LANCZOS)
-            self._preview_photo = ctk.CTkImage(light_image=im, dark_image=im,
-                                               size=(im.width, im.height))
+            iw, ih = self._preview_img.size
+            tw, th = self._display_size(iw, ih)
+            im = self._preview_img.resize((tw, th), Image.LANCZOS)
+            self._preview_photo = ctk.CTkImage(light_image=im, dark_image=im, size=(tw, th))
             self._preview_label.configure(image=self._preview_photo, text="")
         except Exception:
             pass
@@ -209,6 +215,8 @@ class MotionTab(ctk.CTkFrame):
         if self._anim_playing:
             self._stop_anim()
         else:
+            iw, ih = self._preview_img.size
+            self._anim_target = self._display_size(iw, ih)  # 정적 미리보기와 같은 크기로
             self._anim_btn.configure(text="⏳ 미리보기 생성 중...", state="disabled")
             threading.Thread(target=self._gen_anim, daemon=True).start()
 
@@ -223,33 +231,24 @@ class MotionTab(ctk.CTkFrame):
                 dur = 4.0
             fps = int(self._fps_var.get())
             zoom = self._zoom_var.get() / 100.0
-            n = max(2, min(150, int(round(dur * fps))))
-            src = self._preview_img
-            W, H = src.size
-            ph = 320
-            pw = max(2, round(W / max(1, H) * ph)); pw -= pw % 2
-            frames = generate_motion_frames(src, eff, n, zoom, pw, ph)
-            self.after(0, lambda fr=frames, f=fps: self._begin_anim(fr, f))
+            n = max(2, min(120, int(round(dur * fps))))  # 미리보기는 최대 120프레임
+            tw, th = self._anim_target
+            tw = max(2, tw - tw % 2); th = max(2, th - th % 2)
+            frames = generate_motion_frames(self._preview_img, eff, n, zoom, tw, th)
+            delay = max(30, int(dur * 1000 / max(1, n)))  # 실제 길이에 맞춰 루프 재생
+            self.after(0, lambda fr=frames, d=delay: self._begin_anim(fr, d))
         except Exception as e:
             self.after(0, lambda e=e: (
                 self._anim_btn.configure(text="▶ 효과 미리보기", state="normal"),
                 self._status_label.configure(text=f"미리보기 실패: {e}", text_color="#ef4444"),
             ))
 
-    def _begin_anim(self, frames, fps):
-        lw = self._preview_label.winfo_width()
-        lh = self._preview_label.winfo_height()
-        if lw < 50 or lh < 50:
-            lw, lh = 480, 320
-        imgs = []
-        for f in frames:
-            im = f.copy()
-            im.thumbnail((lw - 4, lh - 4), Image.LANCZOS)
-            imgs.append(ctk.CTkImage(light_image=im, dark_image=im, size=(im.width, im.height)))
-        self._anim_imgs = imgs
+    def _begin_anim(self, frames, delay):
+        # 프레임이 이미 정적 미리보기와 같은 크기 → 그대로 표시 (크기/위치 안 바뀜)
+        self._anim_imgs = [ctk.CTkImage(light_image=f, dark_image=f, size=f.size) for f in frames]
         self._anim_idx = 0
         self._anim_playing = True
-        self._anim_delay = max(40, int(1000 / max(1, fps)))
+        self._anim_delay = delay
         self._anim_btn.configure(text="⏸ 미리보기 정지", state="normal")
         self._status_label.configure(text="▶ 미리보기 재생 중 (실제 결과와 동일한 움직임)", text_color="#22c55e")
         self._play_anim()
