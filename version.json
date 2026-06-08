@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
+  "version": "1.8.0",
   "download_url": "https://github.com/ehdhks1983-glitch/-/releases",
-  "message": "v1.7.0: GIF 메이커를 움짤 전용으로 깔끔하게 정리했습니다(이미지합치기·영상→GIF/WebP·녹화·편집). 영상 기획/쇼츠 제작은 별도 '영상 제작기'로 분리되었습니다."
+  "message": "v1.8.0: 화질 프리셋(최고화질/균형/빠른로딩) 추가. diff_mode·미세 디더·글로벌 팔레트로 화질↑, gifsicle 마무리·fps 상한으로 용량(로딩)↓. 블로그·웹은 WebP 추천."
 }

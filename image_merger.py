@@ -375,27 +375,35 @@ def _save_gif(
     durations: List[int],
     job: MergeJob,
 ):
-    """GIF 저장 (256색 최적화, 1비트 투명 지원)"""
+    """GIF 저장 — 전 프레임 공용(글로벌) 팔레트로 프레임 간 색 깜빡임 제거 + 1비트 투명 지원"""
     is_transparent = job.bg_color.lower() in ("transparent", "none", "")
+    TRANSP_IDX = 255  # 투명 예약 인덱스
+
+    # ── 글로벌 팔레트: 모든 프레임을 합친 몽타주에서 '한 번만' 양자화 ──
+    #    (기존엔 프레임마다 따로 양자화 → 팔레트가 매 프레임 달라져 색이 깜빡였음)
+    fw, fh = frames[0].size
+    max_rows = max(1, min(len(frames), 4000 // max(1, fh) + 1))  # 메모리 보호: 표본 제한
+    step = max(1, len(frames) // max_rows)
+    sample = frames[::step] or frames[:1]
+    montage = Image.new("RGB", (fw, fh * len(sample)), (0, 0, 0))
+    for i, f in enumerate(sample):
+        montage.paste(f.convert("RGB"), (0, fh * i))
+    pal_colors = 255 if is_transparent else 256  # 투명이면 255색 + 예약 1
+    master = montage.quantize(colors=pal_colors, method=Image.Quantize.MEDIANCUT)
+    montage.close()
 
     converted = []
     for f in frames:
+        rgb = f.convert("RGB")
+        # 공용 팔레트에 매핑 + 오차확산 디더 → 깜빡임 없이 매끈
+        q = rgb.quantize(palette=master, dither=Image.Dither.FLOYDSTEINBERG)
         if is_transparent:
-            # RGBA → 투명 배경 GIF: alpha=0 픽셀을 투명색으로 지정
-            rgb = f.convert("RGB")
-            alpha = f.split()[3]
-            quantized = rgb.quantize(colors=255, method=Image.Quantize.MEDIANCUT, dither=1)
-            # 투명 인덱스를 마지막 팔레트 엔트리로 설정
+            alpha = f.convert("RGBA").split()[3]
             mask = alpha.point(lambda a: 255 if a < 128 else 0)
-            quantized.paste(255, mask=mask)
-            quantized.info['transparency'] = 255
-            converted.append(quantized)
-            rgb.close()
-        else:
-            rgb = f.convert("RGB")
-            quantized = rgb.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=1)
-            converted.append(quantized)
-            rgb.close()
+            q.paste(TRANSP_IDX, mask=mask)
+            q.info['transparency'] = TRANSP_IDX
+        converted.append(q)
+        rgb.close()
 
     save_kwargs = {
         "save_all": True,
@@ -405,11 +413,12 @@ def _save_gif(
         "optimize": True,
     }
     if is_transparent:
-        save_kwargs["transparency"] = 255
+        save_kwargs["transparency"] = TRANSP_IDX
         save_kwargs["disposal"] = 2  # 이전 프레임 클리어 (투명 유지)
 
     converted[0].save(job.output_path, **save_kwargs)
 
+    master.close()
     for c in converted:
         c.close()
 

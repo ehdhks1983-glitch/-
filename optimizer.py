@@ -54,6 +54,47 @@ def gifsicle_available() -> bool:
     return find_gifsicle() is not None
 
 
+def polish_gif(
+    path: str,
+    lossy: int = 30,
+    on_progress: Optional[Callable[[str], None]] = None,
+) -> bool:
+    """
+    목표 용량과 무관하게 gifsicle로 가볍게 무손실급 압축(--lossy + -O3).
+    결과가 더 작을 때만 제자리(in-place) 교체. gifsicle 없거나 실패하면 원본 유지(False).
+    화질 프리셋의 '균형/빠른로딩'에서 로딩 단축용으로 항상 호출됨.
+    """
+    gs = find_gifsicle()
+    if not gs or lossy <= 0:
+        return False
+
+    out = Path(tempfile.mktemp(suffix='.gif'))
+    cmd = [gs, f"--lossy={lossy}", "--optimize=3", "--no-warnings", "-o", str(out), path]
+    try:
+        kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "timeout": 180}
+        if sys.platform == "win32":
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = subprocess.SW_HIDE
+            kwargs["startupinfo"] = si
+
+        subprocess.run(cmd, **kwargs)
+
+        if (out.exists() and out.stat().st_size > 0
+                and out.stat().st_size < Path(path).stat().st_size):
+            shutil.move(str(out), path)
+            if on_progress:
+                on_progress(f"gifsicle lossy={lossy} → {Path(path).stat().st_size // 1024}KB")
+            return True
+        out.unlink(missing_ok=True)
+    except Exception:
+        try:
+            out.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return False
+
+
 # ─── gifsicle lossy 최적화 ───
 def _optimize_gif_gifsicle(
     input_path: str,

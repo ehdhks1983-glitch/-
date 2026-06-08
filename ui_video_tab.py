@@ -297,6 +297,21 @@ class VideoTab(ctk.CTkFrame):
                 command=self._on_settings_change,
             ).grid(row=0, column=i, padx=8)
 
+        # 🎚️ 화질 프리셋 — 품질·용량을 한 번에 (GIF에 적용)
+        self._qmode_var = ctk.StringVar(value=settings.get("video_quality_mode") or "🔵 균형")
+        ctk.CTkSegmentedButton(
+            fmt_frame,
+            values=["🟢 최고화질", "🔵 균형", "🟡 빠른로딩"],
+            variable=self._qmode_var,
+            font=ctk.CTkFont(size=11),
+            command=self._on_settings_change,
+        ).grid(row=1, column=0, columnspan=3, padx=4, pady=(8, 2), sticky="ew")
+        ctk.CTkLabel(
+            fmt_frame,
+            text="💡 블로그·웹은 WebP 추천 — 같은 화질에 용량 30~50%↓ (로딩 빠름)",
+            font=ctk.CTkFont(size=10), text_color="gray55",
+        ).grid(row=2, column=0, columnspan=3, padx=4, sticky="w")
+
         # ── FPS ──
         ctk.CTkLabel(right, text="🎞️ FPS",
                      font=ctk.CTkFont(size=13, weight="bold")).grid(row=3, column=0, **pad)
@@ -1633,6 +1648,15 @@ class VideoTab(ctk.CTkFrame):
         job.fps = self._get_fps()
         job.width = self._get_width()
         job.quality = self._quality_var.get()
+        _qm = self._qmode_var.get()
+        job.quality_mode = "best" if "최고" in _qm else "fast" if "빠른" in _qm else "balanced"
+        if job.quality_mode == "fast":
+            job.fps = min(job.fps, 15)        # 빠른로딩: fps 상한 → 용량↓
+            job.gif_lossy = 60
+        elif job.quality_mode == "balanced":
+            job.gif_lossy = 30
+        else:
+            job.gif_lossy = 0
         job.speed = self._get_speed()
         job.loop = self._get_loop()
         job.subtitles = list(self._subtitles_data)  # 자막 복사
@@ -1673,6 +1697,7 @@ class VideoTab(ctk.CTkFrame):
 
         settings.set("video_output_format", self._format_var.get())
         settings.set("video_quality", self._quality_var.get())
+        settings.set("video_quality_mode", self._qmode_var.get())
         settings.save()
 
         # ── ✂️ 분할 모드 체크 ──
@@ -1784,6 +1809,8 @@ class VideoTab(ctk.CTkFrame):
             job.width = base_job.width
             job.height = base_job.height
             job.quality = base_job.quality
+            job.quality_mode = base_job.quality_mode
+            job.gif_lossy = base_job.gif_lossy
             job.speed = base_job.speed
             job.loop = base_job.loop
             job.output_height = base_job.output_height

@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 # ─── 앱 기본 정보 ───
 APP_NAME = "GIF Maker Pro"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 WINDOW_SIZE = "1440x900"
 MIN_WINDOW_SIZE = (1200, 780)
 
@@ -50,6 +50,7 @@ DEFAULTS: Dict[str, Any] = {
     "video_fps": 15,
     "video_resolution": "original",
     "video_quality": 80,
+    "video_quality_mode": "🔵 균형",
     "video_speed": 1.0,
     "video_loop": 0,
 

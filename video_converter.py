@@ -79,6 +79,8 @@ class ConvertJob:
         self.subtitles: list = []          # List[Subtitle]
         self.output_height: int = 480      # 출력 높이 (자막 크기 정규화용)
         self.shorts_vertical: bool = False  # MP4 쇼츠(세로 9:16) 모드
+        self.quality_mode: str = "balanced"  # best / balanced / fast (화질 프리셋)
+        self.gif_lossy: int = 0              # gifsicle 마무리 압축 강도 (0=off, 로딩 단축)
 
 
 def probe_video(path: str) -> Optional[VideoInfo]:
@@ -397,6 +399,16 @@ def _convert_to_gif(
 
     base_filter = ",".join(filter_parts)
 
+    # ── 화질 프리셋 → 팔레트/디더 결정 ──
+    qm = getattr(job, "quality_mode", "balanced")
+    if qm == "best":
+        _stats, _dither = "full", "sierra2_4a"           # 오차확산: 그라데이션 매끈(최고화질)
+    else:
+        _stats, _dither = "diff", "bayer:bayer_scale=3"  # 움직임 영역 우선 + 미세 디더
+    _palettegen = f"palettegen=max_colors=256:stats_mode={_stats}"
+    # diff_mode=rectangle: 변하는 영역만 디더 → 정지 배경 떨림(crawl) 제거 + 압축↑
+    _paletteuse = f"paletteuse=dither={_dither}:diff_mode=rectangle"
+
     # ── 구간 옵션 분리 ──
     # -ss는 입력 앞에, -t는 출력 쪽에 별도로 적용 (두 입력 사이에 놓으면 무시됨!)
     ss_args = []
@@ -414,7 +426,7 @@ def _convert_to_gif(
         ss_args +
         ["-i", job.input_path] +
         t_args +
-        ["-vf", f"{base_filter},palettegen=max_colors=256:stats_mode=diff",
+        ["-vf", f"{base_filter},{_palettegen}",
          "-y", palette_path]
     )
 
@@ -448,7 +460,7 @@ def _convert_to_gif(
             ["-i", job.input_path,
              "-i", palette_path] +
             t_args +  # ← 두 입력 뒤, 출력 옵션 앞에 배치 (출력에 적용됨)
-            ["-lavfi", f"{base_filter} [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=5",
+            ["-lavfi", f"{base_filter} [x]; [x][1:v] {_paletteuse}",
              "-loop", str(job.loop),
              "-y", job.output_path]
         )
@@ -460,6 +472,15 @@ def _convert_to_gif(
             os.unlink(palette_path)
         except Exception:
             pass
+
+        # ── 가벼운 무손실급 용량 최적화(gifsicle) — 로딩 단축 ──
+        if result and getattr(job, "gif_lossy", 0) > 0 and not job.cancelled:
+            try:
+                from optimizer import polish_gif
+                progress(96, "용량 최적화 중...")
+                polish_gif(result, job.gif_lossy)
+            except Exception:
+                pass
 
         return result
 
