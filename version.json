@@ -1,5 +1,5 @@
 {
-  "version": "1.9.1",
+  "version": "1.9.2",
   "download_url": "https://github.com/ehdhks1983-glitch/-/releases",
-  "message": "v1.9.1: 영상 미리보기 '재생'이 멈춰 보이던 문제 수정(긴 영상도 부드럽게 재생) + 고DPI 화면 이미지 경고 제거(CTkImage 적용)."
+  "message": "v1.9.2: 사진→움짤이 뚝뚝 끊기던 문제 개선(서브픽셀 리샘플로 매 프레임 부드럽게) + '▶ 효과 미리보기'로 만들기 전에 움직임 확인 + 30fps 옵션 추가."
 }

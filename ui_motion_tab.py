@@ -12,7 +12,7 @@ from PIL import Image
 
 from config import settings
 from utils import generate_output_name
-from photo_motion import MotionJob, create_motion, EFFECTS
+from photo_motion import MotionJob, create_motion, generate_motion_frames, EFFECTS
 
 
 class MotionTab(ctk.CTkFrame):
@@ -24,6 +24,10 @@ class MotionTab(ctk.CTkFrame):
         self._preview_photo = None
         self._working = False
         self._job = None
+        self._anim_imgs = []
+        self._anim_idx = 0
+        self._anim_playing = False
+        self._anim_after = None
 
         self.grid_columnconfigure(0, weight=3)
         self.grid_columnconfigure(1, weight=2)
@@ -56,13 +60,20 @@ class MotionTab(ctk.CTkFrame):
             wrap, text="📷 사진을 열면 미리보기가 표시됩니다",
             font=ctk.CTkFont(size=13), text_color="gray55")
         self._preview_label.grid(row=0, column=0, sticky="nsew")
-        self._preview_label.bind("<Configure>", lambda e: self._show_preview())
+        self._preview_label.bind("<Configure>", lambda e: self._on_preview_resize())
+
+        self._anim_btn = ctk.CTkButton(
+            left, text="▶ 효과 미리보기", height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#374151", hover_color="#4b5563",
+            command=self._toggle_anim)
+        self._anim_btn.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 4))
 
         self._progress = ctk.CTkProgressBar(left)
         self._progress.set(0)
-        self._progress.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 2))
+        self._progress.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 2))
         self._status_label = ctk.CTkLabel(left, text="", font=ctk.CTkFont(size=12))
-        self._status_label.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 10))
+        self._status_label.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 10))
 
     # ──────────────────────────── 우: 설정 ────────────────────────────
     def _build_right(self):
@@ -87,7 +98,7 @@ class MotionTab(ctk.CTkFrame):
         ctk.CTkLabel(right, text="🎬 FPS (부드러움)",
                      font=ctk.CTkFont(size=13, weight="bold")).grid(row=r, column=0, **pad); r += 1
         self._fps_var = ctk.StringVar(value=str(settings.get("motion_fps") or 20))
-        ctk.CTkOptionMenu(right, values=["12", "15", "20", "24"], variable=self._fps_var,
+        ctk.CTkOptionMenu(right, values=["12", "15", "20", "24", "30"], variable=self._fps_var,
                           font=ctk.CTkFont(size=12)).grid(row=r, column=0, **pad); r += 1
 
         ctk.CTkLabel(right, text="🔍 확대량",
@@ -155,6 +166,7 @@ class MotionTab(ctk.CTkFrame):
         self._load_image(path)
 
     def _load_image(self, path):
+        self._stop_anim()
         try:
             img = Image.open(path)
             img.load()
@@ -186,6 +198,85 @@ class MotionTab(ctk.CTkFrame):
             pass
 
     # ──────────────────────────── 변환 ────────────────────────────
+    def _on_preview_resize(self):
+        if not self._anim_playing:
+            self._show_preview()
+
+    def _toggle_anim(self):
+        if not self._image_path or not self._preview_img:
+            self._status_label.configure(text="⚠ 먼저 사진을 선택하세요", text_color="#f59e0b")
+            return
+        if self._anim_playing:
+            self._stop_anim()
+        else:
+            self._anim_btn.configure(text="⏳ 미리보기 생성 중...", state="disabled")
+            threading.Thread(target=self._gen_anim, daemon=True).start()
+
+    def _gen_anim(self):
+        """현재 설정으로 저해상도 모션 프레임 생성 (스레드) → 메인에서 재생"""
+        try:
+            label = self._effect_var.get()
+            eff = next((k for k, v in EFFECTS.items() if v == label), "ken_burns")
+            try:
+                dur = float(self._dur_var.get().replace("초", "").strip())
+            except ValueError:
+                dur = 4.0
+            fps = int(self._fps_var.get())
+            zoom = self._zoom_var.get() / 100.0
+            n = max(2, min(150, int(round(dur * fps))))
+            src = self._preview_img
+            W, H = src.size
+            ph = 320
+            pw = max(2, round(W / max(1, H) * ph)); pw -= pw % 2
+            frames = generate_motion_frames(src, eff, n, zoom, pw, ph)
+            self.after(0, lambda fr=frames, f=fps: self._begin_anim(fr, f))
+        except Exception as e:
+            self.after(0, lambda e=e: (
+                self._anim_btn.configure(text="▶ 효과 미리보기", state="normal"),
+                self._status_label.configure(text=f"미리보기 실패: {e}", text_color="#ef4444"),
+            ))
+
+    def _begin_anim(self, frames, fps):
+        lw = self._preview_label.winfo_width()
+        lh = self._preview_label.winfo_height()
+        if lw < 50 or lh < 50:
+            lw, lh = 480, 320
+        imgs = []
+        for f in frames:
+            im = f.copy()
+            im.thumbnail((lw - 4, lh - 4), Image.LANCZOS)
+            imgs.append(ctk.CTkImage(light_image=im, dark_image=im, size=(im.width, im.height)))
+        self._anim_imgs = imgs
+        self._anim_idx = 0
+        self._anim_playing = True
+        self._anim_delay = max(40, int(1000 / max(1, fps)))
+        self._anim_btn.configure(text="⏸ 미리보기 정지", state="normal")
+        self._status_label.configure(text="▶ 미리보기 재생 중 (실제 결과와 동일한 움직임)", text_color="#22c55e")
+        self._play_anim()
+
+    def _play_anim(self):
+        if not self._anim_playing or not self._anim_imgs:
+            return
+        i = self._anim_idx % len(self._anim_imgs)
+        self._preview_label.configure(image=self._anim_imgs[i], text="")
+        self._anim_idx = (i + 1) % len(self._anim_imgs)
+        self._anim_after = self.after(self._anim_delay, self._play_anim)
+
+    def _stop_anim(self):
+        self._anim_playing = False
+        if self._anim_after:
+            try:
+                self.after_cancel(self._anim_after)
+            except Exception:
+                pass
+            self._anim_after = None
+        self._anim_imgs = []
+        try:
+            self._anim_btn.configure(text="▶ 효과 미리보기", state="normal")
+        except Exception:
+            pass
+        self._show_preview()
+
     def _build_job(self) -> MotionJob:
         j = MotionJob()
         j.input_path = self._image_path
@@ -218,6 +309,7 @@ class MotionTab(ctk.CTkFrame):
         if not self._image_path or not Path(self._image_path).exists():
             self._status_label.configure(text="⚠ 먼저 사진을 선택하세요", text_color="#f59e0b")
             return
+        self._stop_anim()
 
         settings.set("motion_effect", self._effect_var.get())
         settings.set("motion_duration", self._dur_var.get())

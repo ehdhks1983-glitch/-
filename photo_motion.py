@@ -101,8 +101,9 @@ def generate_motion_frames(
         cy = cfy * H
         x = min(max(cx - crop_w / 2.0, 0.0), W - crop_w)
         y = min(max(cy - crop_h / 2.0, 0.0), H - crop_h)
-        box = (round(x), round(y), round(x + crop_w), round(y + crop_h))
-        frame = src.crop(box).resize((out_w, out_h), Image.LANCZOS)
+        # 서브픽셀 정밀도로 리샘플 (정수 크롭 시 생기는 '뚝뚝' 끊김 제거)
+        box = (x, y, x + crop_w, y + crop_h)
+        frame = src.resize((out_w, out_h), Image.LANCZOS, box=box)
         frames.append(frame)
 
         if on_progress and (i % 4 == 0):
