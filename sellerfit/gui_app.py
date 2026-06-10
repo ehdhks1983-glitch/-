@@ -23,6 +23,7 @@ except ImportError:
     raise ImportError("customtkinter 미설치. pip install customtkinter")
 
 from pipeline_service import SellerFitService, PreparedProduct
+from pricing import default_value_for_mode
 from config import pricing_cfg
 
 
@@ -117,7 +118,7 @@ class SellerFitGUI(ctk.CTk):
         self.mode_menu = ctk.CTkOptionMenu(
             price_row, values=[m[1] for m in PRICING_MODES],
             variable=self.mode_var, width=200, height=36,
-            command=lambda _: self._recalc_if_ready(),
+            command=lambda _: self._on_mode_changed(),
         )
         self.mode_menu.pack(side="left")
 
@@ -235,7 +236,14 @@ class SellerFitGUI(ctk.CTk):
         try:
             return float(self.value_entry.get().strip())
         except ValueError:
-            return pricing_cfg.multiplier
+            return default_value_for_mode(self._current_mode_key())
+
+    def _on_mode_changed(self):
+        """모드 전환 시 입력값을 해당 모드 기본값으로 교체 (F-01).
+        배수 2.5가 남은 채 min_margin으로 바뀌면 마진 2.5%로 계산되는 사고 방지."""
+        self.value_entry.delete(0, "end")
+        self.value_entry.insert(0, str(default_value_for_mode(self._current_mode_key())))
+        self._recalc_if_ready()
 
     # ═══════════════════════════════════════════════════════════
     # 조회

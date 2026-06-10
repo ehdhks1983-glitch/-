@@ -127,6 +127,21 @@ class PriceCalculator:
         return ((value + unit - 1) // unit) * unit
 
 
+def default_value_for_mode(mode: str, cfg=None) -> float:
+    """
+    가격 모드별 입력 기본값 (GUI 입력칸용).
+    모드 전환 시 이전 모드 수치가 남으면(예: 배수 2.5 → min_margin 2.5%)
+    원가 수준 판매가가 나오므로, 모드에 맞는 기본값으로 교체할 때 사용.
+    """
+    c = cfg or pricing_cfg
+    m = (mode or "").lower()
+    if m in ("add_margin", "margin_rate", "percent"):
+        return c.margin_rate_percent
+    if m in ("min_margin", "minimum_margin"):
+        return c.min_margin_percent
+    return c.multiplier
+
+
 # ═══════════════════════════════════════════════════════════════
 # 테스트
 # ═══════════════════════════════════════════════════════════════

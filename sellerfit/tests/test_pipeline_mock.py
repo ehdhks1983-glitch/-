@@ -279,6 +279,18 @@ def test_recompute(product):
 
 
 # ═══════════════════════════════════════════════════════════════
+# 7) 가격모드 기본값 (F-01)
+# ═══════════════════════════════════════════════════════════════
+def test_mode_defaults():
+    section("7) 가격모드 기본값 (F-01: 모드 전환 footgun 방지)")
+    from pricing import default_value_for_mode
+    check("multiply → 2.5 (배수)", default_value_for_mode("multiply") == 2.5)
+    check("add_margin → 50.0 (%)", default_value_for_mode("add_margin") == 50.0)
+    check("min_margin → 30.0 (%)", default_value_for_mode("min_margin") == 30.0)
+    check("알 수 없는 모드 → multiplier 폴백", default_value_for_mode("???") == 2.5)
+
+
+# ═══════════════════════════════════════════════════════════════
 # 러너
 # ═══════════════════════════════════════════════════════════════
 def main():
@@ -292,6 +304,7 @@ def main():
     test_wing_response()
     test_center_selection()
     test_recompute(product)
+    test_mode_defaults()
 
     total = len(_RESULTS)
     passed = sum(_RESULTS)
