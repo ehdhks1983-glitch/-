@@ -486,7 +486,7 @@ export default function ProjectPage() {
             </div>
 
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <TemplateRenderer templateId={template} copy={copy} lang={biz?.language ?? "ko"} />
+              <TemplateRenderer templateId={template} copy={copy} lang={biz?.language ?? "ko"} biz={biz} />
             </div>
           </div>
         )}

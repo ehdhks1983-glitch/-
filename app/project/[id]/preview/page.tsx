@@ -65,7 +65,12 @@ export default function PreviewPage() {
       >
         ← 편집으로
       </Link>
-      <TemplateRenderer templateId={data.template} copy={data.copy} lang={data.biz?.language ?? "ko"} />
+      <TemplateRenderer
+        templateId={data.template}
+        copy={data.copy}
+        lang={data.biz?.language ?? "ko"}
+        biz={data.biz}
+      />
     </div>
   );
 }

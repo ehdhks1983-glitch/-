@@ -35,24 +35,26 @@ export default async function PublicPage({ params }: Params) {
   const project = await selectPublishedBySlug(supabase, slug);
   if (!project) notFound();
 
-  return (
-    <div>
-      <TemplateRenderer
-        templateId={project.template}
-        copy={project.copy}
-        lang={project.biz_info?.language ?? "ko"}
-      />
+  // 이메일 신청 섹션 — 템플릿 CTA의 #signup 앵커 대상. 템플릿 푸터 직전(slot)에 들어간다.
+  const signupSlot = (
+    <section id="signup" className="bg-slate-900 px-6 py-20 text-center">
+      <h2 className="text-2xl font-bold text-white sm:text-3xl">
+        {project.copy?.cta?.headline || "지금 신청하세요"}
+      </h2>
+      <p className="mt-3 text-slate-300">이메일을 남기면 가장 먼저 알려드릴게요.</p>
+      <div className="mt-8">
+        <LeadForm projectId={project.id} buttonLabel={project.copy?.cta?.button || "신청하기"} />
+      </div>
+    </section>
+  );
 
-      {/* 이메일 신청 섹션 — 템플릿 CTA의 #signup 앵커 대상 */}
-      <section id="signup" className="bg-slate-900 px-6 py-20 text-center">
-        <h2 className="text-2xl font-bold text-white sm:text-3xl">
-          {project.copy?.cta?.headline || "지금 신청하세요"}
-        </h2>
-        <p className="mt-3 text-slate-300">이메일을 남기면 가장 먼저 알려드릴게요.</p>
-        <div className="mt-8">
-          <LeadForm projectId={project.id} buttonLabel={project.copy?.cta?.button || "신청하기"} />
-        </div>
-      </section>
-    </div>
+  return (
+    <TemplateRenderer
+      templateId={project.template}
+      copy={project.copy}
+      lang={project.biz_info?.language ?? "ko"}
+      biz={project.biz_info}
+      signupSlot={signupSlot}
+    />
   );
 }

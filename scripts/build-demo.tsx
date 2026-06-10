@@ -7,7 +7,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { writeFileSync } from "node:fs";
 import React from "react";
 import TemplateRenderer from "../components/templates/TemplateRenderer";
-import type { SectionCopy, TemplateId } from "../lib/ai/types";
+import type { BizInfo, SectionCopy, TemplateId } from "../lib/ai/types";
+
+const biz: BizInfo = {
+  service_name: "핏코치",
+  target_customer: "운동을 시작하려는 30대 직장인",
+  main_problem: "퇴근 후 시간이 없고 혼자서는 작심삼일로 끝난다",
+  solution: "주 3회 1:1 화상 PT 코칭과 식단 피드백으로 꾸준함을 만든다",
+  cta: "무료 상담 신청하기",
+  tone: "친근하고 신뢰감 있는",
+  language: "ko",
+  missing: [],
+};
 
 const copy: SectionCopy = {
   hero: {
@@ -39,6 +50,24 @@ const copy: SectionCopy = {
   cta: { headline: "이번엔 진짜 바꿔봅시다", button: "무료 상담 신청하기" },
 };
 
+// 공개 페이지의 신청 섹션과 동일한 모양(데모라 동작은 안 함)
+const signupSlot = (
+  <section id="signup" className="bg-slate-900 px-6 py-20 text-center">
+    <h2 className="text-2xl font-bold text-white sm:text-3xl">{copy.cta.headline}</h2>
+    <p className="mt-3 text-slate-300">이메일을 남기면 가장 먼저 알려드릴게요.</p>
+    <div className="mx-auto mt-8 flex max-w-md flex-col gap-3 sm:flex-row">
+      <input
+        placeholder="이메일 주소"
+        className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none"
+        readOnly
+      />
+      <span className="cursor-default rounded-lg bg-indigo-600 px-6 py-3 font-semibold text-white">
+        {copy.cta.button}
+      </span>
+    </div>
+  </section>
+);
+
 const templates: { id: TemplateId; name: string }[] = [
   { id: "saas-launch", name: "SaaS Launch" },
   { id: "waitlist", name: "Waitlist" },
@@ -48,7 +77,7 @@ const templates: { id: TemplateId; name: string }[] = [
 const rendered = templates.map((t) => ({
   ...t,
   html: renderToStaticMarkup(
-    React.createElement(TemplateRenderer, { templateId: t.id, copy, lang: "ko" }),
+    React.createElement(TemplateRenderer, { templateId: t.id, copy, lang: "ko" as const, biz, signupSlot }),
   ),
 }));
 
@@ -72,12 +101,18 @@ const doc = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PromptSite 템플릿 미리보기</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<style>
+@keyframes fade-up { from { opacity:0; transform:translateY(14px) } to { opacity:1; transform:none } }
+.animate-fade-up { animation: fade-up .6s ease-out both }
+.animate-fade-up-delay-1 { animation: fade-up .6s .12s ease-out both }
+.animate-fade-up-delay-2 { animation: fade-up .6s .24s ease-out both }
+</style>
 </head>
 <body class="bg-slate-100">
 <div class="sticky top-0 z-50 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur">
   <span class="font-bold">Prompt<span class="text-indigo-600">Site</span> 미리보기</span>
   <div class="flex gap-2">${tabs}</div>
-  <span class="ml-auto text-xs text-slate-400">목 데이터로 렌더된 정적 미리보기 · 버튼은 데모라 동작 안 함</span>
+  <span class="ml-auto text-xs text-slate-400">목 데이터(핏코치) 렌더 · 업종 테마 자동 적용 · 버튼은 데모라 동작 안 함</span>
 </div>
 ${panels}
 <script>
@@ -90,6 +125,7 @@ ${panels}
       const on = x.getAttribute('data-tab') === id;
       x.className = 'tab px-4 py-1.5 rounded-full text-sm font-medium ' + (on ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600 border border-slate-200');
     });
+    window.scrollTo(0, 0);
   }));
 </script>
 </body>
