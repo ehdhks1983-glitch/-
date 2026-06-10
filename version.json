@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.99",
-  "build": "1.5.3",
-  "notes": "Quality #2: HERO hook strengthening - ban vapid abstract openers, force concrete benefit/situation + validator backstop"
+  "version": "v21.8.24.100",
+  "build": "1.5.4",
+  "notes": "Quality #3: copy concreteness - detect vibe-only info-less subs/cards, force number/situation/comparison"
 }
