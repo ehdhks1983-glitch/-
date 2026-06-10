@@ -1,0 +1,75 @@
+{
+  "manifest_version": 3,
+  "name": "AI 상세페이지 디렉터 v21.8.24.96",
+  "version": "1.5.0",
+  "description": "v21.8.24.96: ① FAQ '당연한 질문'(고리 손잡이인가요?/접히나요?/색상 있나요?) 금지 — 실제 구매 직전 불안(내구성/관리/휴대성/배송교환) 해소형으로, 자동검증에도 당연질문 감지 추가. ② 쿠팡 크롤링 오염 수정 — 상품 갤러리/상세 컨테이너 우선 수집 후 '함께 본 상품/추천/광고/베스트'를 클래스+영역 제목 텍스트로 배제(다른 제품 섞임 방지), 동적 갤러리 lazy-load 대기, 403/차단 시 막다른 끝 대신 수동 진행 안내. v95(상품명/플랫폼 정리)·v94 유지.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.11st.co.kr/*",
+    "https://*.auction.co.kr/*",
+    "https://*.coupang.com/*",
+    "https://*.domeggook.com/*",
+    "https://domeggook.com/*",
+    "https://*.gmarket.co.kr/*",
+    "https://*.naver.com/*",
+    "https://*.ssg.com/*",
+    "https://*.wadiz.kr/*",
+    "https://chat.openai.com/*",
+    "https://chatgpt.com/*",
+    "https://*.oaiusercontent.com/*",
+    "https://*.coupangcdn.com/*",
+    "https://*.pstatic.net/*",
+    "https://*.akamaized.net/*",
+    "https://*.1688.com/*",
+    "https://*.taobao.com/*",
+    "https://*.tmall.com/*",
+    "https://*.aliexpress.com/*",
+    "https://*.aliexpress.kr/*",
+    "https://*.alibaba.com/*",
+    "https://*.vvic.com/*",
+    "https://*.amazon.co.jp/*",
+    "https://*.rakuten.co.jp/*",
+    "https://*.alicdn.com/*",
+    "https://link.coupang.com/*",
+    "https://shopping.naver.com/*",
+    "https://smartstore.naver.com/*",
+    "https://www.11st.co.kr/*",
+    "https://www.auction.co.kr/*",
+    "https://www.coupang.com/*",
+    "https://www.gmarket.co.kr/*",
+    "https://www.ssg.com/*",
+    "https://www.wadiz.kr/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "AI 상세페이지 디렉터"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "product_analyzer.js",
+        "prompt_short_dynamic.js",
+        "gif_encoder.js",
+        "zip_store.js",
+        "content.js",
+        "template_store.js",
+        "fix_panel.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

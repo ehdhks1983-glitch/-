@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
-  "download_url": "https://github.com/ehdhks1983-glitch/-/releases",
-  "message": "최신 버전입니다."
+  "version": "v21.8.24.96",
+  "build": "1.5.0",
+  "notes": "FAQ obvious-question fix + Coupang crawl contamination/403/graceful"
 }
