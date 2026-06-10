@@ -310,6 +310,34 @@ def test_friendly_errors():
 
 
 # ═══════════════════════════════════════════════════════════════
+# 9) 카테고리 캐시 안전화 (F-04)
+# ═══════════════════════════════════════════════════════════════
+def test_category_cache():
+    section("9) 카테고리 캐시 (F-04: 히트 무쓰기 + 원자적 저장)")
+    import json as _json
+    from category_mapper import CategoryMapper, MAPPING_CACHE
+
+    m = CategoryMapper()
+    key = m._make_cache_key("가상캐시테스트상품")
+    m._cache["mappings"][key] = {
+        "display_category_code": 11111, "category_name": "테스트", "confidence": "high",
+    }
+
+    before = MAPPING_CACHE.stat().st_mtime_ns if MAPPING_CACHE.exists() else None
+    r = m.get_category("가상캐시테스트상품")
+    check("캐시 히트 (API 호출 없음)",
+          r["source"] == "cache" and r["display_category_code"] == 11111, str(r)[:80])
+    after = MAPPING_CACHE.stat().st_mtime_ns if MAPPING_CACHE.exists() else None
+    check("히트 시 디스크 무쓰기", before == after, f"mtime {before} → {after}")
+
+    m._save_cache()
+    valid = MAPPING_CACHE.exists() and \
+        "mappings" in _json.loads(MAPPING_CACHE.read_text(encoding="utf-8"))
+    check("저장 후 파일 존재 + 유효 JSON", valid)
+    check("임시파일(.tmp) 잔존 없음", not MAPPING_CACHE.with_suffix(".tmp").exists())
+
+
+# ═══════════════════════════════════════════════════════════════
 # 러너
 # ═══════════════════════════════════════════════════════════════
 def main():
@@ -325,6 +353,7 @@ def main():
     test_recompute(product)
     test_mode_defaults()
     test_friendly_errors()
+    test_category_cache()
 
     total = len(_RESULTS)
     passed = sum(_RESULTS)

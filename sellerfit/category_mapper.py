@@ -12,6 +12,7 @@ category_mapper.py - 도매꾹 → 쿠팡 카테고리 매핑
 """
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -46,10 +47,13 @@ class CategoryMapper:
     def _save_cache(self):
         try:
             MAPPING_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            MAPPING_CACHE.write_text(
+            # 원자적 저장: 임시파일에 쓰고 교체 — 중단돼도 기존 캐시 안 깨짐 (F-04)
+            tmp = MAPPING_CACHE.with_suffix(".tmp")
+            tmp.write_text(
                 json.dumps(self._cache, ensure_ascii=False, indent=2),
                 encoding="utf-8"
             )
+            os.replace(tmp, MAPPING_CACHE)
         except Exception as e:
             log.warning(f"[CAT] 캐시 저장 실패: {e}")
 
@@ -88,9 +92,10 @@ class CategoryMapper:
         # 캐시 조회
         if use_cache and cache_key in self._cache["mappings"]:
             cached = self._cache["mappings"][cache_key]
+            # 히트 통계는 메모리만 갱신 — 매 히트 디스크 전체 재기록 방지 (F-04).
+            # 다음 신규 매핑/저장 시 함께 기록됨 (대량등록 시 수백 회 쓰기 절약)
             self._cache["stats"]["cache_hits"] += 1
             log.info(f"[CAT] 캐시 히트: {product_name[:30]} → {cached['display_category_code']}")
-            self._save_cache()
             return {**cached, "source": "cache"}
 
         # API 호출
