@@ -135,8 +135,11 @@
 3) 겹치지 않게 배정: 각 섹션에 강점 목록에서 '서로 다른' 포인트를 하나씩. ★한 섹션 = 한 포인트, 같은 포인트 두 섹션 금지.
 4) ★의미 중복 금지(매우 중요): 두 섹션이 '거의 같은 말'이면(예: 둘 다 "보관해두고 꺼내 쓰세요") 무조건 다른 포인트로 다시 배정하라. 표현만 바꾼 같은 메시지도 금지.
 5) 헤드라인 중복 금지: 비슷한 헤드라인이 2개 이상 나올 것 같으면 포인트를 다시 배정하라.
+6) ★한 특징 쏠림 금지(매우 중요): 부차 특징 하나(걸이·고리·가방에 걸기·색상·디자인 등)나 같은 소재(예: '가방')가 '3개 섹션 이상'에 반복되면 실패다.
+   부차 특징은 '최대 1개 섹션'만. 우산이라면 '강풍에 안 뒤집힘·원터치 자동개폐·이중 방풍 창살' 같은 주된 효과가 반드시 섹션을 차지해야 한다.
+   → 배정을 끝낸 뒤, 같은 단어(가방·걸이·고리 등)가 3섹션 이상 등장하지 않는지 세어보고, 넘으면 다른 강점으로 다시 배정하라.
 → 각 섹션의 '· 배정 포인트:'에 그 섹션이 맡은 포인트를 적고, 카피는 그 포인트만 다룬다. 다른 포인트로 새지 마라.
-→ 자가점검: 섹션들을 모아 읽었을 때 '제품이 뭘 해주는지'가 보이는가? '챙기세요/보관하세요'만 반복되면 실패 — 효과 섹션을 넣어 다시 짜라.`;
+→ 자가점검: 섹션들을 모아 읽었을 때 '제품이 뭘 해주는지(주된 효과)'가 보이는가? '챙기세요/보관하세요/걸어두세요'만 반복되면 실패 — 효과 섹션을 넣어 다시 짜라.`;
 
   // v21.8.24.93: '모든 섹션이 카드 3개'라 이미지가 획일화되던 문제 → 섹션 유형별로 카피 구조 자체를 다르게 강제.
   const COPY_SECTION_STRUCTURE_RULES = `────────────────────
@@ -188,7 +191,7 @@
       return { num: m ? parseInt(m[1], 10) : 0, role: ((m && m[2]) || '').trim(), point, main, sub, cards };
     });
   }
-  function validateCopyPlanV92(copyPlan){
+  function validateCopyPlanV92(copyPlan, productName){
     const secs = listPlanSectionsV92(copyPlan);
     const violations = [];
     if(secs.length < 2) return { ok: true, sections: secs.length, violations, note: '섹션 2개 미만 — 검증 생략' };
@@ -238,6 +241,32 @@
     const card3 = secs.filter(s => s.cards.length >= 3).length;
     if(secs.length >= 5 && card3 >= secs.length - 1)
       violations.push(`거의 모든 섹션(${card3}/${secs.length})이 카드 3개 구조 — 이미지가 똑같아짐. PROBLEM은 공감 문장, SOLUTION은 스텝, HERO는 포인트 2개 등 유형별로 구조를 다르게`);
+    // 6) v21.8.24.98: 한 특징/소재에 쏠림 감지 — 같은 핵심 단어가 섹션 과반에 반복되면
+    //    '주된 효과(핵심 기능)'를 놓치고 부차 특징(걸이·가방·색상 등) 하나에 쏠린 전형적 실패다(우산인데 방풍·자동개폐 0섹션).
+    //    제품명에 들어간 단어(=그 제품의 정체성)는 쏠림 대상에서 제외한다.
+    if(secs.length >= 4){
+      // 한국어 토큰은 조사가 붙어('가방에/가방이나/가방') 같은 단어가 다른 토큰이 된다 → 앞 2음절 어간으로 묶는다.
+      const STOP = /^(그리고|하지만|그래서|그런데|이제|오늘|매일|하루|이틀|순간|상황|장면|생각|마음|느낌|기분|사용|모습|정도|이런|저런|그런|이렇|저렇|당신|우리|이거|저거|그거|여기|저기|거기|바로|진짜|정말|아주|매우|항상|가끔|모두|전부|살짝|조금|한번|다시|먼저|이미|아직|계속|보기|때문|준비|시작|하나|위해|동안|만큼|보다|처럼|그냥|언제|어디|무엇|어떻|그날|그때)$/;
+      const nameToks = String(productName || '').match(/[가-힣]{2,}/g) || [];
+      const inName = (k) => nameToks.some(nt => nt.includes(k) || k.includes(nt));
+      const sectionSets = secs.map(s => {
+        const text = [s.main, s.sub, s.point, ...s.cards.flatMap(c => [c.head, c.desc])].join(' ');
+        const keys = new Set();
+        (text.match(/[가-힣]{2,}/g) || []).forEach(tok => {
+          const k = tok.slice(0, 2);          // 앞 2음절 어간(조사 차이 흡수)
+          if(STOP.test(k) || inName(k)) return;
+          keys.add(k);
+        });
+        return keys;
+      });
+      const freq = {};
+      sectionSets.forEach(set => set.forEach(k => { freq[k] = (freq[k] || 0) + 1; }));
+      let top = '', topN = 0;
+      Object.keys(freq).forEach(k => { if(freq[k] > topN){ topN = freq[k]; top = k; } });
+      const threshold = Math.max(3, Math.ceil(secs.length * 0.6));
+      if(top && topN >= threshold)
+        violations.push(`'${top}~'가 ${topN}/${secs.length}개 섹션에 반복 — 한 특징/소재에 쏠렸습니다. 그 특징은 1개 섹션만 다루고, 나머지는 이 상품군의 '주된 효과(핵심 기능, 예: 우산=강풍에 안 뒤집힘·원터치 자동개폐)'를 최소 1섹션 포함해 서로 다른 강점으로 재배정하세요`);
+    }
     return { ok: violations.length === 0, sections: secs.length, violations };
   }
 

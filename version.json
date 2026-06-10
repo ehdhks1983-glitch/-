@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.97",
-  "build": "1.5.1",
-  "notes": "Coupang 403 pass-rate (cookies + visible tab challenge) + phone-number option noise filter + detail image count fix"
+  "version": "v21.8.24.98",
+  "build": "1.5.2",
+  "notes": "Quality #1: message-map enforcement - single-feature over-concentration detector + auto-replan with primary-effect coverage"
 }

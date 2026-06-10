@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.97 · 쿠팡403·옵션잡음 개선</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.98 · 메시지지도 강제(쏠림 차단)</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -1578,7 +1578,8 @@ HERO 섹션의 방향이 될 한 줄
     try{
       const V = window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.validateCopyPlanV92;
       if(!V || !state.copyPlan) return;
-      const v = V(state.copyPlan);
+      const _pd = (typeof getData === 'function') ? getData() : {};
+      const v = V(state.copyPlan, (_pd.product || ''));
       if(v.ok){ log(`🧪 카피 자동 검증 통과 (섹션 ${v.sections}개 · 중복/금지어/길이 OK)`); return; }
       log(`🧪 카피 자동 검증: ${v.violations.length}건 발견`);
       v.violations.slice(0, 6).forEach(x => log('  · ' + x));
