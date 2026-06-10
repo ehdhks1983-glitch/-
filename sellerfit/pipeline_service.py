@@ -60,6 +60,10 @@ class PreparedProduct:
     return_center: Optional[Dict] = None
     outbound_center: Optional[Dict] = None
 
+    # 등록 입력 보관 (가격 재계산 시 payload 재조립용 — F-02)
+    brand: str = ""
+    required_attributes: List[Dict] = field(default_factory=list)
+
     # 등록용 payload (조회 시 미리 만들어둠)
     payload: Optional[Dict] = None
 
@@ -153,7 +157,7 @@ class SellerFitService:
             if progress:
                 progress(msg)
 
-        prepared = PreparedProduct(item_no=item_no)
+        prepared = PreparedProduct(item_no=item_no, brand=brand)
         snap = SnapshotWriter(item_no)
         prepared._snap = snap
 
@@ -218,6 +222,7 @@ class SellerFitService:
             emit("카테고리 필수옵션 확인 중...")
             required_attrs = self.wing_client.get_required_attributes(prepared.category_code)
             snap.save("04b_required_attributes", required_attrs)
+            prepared.required_attributes = required_attrs
             if required_attrs:
                 emit(f"✅ 필수옵션 {len(required_attrs)}개: "
                      f"{[a['attributeTypeName'] for a in required_attrs][:5]}")
@@ -271,6 +276,59 @@ class SellerFitService:
             prepared.error = f"{type(e).__name__}: {e}"
             emit(f"💥 오류: {prepared.error}")
             return prepared
+
+    # ───────────────────────────────────────────────────────────
+    # ①-b 가격만 재계산 (도매꾹/쿠팡 재호출 없음 — F-02)
+    # ───────────────────────────────────────────────────────────
+    def recompute_price(
+        self,
+        prepared: PreparedProduct,
+        pricing_mode: str = None,
+        pricing_value: float = None,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        """
+        조회 완료된 상품의 판매가만 다시 계산하고 payload를 갱신한다.
+        도매꾹 호출 한도(분당 180회)를 아끼기 위해 네트워크를 쓰지 않는다.
+
+        Returns: 성공 여부 (검증 실패 시 기존 가격/payload 유지)
+        """
+        def emit(msg):
+            log.info(msg)
+            if progress:
+                progress(msg)
+
+        if not prepared or not prepared.ok or not prepared.dome_product:
+            emit("⚠️ 조회된 상품이 없어 재계산할 수 없습니다. 먼저 조회하세요.")
+            return False
+
+        calc = self._make_calculator(pricing_mode, pricing_value)
+        pricing = calc.calculate(prepared.dome_product.base_price)
+
+        payload = self.payload_builder.build(
+            dome_product=prepared.dome_product,
+            pricing=pricing,
+            display_category_code=prepared.category_code,
+            image_urls=prepared.usable_image_urls,
+            return_center=prepared.return_center,
+            outbound_center=prepared.outbound_center,
+            brand=prepared.brand,
+            required_attributes=prepared.required_attributes,
+        )
+        problems = validate_payload(payload)
+        if problems:
+            emit(f"⚠️ 재계산 양식 검증 실패 (기존 가격 유지): {problems[:3]}")
+            return False
+
+        prepared.pricing = pricing
+        prepared.sale_price = pricing.sale_price
+        prepared.margin_rate = pricing.margin_rate
+        prepared.payload = payload
+        if prepared._snap:
+            prepared._snap.save("03_pricing", pricing.to_dict())
+            prepared._snap.save("06_coupang_payload", payload)
+        emit(f"✅ 판매가 {pricing.sale_price:,}원 (마진 {pricing.margin_rate:.1f}%) — 재계산 완료")
+        return True
 
     # ───────────────────────────────────────────────────────────
     # ② 등록 (조회 결과 사용)

@@ -291,15 +291,29 @@ class SellerFitGUI(ctk.CTk):
         self.recalc_btn.configure(state="normal")
 
     # ═══════════════════════════════════════════════════════════
-    # 다시 계산 (조회 데이터 재활용, 가격만 갱신)
+    # 다시 계산 (조회 데이터 재활용 — 도매꾹 재호출 없음, F-02)
     # ═══════════════════════════════════════════════════════════
     def _recalc_if_ready(self):
-        # 조회 안 됐으면 무시
-        if not self.prepared or not self.prepared.ok:
+        if self._busy or not self.prepared or not self.prepared.ok:
             return
-        # 가격만 다시 → 간단히 재조회 (도매꾹 캐시 안 해서 재호출되지만 Slice1 허용)
-        self._log("가격 재계산 위해 다시 조회...")
-        self._fetch_async()
+        mode = self._current_mode_key()
+        value = self._current_value()
+        self._set_busy(True)
+
+        def task():
+            ok = self.service.recompute_price(
+                self.prepared, pricing_mode=mode, pricing_value=value,
+                progress=self._log,
+            )
+            self.after(0, lambda: self._on_recalced(ok))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _on_recalced(self, ok: bool):
+        self._set_busy(False)
+        if ok:
+            # 갱신된 가격으로 상품 정보 표시 재구성
+            self._on_fetched(self.prepared)
 
     # ═══════════════════════════════════════════════════════════
     # 등록

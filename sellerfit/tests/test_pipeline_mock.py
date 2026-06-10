@@ -245,6 +245,40 @@ def test_center_selection():
 
 
 # ═══════════════════════════════════════════════════════════════
+# 6) 가격 재계산 — API 재호출 없음 (F-02)
+# ═══════════════════════════════════════════════════════════════
+def test_recompute(product):
+    section("6) recompute_price (F-02: 도매꾹 재호출 없는 가격 재계산)")
+    if product is None:
+        check("선행 파서 성공", False, "파서 실패로 스킵")
+        return
+    from pipeline_service import SellerFitService, PreparedProduct
+
+    svc = SellerFitService()
+    prepared = PreparedProduct(item_no="23828709", ok=True)
+    prepared.dome_product = product
+    prepared.category_code = 63800
+    prepared.usable_image_urls = list(product.images)
+    prepared.return_center = MOCK_RETURN_CENTER
+    prepared.outbound_center = MOCK_OUTBOUND_CENTER
+    prepared.brand = "테스트브랜드"
+    prepared.required_attributes = MOCK_REQUIRED_ATTRS
+
+    ok = svc.recompute_price(prepared, pricing_mode="multiply", pricing_value=3.0)
+    check("재계산 성공", ok)
+    check("판매가 9850×3 → 29,600 (100원 올림)", prepared.sale_price == 29600,
+          f"got {prepared.sale_price}")
+    check("payload 갱신됨", prepared.payload is not None)
+    if prepared.payload:
+        it = prepared.payload["items"][0]
+        check("items.salePrice 동기화", it["salePrice"] == prepared.sale_price,
+              f'{it["salePrice"]} vs {prepared.sale_price}')
+        check("재계산 payload 검증 통과", validate_payload(prepared.payload) == [])
+    check("조회 전 재계산 → 거부",
+          not svc.recompute_price(PreparedProduct(item_no="x"), "multiply", 3.0))
+
+
+# ═══════════════════════════════════════════════════════════════
 # 러너
 # ═══════════════════════════════════════════════════════════════
 def main():
@@ -257,6 +291,7 @@ def main():
     test_payload(product, pricing)
     test_wing_response()
     test_center_selection()
+    test_recompute(product)
 
     total = len(_RESULTS)
     passed = sum(_RESULTS)
