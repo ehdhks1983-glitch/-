@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.101",
-  "build": "1.5.5",
-  "notes": "Best-seller benchmark: tone (noun-form + formal hapsoche, anti-haeyoche validator) + planning (core selling points, confirmed-number hooks, comparison section)"
+  "version": "v21.8.24.102",
+  "build": "1.5.6",
+  "notes": "Reference placeholder bug fix (reject [image-answer] junk, auto-clean persisted) + category-neutral examples in tone/planning rules and validator messages"
 }

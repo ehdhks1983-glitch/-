@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.101 · 베스트셀러 말투·기획</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.102 · 레퍼런스 수정·중립화</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -449,7 +449,10 @@
     // v21.8.24.92: 새로고침/탭 종료 후 '이어서 생성'을 위해 섹션 프롬프트·진행상태도 저장
     d.shortImagePrompts=state.shortImagePrompts||[]; d.sectionStatus=state.sectionStatus||[]; return d;
   }
-  function setData(d={}){ ids().forEach(k=>{ if($('dp-'+k)) $('dp-'+k).value=d[k]||''; }); state.attachmentVerified=false; if($('dp-images-attached')) $('dp-images-attached').checked=false; state.inferred=d.inferred||null; state.advancedOpen=!!d.advancedOpen; state.masterBrief=d.masterBrief||''; state.copyPlan=d.copyPlan||''; state.refStyle=d.refStyle||''; state.lastProductSig=d.lastProductSig||''; state.briefSig=d.briefSig||''; state.planSig=d.planSig||''; if($('dp-auto-qa')) $('dp-auto-qa').checked=!!d.autoQa; if($('dp-text-overlay')) $('dp-text-overlay').checked=!!d.textOverlay; if($('dp-wizard-bundle')) $('dp-wizard-bundle').checked=!!d.wizardBundle; if($('dp-show-price')) $('dp-show-price').checked=!!d.showPrice;
+  function setData(d={}){ ids().forEach(k=>{ if($('dp-'+k)) $('dp-'+k).value=d[k]||''; }); state.attachmentVerified=false; if($('dp-images-attached')) $('dp-images-attached').checked=false; state.inferred=d.inferred||null; state.advancedOpen=!!d.advancedOpen; state.masterBrief=d.masterBrief||''; state.copyPlan=d.copyPlan||'';
+    // v21.8.24.102: 과거 버그로 '[이미지 답변]' 같은 껍데기가 레퍼런스로 저장된 경우 복원 시 정리
+    state.refStyle=(d.refStyle && isUsableRefStyle(d.refStyle)) ? d.refStyle : '';
+    if(d.refStyle && !state.refStyle) log('🧹 이전에 저장된 레퍼런스가 빈 껍데기("[이미지 답변]" 등)라 초기화했습니다. 다시 분석하거나 [텍스트로 적용]을 사용하세요.'); state.lastProductSig=d.lastProductSig||''; state.briefSig=d.briefSig||''; state.planSig=d.planSig||''; if($('dp-auto-qa')) $('dp-auto-qa').checked=!!d.autoQa; if($('dp-text-overlay')) $('dp-text-overlay').checked=!!d.textOverlay; if($('dp-wizard-bundle')) $('dp-wizard-bundle').checked=!!d.wizardBundle; if($('dp-show-price')) $('dp-show-price').checked=!!d.showPrice;
     // v21.8.24.92: 진행상태 복원 — 'running'은 죽은 세션이므로 'pending'으로 정규화 후 미완료가 있으면 이어서 생성 안내
     if(Array.isArray(d.shortImagePrompts) && d.shortImagePrompts.length){
       state.shortImagePrompts = d.shortImagePrompts;
@@ -1943,6 +1946,16 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
 
   // ===== v21.8: 레퍼런스 학습 - 잘된 상세페이지 이미지의 디자인 톤을 분석해 따라가기 =====
   // 사용법: ChatGPT에 참고할 상세페이지 이미지를 첨부 → 분석 → 그 스타일을 우리 상품에 적용
+  // v21.8.24.102: '[이미지 답변]'(텍스트 미감지 placeholder)·빈 답·너무 짧은 답이 레퍼런스로 저장돼
+  // "적용 중"이라 뜨는데 실제 내용은 없던 버그 수정. 디자인 분석다운 텍스트인지 검사 후에만 저장한다.
+  function isUsableRefStyle(t){
+    const x = String(t || '').trim();
+    if(!x) return false;
+    if(/^\[이미지 답변\]$/.test(x)) return false;
+    if(x.length < 40) return false;                      // 분석이라기엔 너무 짧음
+    if(/이미지를 만들|생성했|만들어 드렸|여기 이미지|이미지가 완성/.test(x.slice(0, 120))) return false; // 분석이 아니라 이미지 생성 답변
+    return true;
+  }
   async function analyzeReference(){
     if(!(state.attachmentVerified || isComposerLikelyHasAttachments())){
       log('⚠️ 먼저 ChatGPT 입력창에 "참고할 상세페이지 이미지"를 첨부하세요. (잘 나온 상세페이지/와디즈 베스트 등)');
@@ -1973,10 +1986,14 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
       if(!sent){ log('전송 버튼을 못 눌렀습니다. 입력창 오른쪽 아래 검은 화살표를 직접 눌러주세요.'); return; }
       log('🎨 레퍼런스 디자인 분석 요청 전송 확인 완료. ChatGPT 답변 대기 중...');
       const answer = await waitForNewAssistantText(beforeText, 120000);
-      if(answer && answer !== beforeText){
+      if(answer && answer !== beforeText && isUsableRefStyle(answer)){
         state.refStyle = answer; save(); renderRefStyleStatus();
         log('✅ 레퍼런스 스타일 분석 완료. 이제 [섹션별 프롬프트 생성] 시 이 디자인 톤을 따라갑니다.');
         log('💡 팁: 레퍼런스를 쓰면 [디자인 무드]보다 레퍼런스가 우선 적용됩니다.');
+      } else if(answer && !isUsableRefStyle(answer)){
+        // placeholder/이미지 생성 답변은 저장하지 않는다 — 빈 레퍼런스가 '적용 중'으로 뜨는 것 방지
+        log('⚠️ ChatGPT 답변에서 디자인 분석 텍스트를 읽지 못했습니다("[이미지 답변]" 등). 레퍼런스를 저장하지 않았습니다.');
+        log('   → ChatGPT 답변이 글로 완성된 뒤 다시 누르거나, 아래 칸에 특징을 직접 적고 [텍스트로 적용]을 눌러주세요.');
       } else {
         log('⚠️ 레퍼런스 분석 답변 감지 실패. [최근 답변을 레퍼런스로] 버튼을 쓰거나 다시 시도하세요.');
       }
@@ -1985,7 +2002,8 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
   }
   function saveRefStyleManual(){
     const t = getLastAssistantText();
-    if(t){ state.refStyle = t; save(); renderRefStyleStatus(); log('✅ 최근 ChatGPT 답변을 레퍼런스 스타일로 저장했습니다.'); }
+    if(t && isUsableRefStyle(t)){ state.refStyle = t; save(); renderRefStyleStatus(); log('✅ 최근 ChatGPT 답변을 레퍼런스 스타일로 저장했습니다.'); }
+    else if(t){ log('⚠️ 최근 답변이 디자인 분석 텍스트가 아닙니다("[이미지 답변]"/이미지 생성 답변 등) — 저장하지 않았습니다.'); }
     else { log('⚠️ 최근 ChatGPT 답변을 찾지 못했습니다.'); }
   }
   function clearRefStyle(){ state.refStyle=''; const pe=$('dp-ref-paste'); if(pe) pe.value=''; save(); renderRefStyleStatus(); log('레퍼런스 스타일을 초기화했습니다. (디자인 무드로 복귀)'); }
