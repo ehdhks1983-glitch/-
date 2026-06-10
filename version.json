@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.108",
-  "build": "1.6.2",
-  "notes": "Concept proposals 5 to 10, each anchored to a proven persuasion frame (before-after, empathy story, comparison, number hook, daily routine, craftsmanship, gift, trust, target sniping, myth-busting) + recommended section structure per concept driving copy-plan flow"
+  "version": "v21.8.24.109",
+  "build": "1.6.3",
+  "notes": "Product cross-contamination guard: detect product-name change (token 60% overlap) at 5 entry points, auto-clear stale target/pain/benefits/category/specs/brief/plan/concepts"
 }

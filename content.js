@@ -4,7 +4,7 @@
 
   const STORE_KEY = 'dp_director_v20_10_data';
   const RESULT_KEY = 'dp_director_v20_10_last_result';
-  const state = { images: [], isWide: false, lastResult: '', advancedOpen: false, inferred: null, shortImagePrompts: [], currentShortImageIndex: 0, chatFilesUploaded: false, attachmentVerified: false, masterBrief: '', copyPlan: '', refStyle: '', autoRunActive: false, autoRunStop: false, wizardActive: false, wizardPhase: 'idle', attachDebug: [], sectionStatus: [], lastProductSig: '', briefSig: '', planSig: '', collectedImages: [], autoQa: false, textOverlay: false, lastDesignLabel: '', conceptOptions: [], selectedConcept: null };
+  const state = { images: [], isWide: false, lastResult: '', advancedOpen: false, inferred: null, shortImagePrompts: [], currentShortImageIndex: 0, chatFilesUploaded: false, attachmentVerified: false, masterBrief: '', copyPlan: '', refStyle: '', autoRunActive: false, autoRunStop: false, wizardActive: false, wizardPhase: 'idle', attachDebug: [], sectionStatus: [], lastProductSig: '', briefSig: '', planSig: '', collectedImages: [], autoQa: false, textOverlay: false, lastDesignLabel: '', conceptOptions: [], selectedConcept: null, lastProductName: '' };
 
   chrome.runtime?.onMessage?.addListener((msg) => { if (msg?.type === 'DP_TOGGLE_PANEL') togglePanel(); });
   window.addEventListener('DP_TOGGLE_PANEL_LOCAL', togglePanel);
@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.108 · 기획안 10종(프레임)</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.109 · 제품 섞임 차단</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -453,7 +453,7 @@
     const d={};
     ids().forEach(k=>d[k]=($('dp-'+k)?.value||'').trim());
     d.specs = mergeManualFactsWithSpecs(d.manualFacts, d.specs);
-    d.imagesAttached=!!(state.attachmentVerified || isComposerLikelyHasAttachments()); d.imageNames=state.images.map(i=>i.name); d.inferred=state.inferred; d.advancedOpen=state.advancedOpen; d.masterBrief=state.masterBrief; d.copyPlan=state.copyPlan; d.refStyle=state.refStyle; d.conceptOptions=state.conceptOptions||[]; d.selectedConcept=state.selectedConcept||null; d.lastProductSig=state.lastProductSig; d.briefSig=state.briefSig; d.planSig=state.planSig; d.autoQa=!!$('dp-auto-qa')?.checked; d.textOverlay=!!$('dp-text-overlay')?.checked; d.wizardBundle=!!$('dp-wizard-bundle')?.checked; d.showPrice=!!$('dp-show-price')?.checked;
+    d.imagesAttached=!!(state.attachmentVerified || isComposerLikelyHasAttachments()); d.imageNames=state.images.map(i=>i.name); d.inferred=state.inferred; d.advancedOpen=state.advancedOpen; d.masterBrief=state.masterBrief; d.copyPlan=state.copyPlan; d.refStyle=state.refStyle; d.conceptOptions=state.conceptOptions||[]; d.selectedConcept=state.selectedConcept||null; d.lastProductName=state.lastProductName||''; d.lastProductSig=state.lastProductSig; d.briefSig=state.briefSig; d.planSig=state.planSig; d.autoQa=!!$('dp-auto-qa')?.checked; d.textOverlay=!!$('dp-text-overlay')?.checked; d.wizardBundle=!!$('dp-wizard-bundle')?.checked; d.showPrice=!!$('dp-show-price')?.checked;
     // v21.8.24.92: 새로고침/탭 종료 후 '이어서 생성'을 위해 섹션 프롬프트·진행상태도 저장
     d.shortImagePrompts=state.shortImagePrompts||[]; d.sectionStatus=state.sectionStatus||[]; return d;
   }
@@ -461,7 +461,7 @@
     // v21.8.24.102: 과거 버그로 '[이미지 답변]' 같은 껍데기가 레퍼런스로 저장된 경우 복원 시 정리
     state.refStyle=(d.refStyle && isUsableRefStyle(d.refStyle)) ? d.refStyle : '';
     if(d.refStyle && !state.refStyle) log('🧹 이전에 저장된 레퍼런스가 빈 껍데기("[이미지 답변]" 등)라 초기화했습니다. 다시 분석하거나 [텍스트로 적용]을 사용하세요.');
-    state.conceptOptions=Array.isArray(d.conceptOptions)?d.conceptOptions:[]; state.selectedConcept=d.selectedConcept||null;
+    state.conceptOptions=Array.isArray(d.conceptOptions)?d.conceptOptions:[]; state.selectedConcept=d.selectedConcept||null; state.lastProductName=d.lastProductName||'';
     if(typeof renderConceptList==='function') setTimeout(renderConceptList, 0); state.lastProductSig=d.lastProductSig||''; state.briefSig=d.briefSig||''; state.planSig=d.planSig||''; if($('dp-auto-qa')) $('dp-auto-qa').checked=!!d.autoQa; if($('dp-text-overlay')) $('dp-text-overlay').checked=!!d.textOverlay; if($('dp-wizard-bundle')) $('dp-wizard-bundle').checked=!!d.wizardBundle; if($('dp-show-price')) $('dp-show-price').checked=!!d.showPrice;
     // v21.8.24.92: 진행상태 복원 — 'running'은 죽은 세션이므로 'pending'으로 정규화 후 미완료가 있으면 이어서 생성 안내
     if(Array.isArray(d.shortImagePrompts) && d.shortImagePrompts.length){
@@ -1122,6 +1122,7 @@
   // 섹션별 이미지 프롬프트는 buildShortImagePrompts() 경로만 사용합니다.
 
   function buildShortImagePrompts(showLog=true){
+    checkProductChangedV109('프롬프트 생성');
     const d=getData();
     if(!state.inferred) runLocalInference(false);
     // v21.8.24.106: 선택된 기획안을 이미지 프롬프트 [3]에도 전달(카피·이미지가 같은 컨셉으로).
@@ -1303,7 +1304,31 @@
   }
 
   // ===== v21.0 이식: 마스터 브리프 (STAGE 0) =====
+  // ===== v21.8.24.109: 상품명 변경 감지 — 링크 분석 없이 상품명만 바꿔도 이전 제품 정보(타겟/고민/장점/카테고리/스펙/진단/카피/기획안)가 섞이지 않게 =====
+  // 사례: 명함지갑 → 고무장갑으로 상품명만 바꾸면 타겟("명함 꺼내는 직장인")이 그대로 프롬프트에 주입되던 버그.
+  function normProductNameV109(s){
+    return String(s || '').toLowerCase().replace(/\[[^\]]*\]/g, ' ').replace(/[\s\-_/·.,()\[\]]+/g, ' ').trim();
+  }
+  // 토큰(단어) 겹침으로 같은 제품인지 판단 — "프로그 고무장갑"→"프로그 라텍스 고무장갑"처럼
+  // 중간에 단어를 보강해도 같은 제품으로 보고, "명함지갑"→"고무장갑"처럼 겹침이 없으면 새 제품으로 본다.
+  function sameProductV109(a, b){
+    const tok = (s) => new Set(normProductNameV109(s).split(' ').filter(t => t.length >= 2));
+    const A = tok(a), B = tok(b);
+    if(!A.size || !B.size) return false;
+    let inter = 0; A.forEach(t => { if(B.has(t)) inter++; });
+    return (inter / Math.min(A.size, B.size)) >= 0.6; // 작은 쪽 토큰의 60% 이상 겹치면 같은 제품
+  }
+  function checkProductChangedV109(trigger){
+    const cur = ($('dp-product')?.value || '').trim();
+    const prev = state.lastProductName || '';
+    if(cur && prev && !sameProductV109(cur, prev)){
+      clearStaleForNewProduct(`상품명 변경(${trigger})`);
+    }
+    if(cur) { state.lastProductName = cur; save(); }
+  }
+
   async function buildMasterBrief(){
+    checkProductChangedV109('제품진단');
     const d=getData();
     const product=(d.product||'').trim() || '첨부한 원본 제품';
     const tone=(d.tone||'전환 중심').trim();
@@ -1614,6 +1639,7 @@ HERO 섹션의 방향이 될 한 줄
     return `${c.name}${c.situation?` — 상황: ${c.situation}`:''}${c.message?` / 메시지: ${c.message}`:''}${c.direction?` / 연출: ${c.direction}`:''}`;
   }
   async function buildConceptOptions(){
+    checkProductChangedV109('기획안');
     const d=getData();
     const product=(d.product||'').trim() || '첨부한 원본 제품';
     const specs=(d.specs||'').trim();
@@ -1687,6 +1713,7 @@ HERO 섹션의 방향이 될 한 줄
 
   async function buildCopyPlan(directive=''){
     if(typeof directive !== 'string') directive = ''; // 이벤트 객체 등 비문자 유입 방어
+    checkProductChangedV109('카피기획');
     const d=getData();
     const product=(d.product||'').trim() || '첨부한 원본 제품';
     const tone=(d.tone||'전환 중심').trim();
@@ -2336,6 +2363,7 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
   // 사진+상품명만 있으면 버튼 하나로 끝까지 자동 실행
   async function runMagicWizard(){
     if(state.wizardActive){ stopWizard(); return; }
+    checkProductChangedV109('자동제작');
     const d = getData();
     // 최소 조건 체크: 상품명 또는 첨부 이미지 중 하나는 필요
     const hasProduct = !!(d.product||'').trim();
@@ -3676,6 +3704,8 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
       state.lastProductSig = newSig;
 
       applyFetchedText($('dp-product'), data.title ? data.title.slice(0, 90) : '', '상품명', filled);
+      // v21.8.24.109: 링크로 받은 상품명을 변경감지 기준으로 동기화(다음 단계에서 방금 받은 정보를 또 지우지 않게)
+      if(data.title) state.lastProductName = data.title.slice(0, 90).trim();
       if (priceLabel) applyFetchedText($('dp-price'), priceLabel, '가격', filled);
 
       const platformSel = $('dp-platform');
