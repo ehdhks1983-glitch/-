@@ -1,5 +1,5 @@
 """
-shorts_maker.py — 쇼츠 제작 엔진
+shorts_maker.py — 쇼츠 제작 엔진 (오케스트레이션)
 사진 여러 장 + 화면 자막 + 나래이션(TTS) + 배경음악 → 세로 9:16 MP4
 
 구조(템플릿) 3종:
@@ -7,349 +7,37 @@ shorts_maker.py — 쇼츠 제작 엔진
   - fill : 사진을 9:16로 꽉 채움(크롭) (자막 하단)
   - card : 카드뉴스 스타일 — 흰 배경, 상단 큰 제목(자막) + 사진 아래
 
-나래이션은 타이핑한 글을 음성으로 읽어줍니다(오프라인):
-  - 윈도우: 내장 음성(SAPI, 한국어 보이스 있으면 자동 선택)
-  - 그 외: espeak-ng
+엔진은 역할별로 분리되어 있다(부록 A):
+  - shorts_common   : 영상 규격(W,H), ffmpeg 실행/탐지 헬퍼
+  - shorts_models   : ShortsSegment / ShortsProject
+  - shorts_render   : 프레임 렌더(PIL) — render_segment_frame
+  - shorts_subtitle : ASS 자막
+  - shorts_tts      : 나래이션(TTS) — generate_narration
+  - shorts_maker    : build_shorts (이 파일 — 합성 오케스트레이션만)
+
+나래이션은 타이핑한 글을 음성으로 읽어줍니다:
+  - ElevenLabs(설정 시) → 윈도우 SAPI / espeak-ng → pyttsx3 폴백
 배경음악은 사용자가 고른 음악 파일을 깔아줍니다(저작권 안전).
 """
 
 import os
-import subprocess
-import sys
 import tempfile
-from pathlib import Path
 from typing import List, Optional, Callable
-
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
+from pathlib import Path
 
 from utils import find_ffmpeg, generate_output_name, format_filesize
+from shorts_common import W, H, _run, _audio_duration, _filter_available
+from shorts_models import ShortsSegment, ShortsProject, TEMPLATES
+from shorts_render import render_segment_frame
+from shorts_subtitle import _ass_font, _build_ass_file
+from shorts_tts import generate_narration
 
-W, H = 1080, 1920  # 9:16 세로
-TEMPLATES = ("blur", "fill", "card")
-
-
-# ════════════════════════════════════════
-# 데이터 구조
-# ════════════════════════════════════════
-class ShortsSegment:
-    """쇼츠 한 장면(사진 1장)"""
-    def __init__(self, image_path: str = "", duration: float = 3.0,
-                 caption: str = "", narration: str = "", template: str = "blur"):
-        self.image_path = image_path
-        self.duration = duration       # 최소 노출 시간(초). 나래이션이 길면 자동 연장
-        self.caption = caption         # 화면에 보이는 자막
-        self.narration = narration     # 음성으로 읽을 글
-        self.template = template if template in TEMPLATES else "blur"
-
-
-class ShortsProject:
-    """쇼츠 전체 설정"""
-    def __init__(self):
-        self.segments: List[ShortsSegment] = []
-        self.bgm_path: str = ""        # 배경음악 파일(선택)
-        self.bgm_volume: float = 0.18  # 0.0~1.0 (음성 위로 너무 크지 않게)
-        self.fps: int = 30
-        self.caption_size: int = 56    # 자막 기본 크기(1080 기준)
-        self.caption_color: str = "#FFFFFF"
-        self.output_path: str = ""
-        self.cancelled: bool = False
-
-
-# ════════════════════════════════════════
-# 공통 실행 헬퍼
-# ════════════════════════════════════════
-def _run(cmd, timeout=300, cwd=None):
-    kw = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "timeout": timeout}
-    if cwd:
-        kw["cwd"] = cwd
-    if sys.platform == "win32":
-        si = subprocess.STARTUPINFO()
-        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        si.wShowWindow = subprocess.SW_HIDE
-        kw["startupinfo"] = si
-    return subprocess.run(cmd, **kw)
-
-
-def _audio_duration(path: str) -> float:
-    try:
-        r = _run([_ffprobe_path(), "-v", "quiet", "-show_entries", "format=duration",
-                  "-of", "csv=p=0", path], timeout=30)
-        return float(r.stdout.decode().strip())
-    except Exception:
-        return 0.0
-
-
-def _ffprobe_path() -> str:
-    ff = find_ffmpeg()
-    if ff:
-        cand = str(Path(ff).with_name("ffprobe.exe" if sys.platform == "win32" else "ffprobe"))
-        if Path(cand).exists():
-            return cand
-    import shutil
-    return shutil.which("ffprobe") or "ffprobe"
-
-
-# ════════════════════════════════════════
-# 폰트
-# ════════════════════════════════════════
-def _load_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
-    if bold:
-        paths = ["C:/Windows/Fonts/malgunbd.ttf", "malgunbd.ttf",
-                 "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
-                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arialbd.ttf"]
-    else:
-        paths = ["C:/Windows/Fonts/malgun.ttf", "malgun.ttf",
-                 "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "arial.ttf"]
-    for p in paths:
-        try:
-            return ImageFont.truetype(p, size)
-        except (OSError, IOError):
-            continue
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
-
-
-# ════════════════════════════════════════
-# 이미지 배치 헬퍼
-# ════════════════════════════════════════
-def _crop_fill(img: Image.Image, tw: int, th: int) -> Image.Image:
-    """비율 유지하며 tw×th를 꽉 채우도록 크롭"""
-    ratio = max(tw / img.width, th / img.height)
-    nw, nh = max(1, int(img.width * ratio)), max(1, int(img.height * ratio))
-    r = img.resize((nw, nh), Image.LANCZOS)
-    x, y = (nw - tw) // 2, (nh - th) // 2
-    return r.crop((x, y, x + tw, y + th))
-
-
-def _fit(img: Image.Image, tw: int, th: int) -> Image.Image:
-    """비율 유지하며 tw×th 안에 들어가도록 축소"""
-    ratio = min(tw / img.width, th / img.height)
-    nw, nh = max(1, int(img.width * ratio)), max(1, int(img.height * ratio))
-    return img.resize((nw, nh), Image.LANCZOS)
-
-
-def _draw_caption(canvas: Image.Image, text: str, position: str,
-                  size: int, color: str):
-    """자막을 외곽선+반투명 박스와 함께 그림"""
-    if not text.strip():
-        return
-    base = canvas.convert("RGBA")
-    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    font = _load_font(size, bold=True)
-
-    # 줄바꿈: 화면 폭에 맞게 자동 래핑
-    max_w = W - 160
-    words = text.replace("\n", " \n ").split(" ")
-    lines, cur = [], ""
-    for w in words:
-        if w == "\n":
-            lines.append(cur); cur = ""; continue
-        test = (cur + " " + w).strip()
-        if draw.textlength(test, font=font) <= max_w:
-            cur = test
-        else:
-            if cur:
-                lines.append(cur)
-            cur = w
-    if cur:
-        lines.append(cur)
-    wrapped = "\n".join(lines) if lines else text
-
-    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=10, align="center")
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    pad = max(12, int(size * 0.35))
-
-    x = (W - tw) // 2
-    if position == "top":
-        y = int(H * 0.10)
-    else:  # bottom
-        y = H - th - int(H * 0.14)
-    text_y = y - bbox[1]
-
-    # 반투명 박스
-    draw.rectangle([x - pad, y - pad, x + tw + pad, y + th + pad], fill=(0, 0, 0, 150))
-    # 외곽선
-    bw = max(2, size // 16)
-    for dx in range(-bw, bw + 1):
-        for dy in range(-bw, bw + 1):
-            if dx or dy:
-                draw.multiline_text((x + dx, text_y + dy), wrapped, font=font,
-                                    fill=(0, 0, 0, 255), spacing=10, align="center")
-    draw.multiline_text((x, text_y), wrapped, font=font, fill=color,
-                        spacing=10, align="center")
-
-    base.alpha_composite(overlay)
-    canvas.paste(base.convert("RGB"), (0, 0))
-
-
-def render_segment_frame(seg: ShortsSegment, caption_size: int = 56,
-                         caption_color: str = "#FFFFFF", with_caption: bool = True) -> Image.Image:
-    """세그먼트 1장을 1080×1920 프레임으로 렌더링 (미리보기에도 사용).
-    with_caption=False면 자막을 안 그림(빌드 시 ASS 전문 자막으로 입히기 위함)."""
-    photo = None
-    if seg.image_path and Path(seg.image_path).exists():
-        try:
-            photo = ImageOps.exif_transpose(Image.open(seg.image_path).convert("RGB"))
-        except Exception:
-            photo = None
-
-    tpl = seg.template
-    cap_pos = "bottom"
-
-    if tpl == "card":
-        canvas = Image.new("RGB", (W, H), (245, 245, 247))
-        if photo:
-            area_top, area_bottom = int(H * 0.30), int(H * 0.92)
-            fitted = _fit(photo, W - 100, area_bottom - area_top)
-            px = (W - fitted.width) // 2
-            py = area_top + (area_bottom - area_top - fitted.height) // 2
-            canvas.paste(fitted, (px, py))
-        cap_pos = "top"
-        cap_color = "#111111" if caption_color.upper() == "#FFFFFF" else caption_color
-    elif tpl == "fill":
-        canvas = _crop_fill(photo, W, H) if photo else Image.new("RGB", (W, H), (20, 20, 20))
-        cap_color = caption_color
-    else:  # blur (기본)
-        if photo:
-            bg = _crop_fill(photo, W, H).filter(ImageFilter.GaussianBlur(45))
-            fg = _fit(photo, W, H)
-            canvas = bg
-            canvas.paste(fg, ((W - fg.width) // 2, (H - fg.height) // 2))
-        else:
-            canvas = Image.new("RGB", (W, H), (20, 20, 20))
-        cap_color = caption_color
-
-    if with_caption:
-        _draw_caption(canvas, seg.caption, cap_pos, caption_size, cap_color)
-    try:
-        from watermark import apply_to_frame
-        canvas = apply_to_frame(canvas)
-    except Exception:
-        pass
-    return canvas
-
-
-# ════════════════════════════════════════
-# 자막 (ASS / libass) — 전문 자막 렌더링
-# ════════════════════════════════════════
-def _filter_available(ff: str, name: str) -> bool:
-    try:
-        r = _run([ff, "-hide_banner", "-filters"], timeout=20)
-        return name in (r.stdout or b"").decode("utf-8", "replace")
-    except Exception:
-        return False
-
-
-def _ass_font() -> str:
-    return "Malgun Gothic" if sys.platform == "win32" else "NanumGothic"
-
-
-def _ass_time(s: float) -> str:
-    s = max(0.0, float(s))
-    h = int(s // 3600)
-    m = int((s % 3600) // 60)
-    sec = s % 60
-    return f"{h}:{m:02d}:{sec:05.2f}"
-
-
-def _build_ass_file(events: list, path: str, font: str, caption_size: int):
-    """events: [(start_sec, end_sec, text), ...] → 쇼츠 스타일 ASS 자막 파일"""
-    fs = max(60, min(170, int(caption_size * 1.7)))
-    outline = max(4, fs // 12)
-    shadow = max(2, fs // 26)
-    header = (
-        "[Script Info]\n"
-        "ScriptType: v4.00+\n"
-        f"PlayResX: {W}\nPlayResY: {H}\n"
-        "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n"
-        "[V4+ Styles]\n"
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
-        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
-        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Pop,{font},{fs},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,"
-        f"100,100,0,0,1,{outline},{shadow},2,80,80,300,1\n\n"
-        "[Events]\n"
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-    )
-    rows = [header]
-    for st, en, text in events:
-        t = (text or "").replace("\\", "").replace("{", "").replace("}", "").replace("\n", "\\N").strip()
-        if not t:
-            continue
-        anim = "{\\fad(120,120)\\fscx82\\fscy82\\t(0,160,\\fscx100\\fscy100)}"
-        rows.append(f"Dialogue: 0,{_ass_time(st)},{_ass_time(en)},Pop,,0,0,0,,{anim}{t}")
-    Path(path).write_text("\n".join(rows), encoding="utf-8")
-
-
-# ════════════════════════════════════════
-# 나래이션 (TTS)
-# ════════════════════════════════════════
-def generate_narration(text: str, out_wav: str) -> Optional[str]:
-    """글 → 음성. ElevenLabs(설정 시) → 시스템 음성(SAPI/espeak) 폴백. 실패 시 None."""
-    text = (text or "").strip()
-    if not text:
-        return None
-    # 1) ElevenLabs (자연스러운 음성, 키 설정 시)
-    try:
-        from tts_engine import tts_settings, elevenlabs_tts
-        if tts_settings.use_elevenlabs:
-            mp3 = str(Path(out_wav).with_suffix(".mp3"))
-            r = elevenlabs_tts(text, mp3)
-            if r:
-                return r
-    except Exception:
-        pass
-    # 2) 시스템 음성 폴백 (윈도우 SAPI / espeak)
-    try:
-        if sys.platform == "win32":
-            return _tts_windows(text, out_wav)
-        return _tts_espeak(text, out_wav)
-    except Exception:
-        # 최후 폴백: pyttsx3
-        try:
-            import pyttsx3
-            eng = pyttsx3.init()
-            eng.save_to_file(text, out_wav)
-            eng.runAndWait()
-            return out_wav if Path(out_wav).exists() else None
-        except Exception:
-            return None
-
-
-def _tts_windows(text: str, out_wav: str) -> Optional[str]:
-    """윈도우 내장 음성(SAPI). 한국어 보이스 있으면 자동 선택."""
-    txt = tempfile.mktemp(suffix=".txt")
-    Path(txt).write_text(text, encoding="utf-8")
-    ps = (
-        "Add-Type -AssemblyName System.Speech;"
-        f"$t = Get-Content -Raw -Encoding UTF8 '{txt}';"
-        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-        "$ko = $s.GetInstalledVoices() | "
-        "Where-Object { $_.VoiceInfo.Culture.Name -eq 'ko-KR' } | Select-Object -First 1;"
-        "if ($ko) { $s.SelectVoice($ko.VoiceInfo.Name) };"
-        f"$s.SetOutputToWaveFile('{out_wav}');"
-        "$s.Speak($t); $s.Dispose()"
-    )
-    _run(["powershell", "-NoProfile", "-Command", ps], timeout=120)
-    try:
-        os.unlink(txt)
-    except Exception:
-        pass
-    return out_wav if Path(out_wav).exists() and Path(out_wav).stat().st_size > 0 else None
-
-
-def _tts_espeak(text: str, out_wav: str) -> Optional[str]:
-    import shutil
-    exe = shutil.which("espeak-ng") or shutil.which("espeak")
-    if not exe:
-        return None
-    _run([exe, "-v", "ko", "-s", "150", "-w", out_wav, text], timeout=120)
-    return out_wav if Path(out_wav).exists() and Path(out_wav).stat().st_size > 0 else None
+# 외부에서 `from shorts_maker import ...` 하던 이름들을 그대로 노출(하위호환).
+__all__ = [
+    "W", "H", "TEMPLATES",
+    "ShortsSegment", "ShortsProject",
+    "render_segment_frame", "generate_narration", "build_shorts",
+]
 
 
 # ════════════════════════════════════════
