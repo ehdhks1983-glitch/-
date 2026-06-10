@@ -3,6 +3,9 @@ ui_motion_tab.py — ✨ 사진 → 움짤 탭
 사진 1장에 카메라 움직임(켄번스/줌/패닝)을 입혀 GIF/WebP로 만든다.
 """
 
+import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from tkinter import filedialog
@@ -29,6 +32,7 @@ class MotionTab(ctk.CTkFrame):
         self._anim_playing = False
         self._anim_after = None
         self._anim_target = (480, 600)
+        self._last_output = None
 
         self.grid_columnconfigure(0, weight=3)
         self.grid_columnconfigure(1, weight=2)
@@ -113,6 +117,11 @@ class MotionTab(ctk.CTkFrame):
         self._zoom_label = ctk.CTkLabel(zf, text=f"{self._zoom_var.get() / 100:.2f}x", width=52)
         self._zoom_label.pack(side="left")
 
+        self._boomerang_var = ctk.BooleanVar(value=bool(settings.get("motion_boomerang", True)))
+        ctk.CTkCheckBox(right, text="🔁 부드러운 반복 (왕복 — 이음새 없이 매끈)",
+                        variable=self._boomerang_var,
+                        font=ctk.CTkFont(size=12)).grid(row=r, column=0, **pad); r += 1
+
         ctk.CTkLabel(right, text="📦 출력 포맷",
                      font=ctk.CTkFont(size=13, weight="bold")).grid(row=r, column=0, **pad); r += 1
         self._format_var = ctk.StringVar(value=settings.get("motion_format") or "gif")
@@ -143,7 +152,14 @@ class MotionTab(ctk.CTkFrame):
             font=ctk.CTkFont(size=15, weight="bold"),
             fg_color="#2563eb", hover_color="#1d4ed8",
             command=self._start)
-        self._make_btn.grid(row=r, column=0, padx=14, pady=(16, 12), sticky="ew")
+        self._make_btn.grid(row=r, column=0, padx=14, pady=(16, 6), sticky="ew")
+
+        self._open_folder_btn = ctk.CTkButton(
+            right, text="📂 출력 폴더 열기", height=34,
+            font=ctk.CTkFont(size=12),
+            fg_color="#374151", hover_color="#4b5563",
+            command=self._open_output_folder)
+        self._open_folder_btn.grid(row=r + 1, column=0, padx=14, pady=(0, 14), sticky="ew")
 
     def _on_zoom(self, v):
         self._zoom_label.configure(text=f"{int(float(v)) / 100:.2f}x")
@@ -234,8 +250,13 @@ class MotionTab(ctk.CTkFrame):
             n = max(2, min(120, int(round(dur * fps))))  # 미리보기는 최대 120프레임
             tw, th = self._anim_target
             tw = max(2, tw - tw % 2); th = max(2, th - th % 2)
-            frames = generate_motion_frames(self._preview_img, eff, n, zoom, tw, th)
-            delay = max(30, int(dur * 1000 / max(1, n)))  # 실제 길이에 맞춰 루프 재생
+            if self._boomerang_var.get():
+                nf = max(2, n // 2 + 1)
+                fwd = generate_motion_frames(self._preview_img, eff, nf, zoom, tw, th)
+                frames = fwd + fwd[-2:0:-1] if len(fwd) > 2 else fwd
+            else:
+                frames = generate_motion_frames(self._preview_img, eff, n, zoom, tw, th)
+            delay = max(30, int(dur * 1000 / max(1, len(frames))))  # 실제 길이에 맞춰 루프
             self.after(0, lambda fr=frames, d=delay: self._begin_anim(fr, d))
         except Exception as e:
             self.after(0, lambda e=e: (
@@ -287,6 +308,7 @@ class MotionTab(ctk.CTkFrame):
             j.duration = 4.0
         j.fps = int(self._fps_var.get())
         j.zoom = self._zoom_var.get() / 100.0
+        j.boomerang = self._boomerang_var.get()
         j.output_format = self._format_var.get()
 
         qm = self._qmode_var.get()
@@ -314,6 +336,7 @@ class MotionTab(ctk.CTkFrame):
         settings.set("motion_duration", self._dur_var.get())
         settings.set("motion_fps", int(self._fps_var.get()))
         settings.set("motion_zoom", round(self._zoom_var.get() / 100.0, 2))
+        settings.set("motion_boomerang", self._boomerang_var.get())
         settings.set("motion_format", self._format_var.get())
         settings.set("motion_quality_mode", self._qmode_var.get())
         settings.save()
@@ -343,5 +366,27 @@ class MotionTab(ctk.CTkFrame):
         self._working = False
         self._make_btn.configure(state="normal", text="✨ 움짤 만들기")
         if result and Path(result).exists():
+            self._last_output = result
             self._status_label.configure(
-                text=f"✅ 완료! {Path(result).name}", text_color="#22c55e")
+                text=f"✅ 완료! {Path(result).name}  (📂 출력 폴더 열기)", text_color="#22c55e")
+
+    def _open_output_folder(self):
+        target = self._last_output or self._output_dir.get()
+        if not target:
+            return
+        p = Path(target)
+        try:
+            if sys.platform == "win32":
+                if p.is_file():
+                    subprocess.run(["explorer", "/select,", os.path.normpath(str(p))])
+                else:
+                    os.startfile(str(p))
+            elif sys.platform == "darwin":
+                subprocess.run(["open", "-R", str(p)] if p.is_file() else ["open", str(p)])
+            else:
+                subprocess.run(["xdg-open", str(p if p.is_dir() else p.parent)])
+        except Exception:
+            try:
+                os.startfile(str(p if p.is_dir() else p.parent))
+            except Exception:
+                pass

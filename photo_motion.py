@@ -39,6 +39,7 @@ class MotionJob:
         self.quality_mode: str = "balanced"  # best / balanced / fast
         self.gif_lossy: int = 30             # gifsicle 마무리 압축
         self.bg_color: str = "#000000"
+        self.boomerang: bool = True          # 왕복 반복(이음새 없는 매끈한 루프)
         self.cancelled: bool = False
 
 
@@ -130,12 +131,20 @@ def create_motion(job: MotionJob, on_progress: Optional[Callable] = None) -> Opt
     out_h = max(2, int(job.out_height)); out_h -= out_h % 2
     out_w = max(2, round(W / max(1, H) * out_h)); out_w -= out_w % 2
 
-    n_frames = max(2, min(300, int(round(job.duration * job.fps))))
-
-    frames = generate_motion_frames(
-        img, job.effect, n_frames, job.zoom, out_w, out_h,
-        on_progress=progress, is_cancelled=lambda: job.cancelled,
-    )
+    n_total = max(2, min(400, int(round(job.duration * job.fps))))
+    if getattr(job, "boomerang", False):
+        # 왕복(팔린드롬): 앞으로 갔다 되돌아와 이음새/정점이 매끈 → 끊김 없는 반복
+        n_fwd = max(2, n_total // 2 + 1)
+        fwd = generate_motion_frames(
+            img, job.effect, n_fwd, job.zoom, out_w, out_h,
+            on_progress=progress, is_cancelled=lambda: job.cancelled,
+        )
+        frames = fwd + [f.copy() for f in fwd[-2:0:-1]] if len(fwd) > 2 else fwd
+    else:
+        frames = generate_motion_frames(
+            img, job.effect, n_total, job.zoom, out_w, out_h,
+            on_progress=progress, is_cancelled=lambda: job.cancelled,
+        )
     img.close()
     if job.cancelled or not frames:
         return None
