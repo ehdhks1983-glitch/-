@@ -199,7 +199,9 @@ async function fetchProductHtml(url) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8'
       },
-      credentials: 'omit',
+      // v21.8.24.96: 'omit'→'include'. 사용자가 이미 쿠팡에 접속/로그인했다면 브라우저가 보유한
+      // 세션/봇차단 쿠키(Akamai _abck·bm_sz 등)가 함께 전송돼 403을 통과할 확률이 크게 오른다.
+      credentials: 'include',
       redirect: 'follow'
     });
 
@@ -228,7 +230,10 @@ async function fetchProductHtml(url) {
 async function fetchProductViaTemporaryTab(url, existingData = null) {
   let tabId = null;
   try {
-    const tab = await chrome.tabs.create({ url, active: false });
+    // v21.8.24.96: active:false→true. 숨김(백그라운드) 탭은 타이머가 throttle돼 쿠팡 Akamai
+    // 봇차단 JS 챌린지(쿠키 생성)가 제때 끝나지 않아 차단 페이지를 받던 문제가 컸다.
+    // 보이는 탭으로 잠깐 열어 챌린지를 통과시키고, 분석이 끝나면 자동으로 닫는다(원래 탭으로 포커스 복귀).
+    const tab = await chrome.tabs.create({ url, active: true });
     tabId = tab.id;
     if (tabId) DP_TEMP_PRODUCT_TABS.add(tabId);
     await waitForTabComplete(tabId, DP_TAB_LOAD_TIMEOUT_MS);
@@ -302,11 +307,20 @@ async function fetchProductViaTemporaryTab(url, existingData = null) {
           const t = clean(txt).replace(/품절|일시품절|선택|옵션|사이즈|색상|컬러|\/|-/g, ' ').replace(/\s+/g, ' ').trim();
           return normalizeSizeToken(t) || t || clean(txt);
         };
+        // v21.8.24.96: 주문폼의 연락처(휴대전화 앞자리) select가 상품 '옵션 후보'로 오수집되던 문제 차단용
+        const isPhoneLike = (name = '', value = '') => {
+          const n = clean(name).toLowerCase();
+          const v = clean(value);
+          if (/consumer_mobile|mobile|phone|tel|연락처|전화|휴대|핸드폰|fax|email|이메일/i.test(n)) return true;
+          if (/^(010|011|016|017|018|019|050\d?|02|0\d{2,3})$/.test(v)) return true; // 전화 앞자리 토큰
+          return false;
+        };
         const isNoiseOptionValue = (value, groupName = '') => {
           const v = clean(value);
           const g = clean(groupName).toLowerCase();
           if (!v) return true;
           if (/^component$/i.test(g)) return true;
+          if (isPhoneLike(g, v)) return true;
           if (/전체\/패션의류|패션의류 잡화|뷰티\/출산|주방용품|홈인테리어|가전디지털|도서 음반 DVD|자동차용품/.test(v)) return true;
           if (/추천상품|함께 본 상품|다른 고객|광고|카테고리|랭킹|로켓|쿠팡홈|장바구니|바로구매/.test(v)) return true;
           if (/[,.，]/.test(v) && v.length > 12) return true;
@@ -402,9 +416,11 @@ async function fetchProductViaTemporaryTab(url, existingData = null) {
           collectCoupangDropdownSizeBlocks();
 
           document.querySelectorAll('select').forEach(sel => {
-            const name = sel.getAttribute('name') || sel.getAttribute('aria-label') || '옵션';
+            const name = sel.getAttribute('name') || sel.getAttribute('aria-label') || sel.id || '옵션';
             const values = [...sel.options].map(o => clean(o.textContent)).filter(v => v && !/선택|고르/i.test(v));
             if (/^component$/i.test(name) || values.join('/').length > 120) return;
+            // v21.8.24.96: 휴대전화 앞자리/연락처/이메일 도메인 select는 상품 옵션이 아니므로 통째로 건너뛴다.
+            if (isPhoneLike(name) || values.some(v => isPhoneLike(name, v))) return;
             values.forEach(v => addOptionValue(name, v));
           });
 
@@ -600,15 +616,19 @@ async function fetchProductViaTemporaryTab(url, existingData = null) {
           reviewSummary,
           imageCount: document.images ? document.images.length : 0,
           detailImageCount: (() => {
-            const roots = [...document.querySelectorAll('#productDetail, #product-detail, [id*="productDetail"], [class*="product-detail"], [class*="ProductDetail"]')];
-            const imgs = (roots.length ? roots.flatMap(root => [...root.querySelectorAll('img')]) : [...document.images])
+            // v21.8.24.96: 상세 컨테이너 안의 이미지는 쿠팡 CDN이 아니어도(도매꾹 등) 크기 기준으로 센다.
+            // 컨테이너가 없으면(쿠팡 외 일부) 페이지 전체 + 쿠팡 CDN 패턴으로만 제한해 추천/광고 과대집계를 막는다.
+            const roots = [...document.querySelectorAll('#productDetail, #product-detail, [id*="productDetail"], [class*="product-detail"], [class*="ProductDetail"], [class*="goods_detail"], [class*="goodsDetail"], [class*="detail-content"], [class*="item-detail"]')];
+            const inRoot = roots.length > 0;
+            const imgs = (inRoot ? roots.flatMap(root => [...root.querySelectorAll('img')]) : [...document.images])
               .filter(img => {
                 const src = img.src || '';
                 const r = img.getBoundingClientRect();
-                if (!/vendor_inventory|retail-product|product-detail|image\.coupangcdn\.com/i.test(src)) return false;
+                if (/sprite|icon|logo|badge|avatar|profile|review/i.test(src)) return false;
+                if (!/^https?:/i.test(src)) return false;
+                if (!inRoot && !/vendor_inventory|retail-product|product-detail|image\.coupangcdn\.com/i.test(src)) return false;
                 if (r.width && r.width < 120) return false;
                 if (r.height && r.height < 80) return false;
-                if (/sprite|icon|logo|badge|avatar|profile|review/i.test(src)) return false;
                 return true;
               });
             return new Set(imgs.map(img => img.currentSrc || img.src)).size;
@@ -733,6 +753,12 @@ async function fetchProductViaTemporaryTab(url, existingData = null) {
     };
 
     if (!parsed.title && !parsed.image && !parsed.price) {
+      // v21.8.24.96: 봇차단/보안확인 페이지인지 구분해 사용자가 바로 조치할 수 있게 안내한다.
+      const bt = String(page.bodyText || '') + ' ' + String(page.title || '');
+      const blocked = /Access\s*Denied|Pardon\s*the\s*interruption|보안\s*문자|로봇이\s*아닙니다|자동\s*입력\s*방지|비정상적인\s*접근|일시적으로\s*차단|접근이\s*제한|캡차|captcha|cloudflare|를\s*확인하고\s*있습니다/i.test(bt);
+      if (blocked) {
+        return { ok: false, blocked: true, error: '쿠팡이 봇차단(보안 확인) 페이지를 띄웠습니다. 브라우저에서 쿠팡에 한 번 접속/로그인한 뒤 다시 시도하거나, 이미지 첨부 + 상품명 직접 입력으로 진행하세요.' };
+      }
       return { ok: false, error: '탭 분석에서도 상품명/이미지/가격을 찾지 못했습니다.' };
     }
     return { ok: true, data: parsed, finalUrl: page.url || url };

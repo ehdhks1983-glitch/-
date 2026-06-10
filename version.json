@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.96",
-  "build": "1.5.0",
-  "notes": "FAQ obvious-question fix + Coupang crawl contamination/403/graceful"
+  "version": "v21.8.24.97",
+  "build": "1.5.1",
+  "notes": "Coupang 403 pass-rate (cookies + visible tab challenge) + phone-number option noise filter + detail image count fix"
 }

@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.96 · FAQ·쿠팡크롤링 개선</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.97 · 쿠팡403·옵션잡음 개선</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
