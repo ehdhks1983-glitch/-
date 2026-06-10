@@ -4,7 +4,7 @@
 
   const STORE_KEY = 'dp_director_v20_10_data';
   const RESULT_KEY = 'dp_director_v20_10_last_result';
-  const state = { images: [], isWide: false, lastResult: '', advancedOpen: false, inferred: null, shortImagePrompts: [], currentShortImageIndex: 0, chatFilesUploaded: false, attachmentVerified: false, masterBrief: '', copyPlan: '', refStyle: '', autoRunActive: false, autoRunStop: false, wizardActive: false, wizardPhase: 'idle', attachDebug: [], sectionStatus: [], lastProductSig: '', briefSig: '', planSig: '', collectedImages: [], autoQa: false, textOverlay: false, lastDesignLabel: '' };
+  const state = { images: [], isWide: false, lastResult: '', advancedOpen: false, inferred: null, shortImagePrompts: [], currentShortImageIndex: 0, chatFilesUploaded: false, attachmentVerified: false, masterBrief: '', copyPlan: '', refStyle: '', autoRunActive: false, autoRunStop: false, wizardActive: false, wizardPhase: 'idle', attachDebug: [], sectionStatus: [], lastProductSig: '', briefSig: '', planSig: '', collectedImages: [], autoQa: false, textOverlay: false, lastDesignLabel: '', conceptOptions: [], selectedConcept: null };
 
   chrome.runtime?.onMessage?.addListener((msg) => { if (msg?.type === 'DP_TOGGLE_PANEL') togglePanel(); });
   window.addEventListener('DP_TOGGLE_PANEL_LOCAL', togglePanel);
@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.105 · 움짤 수리·자가진단</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.106 · 기획안5종·충실도·연출다양화</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -113,6 +113,11 @@
           <h3>③ 자동 제작</h3>
           <div class="dp-help">아래 버튼 하나면 제품분석 → 카피기획 → 이미지 제작까지 자동으로 끝납니다.</div>
           <div style="height:10px"></div>
+          <div style="margin-bottom:10px;padding:10px;border:1px dashed #555;border-radius:8px">
+            <div class="dp-help" style="margin-bottom:6px"><b>💡 기획안 먼저 고르기(추천)</b> — 제품에 맞는 서로 다른 판매 컨셉 5종을 받아 1개 고른 뒤 제작하면, 매번 같은 연출이 반복되지 않습니다. 건너뛰면 자동 컨셉으로 진행됩니다.</div>
+            <button class="dp-btn purple" id="dp-concept-gen" type="button" style="width:100%">💡 기획안 5종 받기</button>
+            <div id="dp-concept-list" style="margin-top:8px"></div>
+          </div>
           <button class="dp-btn green" id="dp-magic-wizard" style="font-size:16px;padding:14px;width:100%;font-weight:bold">✨ 상세페이지 자동 만들기</button>
           <div class="dp-help" style="margin-top:8px">진행 상황은 아래 로그에 단계별로 표시됩니다. 다시 누르면 중단됩니다.</div>
         </div>
@@ -427,6 +432,7 @@
     if($('dp-merge-pdf')) $('dp-merge-pdf').onclick=()=>mergeSectionImages('pdf');
     if($('dp-gif-batch')) $('dp-gif-batch').onclick=makeClipsBatch;
     if($('dp-gif-doctor')) $('dp-gif-doctor').onclick=gifDoctor;
+    if($('dp-concept-gen')) $('dp-concept-gen').onclick=buildConceptOptions;
     if($('dp-bundle-export')) $('dp-bundle-export').onclick=exportDetailBundle;
     if($('dp-retry-failed')) $('dp-retry-failed').onclick=retryFailedSections;
     if($('dp-run-diag')) $('dp-run-diag').onclick=runDomDiagnostics;
@@ -447,14 +453,16 @@
     const d={};
     ids().forEach(k=>d[k]=($('dp-'+k)?.value||'').trim());
     d.specs = mergeManualFactsWithSpecs(d.manualFacts, d.specs);
-    d.imagesAttached=!!(state.attachmentVerified || isComposerLikelyHasAttachments()); d.imageNames=state.images.map(i=>i.name); d.inferred=state.inferred; d.advancedOpen=state.advancedOpen; d.masterBrief=state.masterBrief; d.copyPlan=state.copyPlan; d.refStyle=state.refStyle; d.lastProductSig=state.lastProductSig; d.briefSig=state.briefSig; d.planSig=state.planSig; d.autoQa=!!$('dp-auto-qa')?.checked; d.textOverlay=!!$('dp-text-overlay')?.checked; d.wizardBundle=!!$('dp-wizard-bundle')?.checked; d.showPrice=!!$('dp-show-price')?.checked;
+    d.imagesAttached=!!(state.attachmentVerified || isComposerLikelyHasAttachments()); d.imageNames=state.images.map(i=>i.name); d.inferred=state.inferred; d.advancedOpen=state.advancedOpen; d.masterBrief=state.masterBrief; d.copyPlan=state.copyPlan; d.refStyle=state.refStyle; d.conceptOptions=state.conceptOptions||[]; d.selectedConcept=state.selectedConcept||null; d.lastProductSig=state.lastProductSig; d.briefSig=state.briefSig; d.planSig=state.planSig; d.autoQa=!!$('dp-auto-qa')?.checked; d.textOverlay=!!$('dp-text-overlay')?.checked; d.wizardBundle=!!$('dp-wizard-bundle')?.checked; d.showPrice=!!$('dp-show-price')?.checked;
     // v21.8.24.92: 새로고침/탭 종료 후 '이어서 생성'을 위해 섹션 프롬프트·진행상태도 저장
     d.shortImagePrompts=state.shortImagePrompts||[]; d.sectionStatus=state.sectionStatus||[]; return d;
   }
   function setData(d={}){ ids().forEach(k=>{ if($('dp-'+k)) $('dp-'+k).value=d[k]||''; }); state.attachmentVerified=false; if($('dp-images-attached')) $('dp-images-attached').checked=false; state.inferred=d.inferred||null; state.advancedOpen=!!d.advancedOpen; state.masterBrief=d.masterBrief||''; state.copyPlan=d.copyPlan||'';
     // v21.8.24.102: 과거 버그로 '[이미지 답변]' 같은 껍데기가 레퍼런스로 저장된 경우 복원 시 정리
     state.refStyle=(d.refStyle && isUsableRefStyle(d.refStyle)) ? d.refStyle : '';
-    if(d.refStyle && !state.refStyle) log('🧹 이전에 저장된 레퍼런스가 빈 껍데기("[이미지 답변]" 등)라 초기화했습니다. 다시 분석하거나 [텍스트로 적용]을 사용하세요.'); state.lastProductSig=d.lastProductSig||''; state.briefSig=d.briefSig||''; state.planSig=d.planSig||''; if($('dp-auto-qa')) $('dp-auto-qa').checked=!!d.autoQa; if($('dp-text-overlay')) $('dp-text-overlay').checked=!!d.textOverlay; if($('dp-wizard-bundle')) $('dp-wizard-bundle').checked=!!d.wizardBundle; if($('dp-show-price')) $('dp-show-price').checked=!!d.showPrice;
+    if(d.refStyle && !state.refStyle) log('🧹 이전에 저장된 레퍼런스가 빈 껍데기("[이미지 답변]" 등)라 초기화했습니다. 다시 분석하거나 [텍스트로 적용]을 사용하세요.');
+    state.conceptOptions=Array.isArray(d.conceptOptions)?d.conceptOptions:[]; state.selectedConcept=d.selectedConcept||null;
+    if(typeof renderConceptList==='function') setTimeout(renderConceptList, 0); state.lastProductSig=d.lastProductSig||''; state.briefSig=d.briefSig||''; state.planSig=d.planSig||''; if($('dp-auto-qa')) $('dp-auto-qa').checked=!!d.autoQa; if($('dp-text-overlay')) $('dp-text-overlay').checked=!!d.textOverlay; if($('dp-wizard-bundle')) $('dp-wizard-bundle').checked=!!d.wizardBundle; if($('dp-show-price')) $('dp-show-price').checked=!!d.showPrice;
     // v21.8.24.92: 진행상태 복원 — 'running'은 죽은 세션이므로 'pending'으로 정규화 후 미완료가 있으면 이어서 생성 안내
     if(Array.isArray(d.shortImagePrompts) && d.shortImagePrompts.length){
       state.shortImagePrompts = d.shortImagePrompts;
@@ -475,6 +483,7 @@
     const cleared=[];
     if(state.masterBrief){ state.masterBrief=''; cleared.push('제품진단'); }
     if(state.copyPlan){ state.copyPlan=''; cleared.push('카피기획'); }
+    if((state.conceptOptions||[]).length || state.selectedConcept){ state.conceptOptions=[]; state.selectedConcept=null; cleared.push('기획안'); if(typeof renderConceptList==='function') renderConceptList(); }
     state.briefSig=''; state.planSig='';
     state.shortImagePrompts=[]; state.sectionStatus=[]; state.currentShortImageIndex=0; state.collectedImages=[]; if($('dp-merge-list')) $('dp-merge-list').innerHTML='';
     ['category','target','benefits','pain','specs'].forEach(k=>{ const el=$('dp-'+k); if(el && el.value.trim()){ el.value=''; cleared.push(k); } });
@@ -1115,6 +1124,8 @@
   function buildShortImagePrompts(showLog=true){
     const d=getData();
     if(!state.inferred) runLocalInference(false);
+    // v21.8.24.106: 선택된 기획안을 이미지 프롬프트 [3]에도 전달(카피·이미지가 같은 컨셉으로).
+    d.conceptLine = conceptToLine(state.selectedConcept);
 
     let result = null;
     try{
@@ -1595,6 +1606,74 @@ HERO 섹션의 방향이 될 한 줄
     }catch(e){ console.warn('카피 린트 오류', e); }
   }
 
+  // ===== v21.8.24.106: 자동제작 전 '기획안 5종' 선택 단계 =====
+  // 제품에 맞는 서로 다른 판매 컨셉 5종을 ChatGPT에 요청 → 카드로 표시 → 1개 선택 시
+  // 카피 기획(buildCopyPlan)과 이미지 프롬프트([3] 구매 설득 기준)에 해당 컨셉이 주입된다.
+  function conceptToLine(c){
+    if(!c) return '';
+    return `${c.name}${c.situation?` — 상황: ${c.situation}`:''}${c.message?` / 메시지: ${c.message}`:''}${c.direction?` / 연출: ${c.direction}`:''}`;
+  }
+  async function buildConceptOptions(){
+    const d=getData();
+    const product=(d.product||'').trim() || '첨부한 원본 제품';
+    const specs=(d.specs||'').trim();
+    const target=(d.target||'').trim();
+    const conceptPrompt = `[상세페이지 기획안 5종 제안]
+상품명: ${product}${specs?`\n확인된 스펙: ${specs.slice(0,400)}`:''}${target?`\n타겟: ${target}`:''}
+
+이 제품의 상세페이지를 만들기 전에, 서로 다른 '판매 컨셉(기획안)' 5종을 제안하세요.
+각 기획안은 구매자가 이 제품을 사는 '서로 다른 상황/이유' 하나씩을 잡아야 합니다(같은 상황 반복 금지).
+예) 명함지갑이면: 첫 미팅 신뢰 / 선물용 / 가죽 질감·만듦새 / 매일 휴대(수납·슬림) / 일반 지갑과 비교 — 처럼 각도가 달라야 합니다.
+
+반드시 아래 형식으로만 출력(설명 금지):
+[기획안 1]
+컨셉명: (5단어 이내)
+핵심 상황: (구매자의 그 순간 한 줄)
+메인 메시지: (이 컨셉의 한 줄 약속)
+연출 방향: (사진/배경/분위기 한 줄)
+[기획안 2] ... (5개까지)
+
+규칙: 확인 안 된 스펙·수치·리뷰 지어내기 금지. 한 줄씩 간결하게.`;
+    setBusy(true);
+    try{
+      const beforeText=getLastAssistantText();
+      const ok=await setPromptText(conceptPrompt);
+      if(!ok){ await navigator.clipboard.writeText(conceptPrompt); log('입력창을 못 찾아 기획안 프롬프트를 복사했습니다. 직접 붙여넣어 주세요.'); return; }
+      await sleep(300);
+      const sent=await clickSendButton(beforeText);
+      if(!sent){ log('전송 버튼을 못 눌렀습니다. 직접 전송해 주세요.'); return; }
+      log('💡 기획안 5종 요청 전송. ChatGPT 답변 대기 중...');
+      const answer=await waitForNewAssistantText(beforeText, 120000);
+      const P=window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.parseConceptOptionsV106;
+      const opts=P ? P(answer||'') : [];
+      if(!opts.length){ log('⚠️ 기획안을 읽지 못했습니다. ChatGPT 답변이 형식과 다르면 다시 눌러주세요.'); return; }
+      state.conceptOptions=opts; state.selectedConcept=null; save(); renderConceptList();
+      log(`✅ 기획안 ${opts.length}종 도착 — 카드를 눌러 1개를 선택한 뒤 [✨ 자동 만들기]를 누르세요.`);
+    }catch(e){ console.error(e); log('기획안 요청 오류: '+(e?.message||e)); }
+    finally{ setBusy(false); }
+  }
+  function renderConceptList(){
+    const box=$('dp-concept-list'); if(!box) return;
+    const opts=state.conceptOptions||[];
+    if(!opts.length){ box.innerHTML=''; return; }
+    const sel=state.selectedConcept;
+    box.innerHTML = opts.map((c,i)=>{
+      const on = sel && sel.num===c.num;
+      return `<div class="dp-concept-card" data-i="${i}" style="cursor:pointer;padding:8px 10px;margin-bottom:6px;border-radius:8px;border:2px solid ${on?'#059669':'#52525b'};background:${on?'rgba(5,150,105,.12)':'#1d1d20'}">
+        <div style="font-size:12.5px;font-weight:bold;color:${on?'#4ade80':'#e4e4e7'}">${on?'✔ ':''}${esc(c.name)}</div>
+        ${c.situation?`<div style="font-size:11px;color:#a1a1aa;margin-top:2px">상황: ${esc(c.situation)}</div>`:''}
+        ${c.message?`<div style="font-size:11px;color:#a1a1aa">메시지: ${esc(c.message)}</div>`:''}
+      </div>`;
+    }).join('') + `<div class="dp-help" style="margin-top:2px">${sel?`선택됨: <b>${esc(sel.name)}</b> — 이 컨셉으로 카피·이미지가 만들어집니다. (다시 누르면 해제)`:'카드를 눌러 컨셉 1개를 선택하세요. 선택 없이 제작하면 자동 컨셉으로 진행됩니다.'}</div>`;
+    box.querySelectorAll('.dp-concept-card').forEach(el=>{
+      el.onclick=()=>{
+        const i=+el.dataset.i; const c=(state.conceptOptions||[])[i];
+        state.selectedConcept = (state.selectedConcept && state.selectedConcept.num===c.num) ? null : c;
+        save(); renderConceptList();
+      };
+    });
+  }
+
   async function buildCopyPlan(directive=''){
     if(typeof directive !== 'string') directive = ''; // 이벤트 객체 등 비문자 유입 방어
     const d=getData();
@@ -1612,6 +1691,10 @@ HERO 섹션의 방향이 될 한 줄
       return;
     }
     const briefRef = state.masterBrief ? `\n[1단계에서 확정한 제품 기준 - 반드시 반영]\n${state.masterBrief}\n` : '';
+    // v21.8.24.106: 사용자가 고른 기획안(컨셉)이 있으면 전체 기획의 중심 축으로 강제.
+    const conceptRef = state.selectedConcept ? `\n[★선택된 기획안 - 이 컨셉을 전체 기획의 중심으로]
+컨셉명: ${state.selectedConcept.name}${state.selectedConcept.situation?`\n핵심 상황: ${state.selectedConcept.situation}`:''}${state.selectedConcept.message?`\n메인 메시지: ${state.selectedConcept.message}`:''}${state.selectedConcept.direction?`\n연출 방향: ${state.selectedConcept.direction}`:''}
+→ HERO와 주요 섹션의 상황·연출·메시지를 이 컨셉에 맞추고, 다른 컨셉으로 새지 마세요(다른 강점은 보조로만).\n` : '';
     const planPrompt = foreignLocalizeBlock((d.product||''), specs) + `[상세페이지 제작 2단계 - 섹션별 구매전환 카피 기획서]
 당신은 한국 이커머스 상위 1% 상세페이지 카피 전략가입니다.
 
@@ -1620,7 +1703,7 @@ HERO 섹션의 방향이 될 한 줄
 
 절대 스펙 나열형 카피를 만들지 마세요.
 고객은 숫자, 소재, 구성품 자체를 사는 것이 아니라 그 제품으로 해결되는 상황과 결과를 삽니다.
-
+${conceptRef}
 ────────────────────
 [1단계 제품 기준]
 ────────────────────
@@ -3685,7 +3768,7 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
     state.inferred=null;
     state.shortImagePrompts=[]; state.currentShortImageIndex=0; state.sectionStatus=[]; state.collectedImages=[];
     if($('dp-merge-list')) $('dp-merge-list').innerHTML='';
-    state.masterBrief=''; state.copyPlan=''; state.refStyle='';
+    state.masterBrief=''; state.copyPlan=''; state.refStyle=''; state.conceptOptions=[]; state.selectedConcept=null; if($('dp-concept-list')) $('dp-concept-list').innerHTML='';
     state.lastProductSig=''; state.briefSig=''; state.planSig='';
     renderPreview(); renderInference(); renderShortPromptStatus(); renderSectionProgress(); renderMasterBriefStatus(); renderCopyPlanStatus(); renderRefStyleStatus();
     state.lastResult='';

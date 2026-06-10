@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.105",
-  "build": "1.5.9",
-  "notes": "GIF feature repair stage 1: self-diagnostic button, zero-result shown as failure with reasons, auto-collect, per-cut failure logs, collection exclusion accounting"
+  "version": "v21.8.24.106",
+  "build": "1.6.0",
+  "notes": "TODO 1-3: concept selection step (5 proposals, pick one, injected into copy+image), product fidelity enforcement in staged/model shots, scene variety rotation (8 archetypes, seed-rotated)"
 }
