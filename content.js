@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.98 · 메시지지도 강제(쏠림 차단)</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.99 · HERO 후킹 강화</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
