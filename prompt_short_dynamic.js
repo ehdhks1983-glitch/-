@@ -225,9 +225,10 @@
       const situation = get(['핵심 상황','상황','타겟 상황']);
       const message = get(['메인 메시지','핵심 메시지','메시지']);
       const direction = get(['연출 방향','연출','비주얼 방향']);
-      if(num && (name || message)) out.push({ num, name: name || ('기획안 ' + num), situation, message, direction });
+      const structure = get(['추천 구조','구조','섹션 구조']);
+      if(num && (name || message)) out.push({ num, name: name || ('기획안 ' + num), situation, message, direction, structure });
     });
-    return out.slice(0, 6);
+    return out.slice(0, 12);
   }
 
   // v21.8.24.92: 카피 기획서 자동 검증(린트) — ChatGPT에게 검수를 '시키기만' 하던 것을 코드가 직접 검사.

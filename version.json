@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.107",
-  "build": "1.6.1",
-  "notes": "Fix GIF encoder not-loaded root cause: background icon-click injection list missing gif_encoder.js/zip_store.js (mismatch with manifest); align list + on-demand self-heal via DP_INJECT_MODULES"
+  "version": "v21.8.24.108",
+  "build": "1.6.2",
+  "notes": "Concept proposals 5 to 10, each anchored to a proven persuasion frame (before-after, empathy story, comparison, number hook, daily routine, craftsmanship, gift, trust, target sniping, myth-busting) + recommended section structure per concept driving copy-plan flow"
 }

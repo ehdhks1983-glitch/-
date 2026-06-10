@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.107 · 움짤 모듈로드 수정</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.108 · 기획안 10종(프레임)</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -114,8 +114,8 @@
           <div class="dp-help">아래 버튼 하나면 제품분석 → 카피기획 → 이미지 제작까지 자동으로 끝납니다.</div>
           <div style="height:10px"></div>
           <div style="margin-bottom:10px;padding:10px;border:1px dashed #555;border-radius:8px">
-            <div class="dp-help" style="margin-bottom:6px"><b>💡 기획안 먼저 고르기(추천)</b> — 제품에 맞는 서로 다른 판매 컨셉 5종을 받아 1개 고른 뒤 제작하면, 매번 같은 연출이 반복되지 않습니다. 건너뛰면 자동 컨셉으로 진행됩니다.</div>
-            <button class="dp-btn purple" id="dp-concept-gen" type="button" style="width:100%">💡 기획안 5종 받기</button>
+            <div class="dp-help" style="margin-bottom:6px"><b>💡 기획안 먼저 고르기(추천)</b> — 제품에 맞는 검증된 설득 프레임 기반 기획안 10종(변화증명·비교·루틴·선물·반전 등)을 받아 1개 고른 뒤 제작하면, 매번 같은 연출이 반복되지 않습니다. 건너뛰면 자동 컨셉으로 진행됩니다.</div>
+            <button class="dp-btn purple" id="dp-concept-gen" type="button" style="width:100%">💡 기획안 10종 받기</button>
             <div id="dp-concept-list" style="margin-top:8px"></div>
           </div>
           <button class="dp-btn green" id="dp-magic-wizard" style="font-size:16px;padding:14px;width:100%;font-weight:bold">✨ 상세페이지 자동 만들기</button>
@@ -1618,12 +1618,21 @@ HERO 섹션의 방향이 될 한 줄
     const product=(d.product||'').trim() || '첨부한 원본 제품';
     const specs=(d.specs||'').trim();
     const target=(d.target||'').trim();
-    const conceptPrompt = `[상세페이지 기획안 5종 제안]
+    const conceptPrompt = `[상세페이지 기획안 10종 제안]
 상품명: ${product}${specs?`\n확인된 스펙: ${specs.slice(0,400)}`:''}${target?`\n타겟: ${target}`:''}
 
-이 제품의 상세페이지를 만들기 전에, 서로 다른 '판매 컨셉(기획안)' 5종을 제안하세요.
-각 기획안은 구매자가 이 제품을 사는 '서로 다른 상황/이유' 하나씩을 잡아야 합니다(같은 상황 반복 금지).
-예) 명함지갑이면: 첫 미팅 신뢰 / 선물용 / 가죽 질감·만듦새 / 매일 휴대(수납·슬림) / 일반 지갑과 비교 — 처럼 각도가 달라야 합니다.
+이 제품의 상세페이지를 만들기 전에, 서로 다른 '판매 기획안' 10종을 제안하세요.
+아래 10가지 '검증된 설득 프레임'을 하나씩 배정해, 같은 제품을 완전히 다른 각도로 파는 기획안을 만드세요(프레임당 1개·중복 금지):
+1) 변화 증명(Before→After): 쓰기 전 vs 쓴 후의 차이를 축으로
+2) 문제 공감 스토리: 구매자가 겪는 그 순간의 불편 → 해결 흐름
+3) 비교/대조: 일반 제품 vs 이 제품, 차이 나는 지점
+4) 숫자 후크: 확인된 대표 수치 하나를 전면에(지어내기 금지)
+5) 하루 루틴 몰입: 아침→이동→일과→귀가 속 사용 장면으로 전개
+6) 만듦새/디테일: 소재·공정·마감 클로즈업 중심(깐깐한 구매자용)
+7) 선물 프레임: 주는 사람·받는 사람의 순간과 감정
+8) 불안 해소/신뢰: 구매 직전 망설임(내구·관리·교환)을 정면 돌파
+9) 타겟 저격: "○○한 분들만"처럼 특정 상황의 사람을 콕 집어서
+10) 통념 반박(반전): "아직도 ~하세요?" 기존 습관·오해를 깨면서 진입
 
 반드시 아래 형식으로만 출력(설명 금지):
 [기획안 1]
@@ -1631,9 +1640,10 @@ HERO 섹션의 방향이 될 한 줄
 핵심 상황: (구매자의 그 순간 한 줄)
 메인 메시지: (이 컨셉의 한 줄 약속)
 연출 방향: (사진/배경/분위기 한 줄)
-[기획안 2] ... (5개까지)
+추천 구조: (이 컨셉에 맞는 섹션 흐름 한 줄, 예: HERO→PROBLEM→BEFORE_AFTER→DETAIL→FAQ→CTA)
+[기획안 2] ... (10개까지)
 
-규칙: 확인 안 된 스펙·수치·리뷰 지어내기 금지. 한 줄씩 간결하게.`;
+규칙: 확인 안 된 스펙·수치·리뷰 지어내기 금지. 이 제품과 안 맞는 프레임은 제품에 맞게 응용. 한 줄씩 간결하게.`;
     setBusy(true);
     try{
       const beforeText=getLastAssistantText();
@@ -1642,7 +1652,7 @@ HERO 섹션의 방향이 될 한 줄
       await sleep(300);
       const sent=await clickSendButton(beforeText);
       if(!sent){ log('전송 버튼을 못 눌렀습니다. 직접 전송해 주세요.'); return; }
-      log('💡 기획안 5종 요청 전송. ChatGPT 답변 대기 중...');
+      log('💡 기획안 10종 요청 전송. ChatGPT 답변 대기 중...');
       const answer=await waitForNewAssistantText(beforeText, 120000);
       const P=window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.parseConceptOptionsV106;
       const opts=P ? P(answer||'') : [];
@@ -1663,6 +1673,7 @@ HERO 섹션의 방향이 될 한 줄
         <div style="font-size:12.5px;font-weight:bold;color:${on?'#4ade80':'#e4e4e7'}">${on?'✔ ':''}${esc(c.name)}</div>
         ${c.situation?`<div style="font-size:11px;color:#a1a1aa;margin-top:2px">상황: ${esc(c.situation)}</div>`:''}
         ${c.message?`<div style="font-size:11px;color:#a1a1aa">메시지: ${esc(c.message)}</div>`:''}
+        ${c.structure?`<div style="font-size:10px;color:#8a8a93;margin-top:1px">구조: ${esc(c.structure)}</div>`:''}
       </div>`;
     }).join('') + `<div class="dp-help" style="margin-top:2px">${sel?`선택됨: <b>${esc(sel.name)}</b> — 이 컨셉으로 카피·이미지가 만들어집니다. (다시 누르면 해제)`:'카드를 눌러 컨셉 1개를 선택하세요. 선택 없이 제작하면 자동 컨셉으로 진행됩니다.'}</div>`;
     box.querySelectorAll('.dp-concept-card').forEach(el=>{
@@ -1693,7 +1704,7 @@ HERO 섹션의 방향이 될 한 줄
     const briefRef = state.masterBrief ? `\n[1단계에서 확정한 제품 기준 - 반드시 반영]\n${state.masterBrief}\n` : '';
     // v21.8.24.106: 사용자가 고른 기획안(컨셉)이 있으면 전체 기획의 중심 축으로 강제.
     const conceptRef = state.selectedConcept ? `\n[★선택된 기획안 - 이 컨셉을 전체 기획의 중심으로]
-컨셉명: ${state.selectedConcept.name}${state.selectedConcept.situation?`\n핵심 상황: ${state.selectedConcept.situation}`:''}${state.selectedConcept.message?`\n메인 메시지: ${state.selectedConcept.message}`:''}${state.selectedConcept.direction?`\n연출 방향: ${state.selectedConcept.direction}`:''}
+컨셉명: ${state.selectedConcept.name}${state.selectedConcept.situation?`\n핵심 상황: ${state.selectedConcept.situation}`:''}${state.selectedConcept.message?`\n메인 메시지: ${state.selectedConcept.message}`:''}${state.selectedConcept.direction?`\n연출 방향: ${state.selectedConcept.direction}`:''}${state.selectedConcept.structure?`\n추천 섹션 구조: ${state.selectedConcept.structure} — 섹션 역할 배치를 가능하면 이 흐름에 맞추세요(섹션 개수는 요청 개수 유지).`:''}
 → HERO와 주요 섹션의 상황·연출·메시지를 이 컨셉에 맞추고, 다른 컨셉으로 새지 마세요(다른 강점은 보조로만).\n` : '';
     const planPrompt = foreignLocalizeBlock((d.product||''), specs) + `[상세페이지 제작 2단계 - 섹션별 구매전환 카피 기획서]
 당신은 한국 이커머스 상위 1% 상세페이지 카피 전략가입니다.
