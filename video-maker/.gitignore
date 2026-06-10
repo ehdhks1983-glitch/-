@@ -1,0 +1,16 @@
+# 런타임 생성물 (설정/로그/라이선스는 AppData에 저장됨 — 0-1 단계)
+data/
+__pycache__/
+*.pyc
+
+# 빌드 산출물
+build/
+dist/
+*.spec
+
+# 번들 바이너리 (별도 배포)
+ffmpeg/
+
+# 테스트 산출물
+*_test.mp3
+voice_test.*
