@@ -182,6 +182,29 @@
    서브 카피와 카드 설명에는 '숫자·상황·비교' 중 최소 하나를 넣어라.
    나쁨: "차분한 색감이라 어울려요" → 좋음: "출근 가방에 걸어도 안 튀어요"(상황) / "10k 창살이라 안 뒤집혀요"(숫자) / "일반 우산보다 덜 젖어요"(비교).`;
 
+  // v21.8.24.101: 쿠팡 상위 상세페이지 벤치마크 — 친근한 '~어요'가 아니라 명사형 단정+합쇼체가 표준.
+  const COPY_TONE_RULES = `────────────────────
+[말투·어조 - ★상세페이지 톤 통일(가장 중요)]
+────────────────────
+쿠팡 판매 상위 상세페이지는 친근한 '~어요' 말투를 거의 쓰지 않는다. 아래로 통일하라.
+1. 메인 카피(헤드라인)는 '명사형 단정'으로: "완벽한 발수", "126cm 대형", "8K 이중 방풍". 문장 어미('~해요/~합니다')를 붙이지 마라.
+2. 서브·본문은 합쇼체('~합니다/~ㅂ니다')로: "바람에도 안 뒤집힙니다", "한 손으로 펴고 접습니다".
+3. ★해요체 금지: '~어요/~아요/~해요/~좋아요/~어울려요/~네요' 같은 친근체를 쓰지 마라. (예: "덜 젖어요" → "덜 젖습니다" 또는 명사형 "완벽한 발수")
+4. 강조는 감탄·명령을 '점처럼만': "꼭 확인하세요!", "속지 마세요". 남발 금지.
+5. 한 기획서 안에서 말투가 섞이면 실패 — 전체를 명사형+합쇼체로 맞춰라.`;
+
+  // v21.8.24.101: 판매 상위 상세페이지의 기획 패턴(핵심 셀링포인트 집중 + 확인된 숫자 후크 + 비교).
+  const COPY_BESTSELLER_RULES = `────────────────────
+[기획 공식 - ★판매 상위 상세페이지 패턴]
+────────────────────
+1. ★핵심 셀링포인트 먼저: 이 상품군에서 가장 강한 구매 이유 3~4개를 정하고 거기에 섹션을 몰아줘라.
+   (우산 예: 대형 크기 · 방풍(이중 살대) · 완전 자동개폐 · UV차단/완벽방수). 부차 특징(걸이·색상 등)은 1섹션 이하.
+2. ★확인된 대표 숫자/스펙을 후크로: "126cm", "8K", "3Layer"처럼 사용자 입력/링크로 '확인된' 수치 하나를 메인 헤드라인으로 키워라.
+   단, 여러 스펙을 줄줄이 나열하지 마라(한 섹션 = 한 숫자). 확인 안 된 수치·리뷰수·별점·판매량은 절대 지어내지 마라.
+3. ★크기·강도는 '비교'로 체감시켜라: "일반 우산보다 ~", "작은 우산은 ~". 비교 프레임을 최소 1섹션 권장.
+4. 사회적 증거(판매량·리뷰·1위 등)는 '확인된 경우에만'. 없으면 형태·사용 장면으로 대체하라.
+→ 자가점검: '대형/방풍/자동/방수' 같은 주된 셀링포인트가 '확인된 숫자'와 함께 보이는가? 분위기 문장만 있으면 실패다.`;
+
   // v21.8.24.92: 카피 기획서 자동 검증(린트) — ChatGPT에게 검수를 '시키기만' 하던 것을 코드가 직접 검사.
   // 위반이 나오면 content.js가 위반 목록을 지시문으로 넣어 자동 재기획 1회를 돌린다(사람 개입 0).
   function listPlanSectionsV92(copyPlan){
@@ -307,6 +330,17 @@
       const threshold = Math.max(3, Math.ceil(secs.length * 0.6));
       if(top && topN >= threshold)
         violations.push(`'${top}~'가 ${topN}/${secs.length}개 섹션에 반복 — 한 특징/소재에 쏠렸습니다. 그 특징은 1개 섹션만 다루고, 나머지는 이 상품군의 '주된 효과(핵심 기능, 예: 우산=강풍에 안 뒤집힘·원터치 자동개폐)'를 최소 1섹션 포함해 서로 다른 강점으로 재배정하세요`);
+    }
+    // 8) v21.8.24.101: 말투 통일 — 해요체('~어요/~해요')가 여러 곳이면 명사형 단정/합쇼체로 전환.
+    //    쿠팡 상위 상세페이지는 친근체를 거의 안 쓴다. 한 곳만 고치는 게 아니라 전체 톤을 맞추게 한 건으로 요약해 올린다.
+    {
+      // 해요체는 거의 다 '요'로 끝난다(어요/아요/혀요/져요/네요/까요…). 단, 명령/존대 명령('~하세요/~하십시오')은 톤 규칙이 허용하므로 제외.
+      const haeyo = /요\s*[!.…~]*$/;
+      const allowedImper = /(세요|십시오|시오)\s*[!.…~]*$/;
+      let cnt = 0; const samples = [];
+      secs.forEach(s => { [s.main, s.sub].forEach(t => { const x = String(t || '').trim(); if(x && haeyo.test(x) && !allowedImper.test(x)){ cnt++; if(samples.length < 2) samples.push(x); } }); });
+      if(cnt >= 2)
+        violations.push(`말투 통일: 해요체('~어요/~해요') 문장이 ${cnt}곳(예: "${samples.join('", "')}") — 상세페이지 전체를 명사형 단정(예: "완벽한 발수")이나 합쇼체('~합니다')로 바꾸세요. "덜 젖어요"→"덜 젖습니다"`);
     }
     return { ok: violations.length === 0, sections: secs.length, violations };
   }
@@ -2151,5 +2185,5 @@ ${refStyle}
     return {analysis, prompts, variation, design, hasRef: !!refStyle, contentPlan};
   }
 
-  window.DP_DYNAMIC_PROMPTS = { generateDynamicPrompts, VARIATION_SEEDS, DESIGN_MOODS, DETAILPAGE_LAYOUT_TEMPLATES, COPY_QUALITY_RULES, COPY_QUALITY_RULES_SHORT, COPY_MESSAGE_MAP_RULES, COPY_SECTION_STRUCTURE_RULES, COPY_HOOK_RULES, validateCopyPlanV92, listPlanSectionsV92 };
+  window.DP_DYNAMIC_PROMPTS = { generateDynamicPrompts, VARIATION_SEEDS, DESIGN_MOODS, DETAILPAGE_LAYOUT_TEMPLATES, COPY_QUALITY_RULES, COPY_QUALITY_RULES_SHORT, COPY_MESSAGE_MAP_RULES, COPY_SECTION_STRUCTURE_RULES, COPY_HOOK_RULES, COPY_TONE_RULES, COPY_BESTSELLER_RULES, validateCopyPlanV92, listPlanSectionsV92 };
 })();

@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.100 · 카피 구체성 강제</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.101 · 베스트셀러 말투·기획</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -1661,13 +1661,13 @@ ${sections}
 5. 8컷이면 HERO → PROBLEM → SOLUTION → USP → BENEFIT/SCENE → DETAIL → TRUST/FAQ → CTA 흐름을 우선 추천하세요.
 6. 사용자가 입력한 섹션 수와 상품 특성을 기준으로 가장 설득력 있는 흐름을 구성하세요.
 
-${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_MESSAGE_MAP_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_MESSAGE_MAP_RULES + '\n\n' : ''}${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_SECTION_STRUCTURE_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_SECTION_STRUCTURE_RULES + '\n\n' : ''}${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_HOOK_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_HOOK_RULES + '\n\n' : ''}${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_QUALITY_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_QUALITY_RULES + '\n\n' : ''}────────────────────
+${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_TONE_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_TONE_RULES + '\n\n' : ''}${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_BESTSELLER_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_BESTSELLER_RULES + '\n\n' : ''}${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_MESSAGE_MAP_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_MESSAGE_MAP_RULES + '\n\n' : ''}${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_SECTION_STRUCTURE_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_SECTION_STRUCTURE_RULES + '\n\n' : ''}${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_HOOK_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_HOOK_RULES + '\n\n' : ''}${(window.DP_DYNAMIC_PROMPTS && window.DP_DYNAMIC_PROMPTS.COPY_QUALITY_RULES) ? window.DP_DYNAMIC_PROMPTS.COPY_QUALITY_RULES + '\n\n' : ''}────────────────────
 [카피 작성 최우선 원칙]
 ────────────────────
 1. 각 섹션은 서로 다른 구매자 질문에 답해야 합니다.
 2. 같은 메시지를 반복하지 마세요.
 3. 스펙은 주인공이 아니라 설득의 근거입니다.
-4. HERO, PROBLEM, SOLUTION, CTA에서는 스펙명이나 수치를 앞세우지 마세요.
+4. 스펙·수치를 '여러 개 나열'하지 마세요. 단, 이 상품군의 대표 수치 하나(예: 우산 "126cm 대형"·"8K 방풍")가 확인됐다면 HERO/USP 헤드라인의 후크로 키워도 됩니다(한 섹션 = 한 숫자).
 5. 메인 카피는 고객이 얻는 결과, 줄어드는 고민, 시작 가능한 일을 보여줘야 합니다.
 6. 모든 카피는 모바일에서 3초 안에 읽히는 짧은 문장이어야 합니다.
 7. 확인되지 않은 효능, 인증, 수치, 후기, 구성품은 절대 만들지 마세요.
