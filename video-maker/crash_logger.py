@@ -18,9 +18,10 @@ from typing import Optional
 # 설정/로그/라이선스는 한 곳(config.DATA_DIR = AppData)에 모은다.
 # crash_logger는 아주 이른 시점에 import되므로 config 로드 실패에도 견디게 폴백.
 try:
-    from config import DATA_DIR as _DATA_DIR
+    from config import DATA_DIR as _DATA_DIR, APP_NAME as _APP_NAME
     LOG_DIR = _DATA_DIR / "logs"
 except Exception:
+    _APP_NAME = "영상 제작기"  # config 로드 실패 시 표시용 폴백
     if getattr(sys, 'frozen', False):
         _BASE = Path(sys.executable).parent
     else:
@@ -58,7 +59,7 @@ def _system_info() -> str:
     """시스템 정보 수집"""
     try:
         info = {
-            "App": "GIF Maker Pro",
+            "App": _APP_NAME,
             "OS": f"{platform.system()} {platform.release()} ({platform.version()})",
             "Python": sys.version.split()[0],
             "Architecture": platform.machine(),
@@ -92,7 +93,7 @@ def log_crash(exc_info=None, context: str = "") -> Optional[str]:
 
         with open(log_file, "w", encoding="utf-8") as f:
             f.write("=" * 70 + "\n")
-            f.write(" GIF Maker Pro - 크래시 로그\n")
+            f.write(f" {_APP_NAME} - 크래시 로그\n")
             f.write("=" * 70 + "\n\n")
 
             f.write("📋 시스템 정보\n")
@@ -145,7 +146,7 @@ def install_global_handler():
                 msg += "이 파일을 판매자에게 전달해주세요."
             else:
                 msg += f"오류 내용:\n{exc_value}"
-            mb.showerror("GIF Maker Pro - 오류", msg)
+            mb.showerror(f"{_APP_NAME} - 오류", msg)
         except Exception:
             pass
 
