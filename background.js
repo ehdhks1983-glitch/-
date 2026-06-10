@@ -17,14 +17,36 @@ chrome.action.onClicked.addListener(async (tab) => {
     try {
       await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['styles.css'] });
       // v21.8.13: content.js만 주입하던 버그 수정. 동적 프롬프트 생성기/분석기 모듈도 같이 주입.
+      // v21.8.24.106: ★움짤이 안 되던 원인 — 이 주입 경로에 gif_encoder/zip_store가 빠져 DP_GIF/DP_ZIP 미로드.
+      //   manifest content_scripts와 동일한 전체 목록으로 맞춘다.
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ['product_analyzer.js', 'prompt_short_dynamic.js', 'content.js']
+        files: ['product_analyzer.js', 'prompt_short_dynamic.js', 'gif_encoder.js', 'zip_store.js', 'content.js', 'template_store.js', 'fix_panel.js']
       });
     } catch (err) {
       console.error('AI 상세페이지 디렉터 주입 실패:', err);
     }
   }
+});
+
+// v21.8.24.106: 움짤 모듈(DP_GIF/DP_ZIP)이 탭에 없을 때 content.js의 요청으로 즉시 주입한다.
+//   content script는 자기 탭에 executeScript를 못 하므로 background가 대신 주입 → 새로고침 없이 자가 복구.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== 'DP_INJECT_MODULES') return;
+  (async () => {
+    try {
+      const tabId = sender?.tab?.id;
+      if (!tabId) { sendResponse({ ok: false, error: '탭 정보를 찾지 못했습니다.' }); return; }
+      const allow = new Set(['gif_encoder.js', 'zip_store.js', 'template_store.js', 'fix_panel.js']);
+      const files = (Array.isArray(msg.files) ? msg.files : []).filter(f => allow.has(f));
+      if (!files.length) { sendResponse({ ok: false, error: '주입할 모듈이 없습니다.' }); return; }
+      await chrome.scripting.executeScript({ target: { tabId }, files });
+      sendResponse({ ok: true, injected: files });
+    } catch (e) {
+      sendResponse({ ok: false, error: String(e?.message || e) });
+    }
+  })();
+  return true;
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

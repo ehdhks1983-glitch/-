@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.106",
-  "build": "1.6.0",
-  "notes": "TODO 1-3: concept selection step (5 proposals, pick one, injected into copy+image), product fidelity enforcement in staged/model shots, scene variety rotation (8 archetypes, seed-rotated)"
+  "version": "v21.8.24.107",
+  "build": "1.6.1",
+  "notes": "Fix GIF encoder not-loaded root cause: background icon-click injection list missing gif_encoder.js/zip_store.js (mismatch with manifest); align list + on-demand self-heal via DP_INJECT_MODULES"
 }

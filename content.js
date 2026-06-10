@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.106 · 기획안5종·충실도·연출다양화</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.107 · 움짤 모듈로드 수정</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -3221,7 +3221,8 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
       drawFn=(ctx,p)=>drawMotionFrame(ctx, img, p, {zoom:true,pan:true,shine:true}, W, H, bw, bh);
     }
     if(fmt==='webm'){ return {blob:await webmFromDrawer(drawFn, W, H, secs), ext:'webm'}; }
-    if(!window.DP_GIF) throw new Error('GIF 인코더 미로드 — 확장을 새로고침하세요.');
+    if(!window.DP_GIF){ await ensureClipModules(); }
+    if(!window.DP_GIF) throw new Error('GIF 인코더 미로드 — 확장 새로고침 + ChatGPT 탭 새로고침이 필요합니다.');
     const frames=framesFromDrawer(drawFn, W, H, N);
     const bytes=window.DP_GIF.fromFrames(frames, {delayMs:Math.max(40,Math.round(secs*1000/frames.length)), loop:0});
     return {blob:new Blob([bytes],{type:'image/gif'}), ext:'gif'};
@@ -3245,7 +3246,8 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
     if(!list.length){ list=collectGeneratedSectionImages().map(it=>({src:it.src,checked:true})); state.collectedImages=list; renderMergeList(); }
     const items=list.map((x,k)=>({src:x.src, k, checked:x.checked})).filter(x=>x.checked);
     if(!items.length){ setMergeStatus('내보낼 컷이 없습니다. ④ [생성 이미지 수집] 후 컷을 ✔ 선택하세요.'); return; }
-    if(!window.DP_GIF){ setMergeStatus('GIF 인코더 미로드 — 확장을 새로고침하세요.'); return; }
+    await ensureClipModules();
+    if(!window.DP_GIF){ setMergeStatus('GIF 인코더 자동 로드 실패 — chrome://extensions에서 확장 새로고침 후 ChatGPT 탭도 새로고침해 주세요.'); return; }
     const ps=state.shortImagePrompts||[];
     const freq=$('dp-bundle-freq')?.value||'mid';
     const style=$('dp-gif-style')?.value||'element';
@@ -3301,8 +3303,22 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
     }finally{ setBusy(false); }
   }
 
+  // v21.8.24.106: 움짤 모듈(DP_GIF/DP_ZIP)이 미로드면 background에 주입을 요청해 새로고침 없이 자가 복구.
+  async function ensureClipModules(){
+    if(window.DP_GIF && window.DP_ZIP) return true;
+    const need=[]; if(!window.DP_GIF) need.push('gif_encoder.js'); if(!window.DP_ZIP) need.push('zip_store.js');
+    if(!need.length) return true;
+    try{
+      log('🔧 움짤 모듈 미로드 감지 → 자동 로드 시도: '+need.join(', '));
+      await chrome.runtime.sendMessage({ type:'DP_INJECT_MODULES', files:need });
+      for(let i=0;i<25 && !(window.DP_GIF && window.DP_ZIP);i++){ await sleep(120); }
+    }catch(e){ log('모듈 자동 로드 실패: '+(e?.message||e)); }
+    if(window.DP_GIF) log('✅ 움짤 모듈 자동 로드 완료');
+    return !!window.DP_GIF;
+  }
   // v21.8.24.105: 움짤 자가진단 — 수집→다운로드→캔버스→인코딩 전 단계를 실제로 돌려 어디서 죽는지 알려준다.
   async function gifDoctor(){
+    await ensureClipModules();
     const lines=[];
     const ok=(t)=>lines.push('✅ '+t), bad=(t)=>lines.push('❌ '+t), warn=(t)=>lines.push('⚠️ '+t);
     setMergeStatus('🩺 진단 중...');
@@ -3353,6 +3369,7 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
   async function makeClipsBatch(){
     const fmt=$('dp-gif-format')?.value || 'gif';
     const style=$('dp-gif-style')?.value || 'element';
+    if(fmt!=='webm') await ensureClipModules(); // GIF면 인코더 자동 확보(미로드 시 주입)
     // v21.8.24.105: 수집을 안 누르고 바로 움짤 버튼을 누르는 경우가 많아, 비어 있으면 자동으로 한 번 수집한다.
     if(!(state.collectedImages||[]).length){
       const auto=collectGeneratedSectionImages();
