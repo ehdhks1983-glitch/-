@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.104 · 이미지 차별화·카피 1:1</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.105 · 움짤 수리·자가진단</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -166,6 +166,7 @@
                 </label>
               </div>
               <button class="dp-btn green" id="dp-gif-batch" type="button" style="width:100%">🎬 선택한 컷들 움짤로 만들기 (컷마다 1개)</button>
+              <button class="dp-btn secondary" id="dp-gif-doctor" type="button" style="width:100%;margin-top:6px">🩺 움짤 자가진단 (안 될 때 원인 확인)</button>
               <div style="border-top:1px solid #3f3f46;margin:10px 0 8px;padding-top:8px">
                 <div class="dp-help" style="margin-bottom:6px">또는 ⬇️ <b>상세페이지 전체를 한 묶음으로</b> — 군데군데 자동으로 움짤이 섞인 파일들이 <b>순서대로(detail_01~)</b> 나옵니다. 그 순서 그대로 상세페이지에 업로드하세요.</div>
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
@@ -425,6 +426,7 @@
     if($('dp-merge-jpg')) $('dp-merge-jpg').onclick=()=>mergeSectionImages('jpg');
     if($('dp-merge-pdf')) $('dp-merge-pdf').onclick=()=>mergeSectionImages('pdf');
     if($('dp-gif-batch')) $('dp-gif-batch').onclick=makeClipsBatch;
+    if($('dp-gif-doctor')) $('dp-gif-doctor').onclick=gifDoctor;
     if($('dp-bundle-export')) $('dp-bundle-export').onclick=exportDetailBundle;
     if($('dp-retry-failed')) $('dp-retry-failed').onclick=retryFailedSections;
     if($('dp-run-diag')) $('dp-run-diag').onclick=runDomDiagnostics;
@@ -2883,21 +2885,30 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
     const panel=$('dp-director-panel');
     // v21.8.24.30: 사용자가 '상세페이지 제작용으로 첨부한 원본'은 user 메시지 버블에 뜨므로 제외.
     // 생성 이미지는 assistant 영역/플로팅 양쪽에 뜰 수 있어 user 버블만 배제하고 전체에서 모은다.
+    // v21.8.24.105: '왜 0장인지'를 알 수 있게 제외 사유를 집계해 결과 배열에 붙인다(움짤 고장 진단용).
     const pool=[...root.querySelectorAll('img')];
     const seen=new Set(); const out=[];
+    const reasons={ total:pool.length, panel:0, userBubble:0, noSrc:0, dup:0, small:0, iconLike:0 };
     pool.forEach(img=>{
-      if(panel && panel.contains(img)) return;
-      if(img.closest && img.closest('[data-message-author-role="user"]')) return; // 첨부 원본 제외
-      const src=img.currentSrc||img.getAttribute('src')||'';
-      if(!src || seen.has(src)) return;
+      if(panel && panel.contains(img)){ reasons.panel++; return; }
+      if(img.closest && img.closest('[data-message-author-role="user"]')){ reasons.userBubble++; return; } // 첨부 원본 제외
+      const src=img.currentSrc||img.getAttribute('src')||img.getAttribute('data-src')||'';
+      if(!src){ reasons.noSrc++; return; }
+      if(seen.has(src)){ reasons.dup++; return; }
       const rect=img.getBoundingClientRect ? img.getBoundingClientRect() : {width:0,height:0};
       const w=img.naturalWidth || rect.width || 0;
       const h=img.naturalHeight || rect.height || 0;
-      if(w<256 || h<256) return; // 아이콘/아바타/작은 미리보기 제외
-      if(/avatar|profile|emoji|favicon|spinner|sprite|icon|logo/i.test(src)) return;
+      if(w<256 || h<256){ reasons.small++; return; } // 아이콘/아바타/작은 미리보기 제외
+      if(/avatar|profile|emoji|favicon|spinner|sprite|icon|logo/i.test(src)){ reasons.iconLike++; return; }
       seen.add(src); out.push({src,w,h});
     });
+    out.reasons=reasons;
     return out;
+  }
+  function describeCollectReasons(reasons){
+    if(!reasons) return '';
+    const r=reasons;
+    return `화면 img ${r.total}개 검사 — 패널UI ${r.panel}, 첨부원본(user) ${r.userBubble}, src없음 ${r.noSrc}, 중복 ${r.dup}, 256px미만 ${r.small}, 아이콘류 ${r.iconLike}`;
   }
 
   async function getImageDataURL(src){
@@ -2919,7 +2930,11 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
     state.collectedImages=items.map(it=>({src:it.src, checked:true}));
     renderMergeList();
     if(items.length) setMergeStatus(`생성 이미지 ${items.length}장 감지. 합칠 이미지를 ✔로 선택(원본/불필요한 건 해제)한 뒤 [세로 1장 JPG]/[PDF]를 누르세요.`);
-    else setMergeStatus('생성 이미지를 찾지 못했습니다. 섹션 이미지를 먼저 생성한 뒤 다시 누르세요.');
+    else {
+      setMergeStatus(`생성 이미지를 찾지 못했습니다. 섹션 이미지를 먼저 생성한 뒤 다시 누르세요.\n(${describeCollectReasons(items.reasons)})`);
+      log('🔍 수집 0장 — ' + describeCollectReasons(items.reasons));
+      if(items.reasons && items.reasons.small > 0) log('   ↳ 256px 미만으로 걸러진 이미지가 있습니다. 이미지가 아직 로딩 중이면 화면을 위로 스크롤해 이미지가 보이는 상태에서 다시 수집하세요.');
+    }
   }
   // v21.8.24.30: 수집된 이미지를 썸네일+체크박스로 보여줘 합칠 대상을 직접 선택(원본/불필요 제외)
   function renderMergeList(){
@@ -3164,7 +3179,7 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
         const secName=(sec && sec.section) || ('컷'+(it.k+1));
         const isGif=gifSet.has(pos);
         setMergeStatus(`묶음 만드는 중 ${pos+1}/${items.length} (${secName}, ${isGif?'움짤':'이미지'})...`);
-        const durl=await getImageDataURL(it.src); if(!durl) continue;
+        const durl=await getImageDataURL(it.src); if(!durl){ log(`⚠️ ${pos+1}번 컷(${secName}) 이미지 다운로드 실패 — 건너뜀`); continue; }
         const img=await loadImage(durl);
         await sleep(10);
         let blob, ext;
@@ -3196,21 +3211,74 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
         for(const e of zipEntries){ downloadBlob(e.blob, e.name); await sleep(500); }
         setMergeStatus(`✅ 상세페이지 묶음 ${out}개 내보냄 (움짤 ${gifCount}개 군데군데 포함). detail_01~ 순서 그대로 업로드하세요.`);
       } else {
-        setMergeStatus('내보낼 결과가 없습니다(이미지 접근 실패 가능). 다시 시도해 주세요.');
+        setMergeStatus('❌ 내보낼 결과 0개 — 이미지 다운로드가 전부 실패했을 수 있습니다(URL 만료/차단).\n[🩺 움짤 자가진단]으로 원인을 확인하거나, 컷 이미지를 PC에 저장 후 원본 첨부로 올려 다시 시도하세요.');
       }
     }catch(e){
       setMergeStatus('묶음 내보내기 실패: '+(e&&e.message||e));
     }finally{ setBusy(false); }
   }
 
+  // v21.8.24.105: 움짤 자가진단 — 수집→다운로드→캔버스→인코딩 전 단계를 실제로 돌려 어디서 죽는지 알려준다.
+  async function gifDoctor(){
+    const lines=[];
+    const ok=(t)=>lines.push('✅ '+t), bad=(t)=>lines.push('❌ '+t), warn=(t)=>lines.push('⚠️ '+t);
+    setMergeStatus('🩺 진단 중...');
+    setBusy(true);
+    try{
+      // 1. 모듈 로드
+      if(window.DP_GIF && typeof window.DP_GIF.fromFrames==='function') ok('GIF 인코더 로드됨');
+      else bad('GIF 인코더 미로드 → chrome://extensions에서 확장 새로고침 후 ChatGPT 탭도 새로고침');
+      if(window.DP_ZIP) ok('ZIP 모듈 로드됨'); else warn('ZIP 모듈 미로드(개별 다운로드로 폴백)');
+      if(typeof MediaRecorder!=='undefined') ok('webm(영상) 지원 브라우저'); else warn('webm 미지원 — GIF만 가능');
+      // 2. 수집
+      const items=collectGeneratedSectionImages();
+      if(items.length) ok(`생성 이미지 수집: ${items.length}장`);
+      else bad(`생성 이미지 수집: 0장 — ${describeCollectReasons(items.reasons)}`);
+      // 3. 다운로드(첫 장 실제 시도)
+      let img=null;
+      if(items[0]){
+        const durl=await getImageDataURL(items[0].src);
+        if(durl){ ok('이미지 다운로드 가능(1번 컷 확인)'); try{ img=await loadImage(durl); }catch(_){ } }
+        else bad('이미지 다운로드 실패(URL 만료/차단) → 컷 이미지를 PC에 저장 후 ① 원본 첨부로 올려 우회 가능');
+      } else if(state.images[0]){
+        warn('수집 0장 — 첨부 원본으로 테스트');
+        try{ img=await loadImage(state.images[0].url); }catch(_){ }
+      }
+      // 4. 캔버스 + 실제 1프레임 GIF 인코딩 미니 테스트
+      if(img && window.DP_GIF){
+        try{
+          const c=document.createElement('canvas'); c.width=120; c.height=150;
+          const cx=c.getContext('2d',{willReadFrequently:true}); cx.drawImage(img,0,0,120,150);
+          const fr=cx.getImageData(0,0,120,150);
+          const bytes=window.DP_GIF.fromFrames([fr],{delayMs:100,loop:0});
+          if(bytes && bytes.length>100) ok(`실제 GIF 인코딩 테스트 통과(${bytes.length}바이트)`);
+          else bad('GIF 인코딩 결과가 비정상');
+        }catch(e){ bad('캔버스/인코딩 오류: '+(e&&e.message||e)); }
+      } else if(!img){ warn('테스트할 이미지가 없어 인코딩 검사는 건너뜀'); }
+      // 5. 카피 페어링
+      const ps=state.shortImagePrompts||[];
+      if(ps.length) ok(`섹션 카피 페어링: ${ps.length}개(요소 애니메이션 가능)`);
+      else warn('2단계 카피 없음 — 심플(줌·팬) 모션으로만 동작');
+      const failCnt=lines.filter(l=>l.startsWith('❌')).length;
+      setMergeStatus(`🩺 움짤 자가진단 결과 (${failCnt? '문제 '+failCnt+'건 발견':'모두 정상'})\n`+lines.join('\n'));
+      lines.forEach(l=>log('  '+l));
+    }catch(e){ setMergeStatus('진단 오류: '+(e&&e.message||e)); }
+    finally{ setBusy(false); }
+  }
+
   // 스마트스토어식: ✔ 선택한 섹션 컷들을 각각(컷마다) 움짤로 만든다. 각 컷은 같은 순서의 2단계 카피와 짝지음.
   async function makeClipsBatch(){
     const fmt=$('dp-gif-format')?.value || 'gif';
     const style=$('dp-gif-style')?.value || 'element';
+    // v21.8.24.105: 수집을 안 누르고 바로 움짤 버튼을 누르는 경우가 많아, 비어 있으면 자동으로 한 번 수집한다.
+    if(!(state.collectedImages||[]).length){
+      const auto=collectGeneratedSectionImages();
+      if(auto.length){ state.collectedImages=auto.map(it=>({src:it.src,checked:true})); renderMergeList(); log(`🔍 자동 수집: 생성 이미지 ${auto.length}장`); }
+    }
     const list=state.collectedImages||[];
     let idxs=list.map((x,k)=>x.checked?k:-1).filter(k=>k>=0);
     // 수집이 없으면 첨부 원본 1장으로라도
-    if(!idxs.length && !(state.images[0])){ setMergeStatus('움짤로 만들 컷이 없습니다. ④에서 [생성 이미지 수집] 후 컷을 ✔ 선택하세요.'); return; }
+    if(!idxs.length && !(state.images[0])){ setMergeStatus(`움짤로 만들 컷이 없습니다. ④에서 [생성 이미지 수집] 후 컷을 ✔ 선택하세요.\n(${describeCollectReasons((collectGeneratedSectionImages()).reasons)})`); return; }
     const ps=state.shortImagePrompts||[];
     if(style==='element' && !ps.length) log('2단계 카피가 없어 심플(줌·팬) 모션으로 만듭니다. 카피가 살아 움직이게 하려면 2단계 카피기획을 먼저 하세요.');
     if(list.length && ps.length && list.length!==ps.length) log(`⚠️ 수집 ${list.length}장 ≠ 섹션 ${ps.length}개. 카피가 컷과 어긋날 수 있으니 수집에서 원본/실패컷을 빼고 섹션 순서대로 두세요.`);
@@ -3220,7 +3288,7 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
     const sources = idxs.length ? idxs.map(k=>({src:list[k].src, k})) : [{src:state.images[0].url, k:0}];
     try{
       setBusy(true);
-      let done=0;
+      let done=0, failDl=0;
       const zipEntries=[];
       for(let n=0;n<sources.length;n++){
         const {src,k}=sources[n];
@@ -3228,7 +3296,8 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
         const copyObj=(sec && sec.copy && sec.copy.main)?{copy:sec.copy, section:sec.section}:null;
         const secName=(sec && sec.section) || ('컷'+(k+1));
         setMergeStatus(`움짤 만드는 중... ${n+1}/${sources.length} (${secName}, ${fmt==='webm'?'영상':'GIF'})`);
-        const durl=await getImageDataURL(src); if(!durl){ continue; }
+        // v21.8.24.105: 어떤 컷이 왜 빠졌는지 보이게 — 다운로드 실패는 건너뛰되 사유를 남긴다.
+        const durl=await getImageDataURL(src); if(!durl){ failDl++; log(`⚠️ ${n+1}번 컷(${secName}) 이미지 다운로드 실패(만료/차단) — 건너뜀`); continue; }
         const img=await loadImage(durl);
         await sleep(15);
         const {blob,ext}=await buildClipBlob(img, copyObj, fmt, W, H, N, secs, style);
@@ -3241,15 +3310,20 @@ PAS, BAB, FAB, 비교, FAQ, 리스크 해소, CTA 중 선택
           done++;
         }
       }
+      // v21.8.24.105: 0개인데 ✅로 표시되던 문제 수정 — 0개면 실패로 알리고 원인·우회를 안내.
+      if(done === 0){
+        setMergeStatus(`❌ 움짤 0개 — 생성 실패.\n${failDl ? `이미지 다운로드 실패 ${failDl}건(URL 만료/차단 가능).` : '처리할 컷이 없습니다.'}\n우회: 컷 이미지를 우클릭 → PC에 저장 → 패널 ①의 원본 첨부로 올린 뒤 다시 시도하거나, [🩺 움짤 자가진단]으로 원인을 확인하세요.`);
+        return;
+      }
       // v21.8.24.92: 움짤들도 ZIP 1개로 묶어 내보냄(다중 다운로드 차단 회피).
       if(zipEntries.length && window.DP_ZIP){
         setMergeStatus(`ZIP으로 묶는 중... (${zipEntries.length}개)`);
         const files=[]; for(const e of zipEntries){ files.push({ name:e.name, bytes:new Uint8Array(await e.blob.arrayBuffer()) }); }
         downloadBlob(new Blob([window.DP_ZIP.make(files)], {type:'application/zip'}), `detail_clips_${tsName()}.zip`);
-        setMergeStatus(`✅ 움짤 ${done}개를 detail_clips.zip 1개로 내보냈습니다(${fmt==='webm'?'영상':'GIF'}). 압축 풀어 순서대로 끼워 넣으세요.`);
+        setMergeStatus(`✅ 움짤 ${done}개를 detail_clips.zip 1개로 내보냈습니다(${fmt==='webm'?'영상':'GIF'})${failDl?` · 실패 ${failDl}건 건너뜀`:''}. 압축 풀어 순서대로 끼워 넣으세요.`);
       } else {
         for(const e of zipEntries){ downloadBlob(e.blob, e.name); await sleep(500); }
-        setMergeStatus(`✅ 움짤 ${done}개 생성 완료(${fmt==='webm'?'영상':'GIF'}). 파일명 detail_01~ 순서 = 섹션 순서.`);
+        setMergeStatus(`✅ 움짤 ${done}개 생성 완료(${fmt==='webm'?'영상':'GIF'})${failDl?` · 실패 ${failDl}건 건너뜀`:''}. 파일명 detail_01~ 순서 = 섹션 순서.`);
       }
     }catch(e){
       setMergeStatus('움짤 생성 실패: '+(e&&e.message||e));

@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.104",
-  "build": "1.5.8",
-  "notes": "Quality #4: image role differentiation (comparison diagram auto-switch, number-hook emphasis, tone alignment) + fix copy-plan/image-flow 1:1 alignment (validated copy was being dropped)"
+  "version": "v21.8.24.105",
+  "build": "1.5.9",
+  "notes": "GIF feature repair stage 1: self-diagnostic button, zero-result shown as failure with reasons, auto-collect, per-cut failure logs, collection exclusion accounting"
 }
