@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.109",
-  "build": "1.6.3",
-  "notes": "Product cross-contamination guard: detect product-name change (token 60% overlap) at 5 entry points, auto-clear stale target/pain/benefits/category/specs/brief/plan/concepts"
+  "version": "v21.8.24.110",
+  "build": "1.6.4",
+  "notes": "Completion package: text-overlay default ON (zero Korean glyph corruption), copy naturalness + purchase-desire formulas, ad-law banned-words filter"
 }

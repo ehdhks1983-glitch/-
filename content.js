@@ -54,7 +54,7 @@
     const panel=document.createElement('div'); panel.id='dp-director-panel';
     panel.innerHTML=`
       <div class="dp-head">
-        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.109 · 제품 섞임 차단</div></div>
+        <div><div class="dp-title">AI 상세페이지 디렉터</div><div class="dp-sub">v21.8.24.110 · 완성형(오버레이 기본)</div></div>
         <div class="dp-head-actions"><button class="dp-btn danger" id="dp-clear" style="padding:5px 9px">🔄 전체 초기화</button><button class="dp-btn secondary" id="dp-save">저장</button><button class="dp-btn secondary" id="dp-close">접기</button></div>
       </div>
       <div class="dp-body">
@@ -125,7 +125,7 @@
         <div class="dp-section">
           <h3>📊 섹션 진행 현황</h3>
           <label style="display:block;margin-bottom:6px;font-size:12px"><input type="checkbox" id="dp-auto-qa"> 각 섹션 생성 후 자동 검수·재생성(1회) · 기본 꺼짐, 필요할 때만</label>
-          <label style="display:block;margin-bottom:6px;font-size:12px"><input type="checkbox" id="dp-text-overlay"> 🅰️ 글자 직접 입히기(AI 글자가 깨질 때만 켜기 · 기본 꺼짐). 평소엔 GPT가 한글·폰트까지 직접 그립니다</label>
+          <label style="display:block;margin-bottom:6px;font-size:12px"><input type="checkbox" id="dp-text-overlay" checked> 🅰️ 글자 직접 입히기 <b>(기본 켜짐 · 완성형 권장)</b> — AI는 비주얼만 그리고 한글은 시스템 폰트로 직접 입혀 깨짐 0%. 끄면 GPT가 글자까지 그립니다(작은 글자 왜곡 위험)</label>
           <label style="display:block;margin-bottom:6px;font-size:12px"><input type="checkbox" id="dp-wizard-bundle"> 📦 원클릭(✨ 만들기) 끝나면 자동으로 묶음 내보내기(이미지+움짤 군데군데) · 켜면 버튼 한 번으로 완성</label>
           <label style="display:block;margin-bottom:6px;font-size:12px"><input type="checkbox" id="dp-show-price"> 💲 가격/금액을 이미지에 표기 (기본 꺼짐 — 평소엔 상세페이지에 가격이 안 들어갑니다)</label>
           <div id="dp-section-progress" class="dp-output small">아직 진행 내역이 없습니다. 자동 제작 또는 프롬프트 생성을 시작하면 섹션별 상태가 표시됩니다.</div>
@@ -438,7 +438,7 @@
     if($('dp-run-diag')) $('dp-run-diag').onclick=runDomDiagnostics;
     if($('dp-quality')) $('dp-quality').onchange=()=>{ applyTimingPreset($('dp-quality').value); renderStatusDash(); save(); const L={fast:'빠름',balanced:'표준',safe:'안전'}; log('생성 안정성: '+(L[$('dp-quality').value]||$('dp-quality').value)+' 적용'); };
     if($('dp-auto-qa')) $('dp-auto-qa').onchange=()=>{ renderStatusDash(); save(); };
-    if($('dp-text-overlay')) $('dp-text-overlay').onchange=()=>{ renderStatusDash(); save(); };
+    if($('dp-text-overlay')) $('dp-text-overlay').onchange=()=>{ state.textOverlaySet=true; renderStatusDash(); save(); };
     if($('dp-show-price')) $('dp-show-price').onchange=()=>{ save(); };
     ['dp-product','dp-mood'].forEach(id=>{ const el=$(id); if(el) el.addEventListener('input', renderStatusDash); });
     // v21.8.24.83: 무드 그림 미리보기
@@ -453,7 +453,7 @@
     const d={};
     ids().forEach(k=>d[k]=($('dp-'+k)?.value||'').trim());
     d.specs = mergeManualFactsWithSpecs(d.manualFacts, d.specs);
-    d.imagesAttached=!!(state.attachmentVerified || isComposerLikelyHasAttachments()); d.imageNames=state.images.map(i=>i.name); d.inferred=state.inferred; d.advancedOpen=state.advancedOpen; d.masterBrief=state.masterBrief; d.copyPlan=state.copyPlan; d.refStyle=state.refStyle; d.conceptOptions=state.conceptOptions||[]; d.selectedConcept=state.selectedConcept||null; d.lastProductName=state.lastProductName||''; d.lastProductSig=state.lastProductSig; d.briefSig=state.briefSig; d.planSig=state.planSig; d.autoQa=!!$('dp-auto-qa')?.checked; d.textOverlay=!!$('dp-text-overlay')?.checked; d.wizardBundle=!!$('dp-wizard-bundle')?.checked; d.showPrice=!!$('dp-show-price')?.checked;
+    d.imagesAttached=!!(state.attachmentVerified || isComposerLikelyHasAttachments()); d.imageNames=state.images.map(i=>i.name); d.inferred=state.inferred; d.advancedOpen=state.advancedOpen; d.masterBrief=state.masterBrief; d.copyPlan=state.copyPlan; d.refStyle=state.refStyle; d.conceptOptions=state.conceptOptions||[]; d.selectedConcept=state.selectedConcept||null; d.lastProductName=state.lastProductName||''; d.lastProductSig=state.lastProductSig; d.briefSig=state.briefSig; d.planSig=state.planSig; d.autoQa=!!$('dp-auto-qa')?.checked; d.textOverlay=!!$('dp-text-overlay')?.checked; d.textOverlaySet=!!state.textOverlaySet; d.wizardBundle=!!$('dp-wizard-bundle')?.checked; d.showPrice=!!$('dp-show-price')?.checked;
     // v21.8.24.92: 새로고침/탭 종료 후 '이어서 생성'을 위해 섹션 프롬프트·진행상태도 저장
     d.shortImagePrompts=state.shortImagePrompts||[]; d.sectionStatus=state.sectionStatus||[]; return d;
   }
@@ -462,7 +462,10 @@
     state.refStyle=(d.refStyle && isUsableRefStyle(d.refStyle)) ? d.refStyle : '';
     if(d.refStyle && !state.refStyle) log('🧹 이전에 저장된 레퍼런스가 빈 껍데기("[이미지 답변]" 등)라 초기화했습니다. 다시 분석하거나 [텍스트로 적용]을 사용하세요.');
     state.conceptOptions=Array.isArray(d.conceptOptions)?d.conceptOptions:[]; state.selectedConcept=d.selectedConcept||null; state.lastProductName=d.lastProductName||'';
-    if(typeof renderConceptList==='function') setTimeout(renderConceptList, 0); state.lastProductSig=d.lastProductSig||''; state.briefSig=d.briefSig||''; state.planSig=d.planSig||''; if($('dp-auto-qa')) $('dp-auto-qa').checked=!!d.autoQa; if($('dp-text-overlay')) $('dp-text-overlay').checked=!!d.textOverlay; if($('dp-wizard-bundle')) $('dp-wizard-bundle').checked=!!d.wizardBundle; if($('dp-show-price')) $('dp-show-price').checked=!!d.showPrice;
+    if(typeof renderConceptList==='function') setTimeout(renderConceptList, 0); state.lastProductSig=d.lastProductSig||''; state.briefSig=d.briefSig||''; state.planSig=d.planSig||''; if($('dp-auto-qa')) $('dp-auto-qa').checked=!!d.autoQa;
+    // v21.8.24.110: 오버레이 기본 ON — 사용자가 직접 토글한 적 없으면(textOverlaySet 없음) 켜진 상태로 시작(한글 깨짐 0%가 완성형 기본).
+    state.textOverlaySet=!!d.textOverlaySet;
+    if($('dp-text-overlay')) $('dp-text-overlay').checked = d.textOverlaySet ? !!d.textOverlay : true; if($('dp-wizard-bundle')) $('dp-wizard-bundle').checked=!!d.wizardBundle; if($('dp-show-price')) $('dp-show-price').checked=!!d.showPrice;
     // v21.8.24.92: 진행상태 복원 — 'running'은 죽은 세션이므로 'pending'으로 정규화 후 미완료가 있으면 이어서 생성 안내
     if(Array.isArray(d.shortImagePrompts) && d.shortImagePrompts.length){
       state.shortImagePrompts = d.shortImagePrompts;
