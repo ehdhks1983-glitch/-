@@ -4,6 +4,8 @@ config.py - 설정 관리
 """
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -17,14 +19,45 @@ MIN_WINDOW_SIZE = (1200, 780)
 UPDATE_URL = "https://raw.githubusercontent.com/ehdhks1983-glitch/gifmaker-updates/main/version.json"
 
 # ─── 경로 설정 ───
-if getattr(__import__('sys'), 'frozen', False):
-    import sys
+# 실행 파일(또는 스크립트)이 있는 폴더. ffmpeg 등 번들 바이너리의 기준 경로.
+if getattr(sys, 'frozen', False):
     BASE_DIR = Path(sys.executable).parent
 else:
     BASE_DIR = Path(__file__).parent
 
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+
+def _user_data_dir(app_name: str) -> Path:
+    """설정·로그·라이선스를 저장할 사용자 데이터 폴더(OS별).
+
+    설치형(Program Files 등)에서는 BASE_DIR에 쓰기 권한이 없어 저장이 전부
+    실패할 수 있으므로, 쓰기 가능한 사용자 AppData 영역을 기본 저장 위치로 쓴다.
+      - Windows: %LOCALAPPDATA%/<app_name>
+      - macOS:   ~/Library/Application Support/<app_name>
+      - Linux:   $XDG_DATA_HOME/<app_name> (없으면 ~/.local/share/<app_name>)
+    경로 계산에 실패하면 BASE_DIR/data 로 폴백한다.
+    """
+    try:
+        if sys.platform == "win32":
+            root = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
+            base = Path(root) if root else (Path.home() / "AppData" / "Local")
+        elif sys.platform == "darwin":
+            base = Path.home() / "Library" / "Application Support"
+        else:
+            root = os.getenv("XDG_DATA_HOME")
+            base = Path(root) if root else (Path.home() / ".local" / "share")
+        return base / app_name
+    except Exception:
+        return BASE_DIR / "data"
+
+
+# 설정/로그/라이선스 저장 위치(AppData). FFmpeg 등 번들 바이너리는 BASE_DIR 사용.
+DATA_DIR = _user_data_dir(APP_NAME)
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    # AppData 생성 실패 시 최후 폴백 — 실행 폴더 하위 data
+    DATA_DIR = BASE_DIR / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 # ─── FFmpeg 경로 ───

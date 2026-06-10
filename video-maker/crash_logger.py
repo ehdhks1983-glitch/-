@@ -15,12 +15,18 @@ from typing import Optional
 
 
 # ─── 로그 저장 위치 ───
-if getattr(sys, 'frozen', False):
-    _BASE = Path(sys.executable).parent
-else:
-    _BASE = Path(__file__).parent
+# 설정/로그/라이선스는 한 곳(config.DATA_DIR = AppData)에 모은다.
+# crash_logger는 아주 이른 시점에 import되므로 config 로드 실패에도 견디게 폴백.
+try:
+    from config import DATA_DIR as _DATA_DIR
+    LOG_DIR = _DATA_DIR / "logs"
+except Exception:
+    if getattr(sys, 'frozen', False):
+        _BASE = Path(sys.executable).parent
+    else:
+        _BASE = Path(__file__).parent
+    LOG_DIR = _BASE / "data" / "logs"
 
-LOG_DIR = _BASE / "data" / "logs"
 MAX_LOGS = 10  # 최근 N개만 유지
 
 
