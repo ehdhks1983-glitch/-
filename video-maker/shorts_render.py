@@ -4,12 +4,42 @@ shorts_render.py — 프레임 렌더링 (PIL)
 (부록 A 분리: 분리 전 shorts_maker.py의 폰트/이미지 배치/자막 그리기/프레임 렌더부 — 동작 동일)
 """
 
+import random
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 
 from shorts_common import W, H
 from shorts_models import ShortsSegment
+
+
+# ════════════════════════════════════════
+# 켄번스(줌/팬 모션) 필터 — 1-1
+# ════════════════════════════════════════
+def kenburns_vf(fps: int, duration: float, direction: str = "in",
+                max_zoom: float = 1.15, zoom_step: float = 0.0008,
+                prescale: int = 2) -> str:
+    """정지 사진용 zoompan(켄번스) ffmpeg -vf 필터 문자열을 만든다.
+
+    `-loop 1 -i png -t <duration>` 구조에서 fps*duration 프레임을 정확히 생성한다.
+    prescale로 먼저 업스케일한 뒤 작은 zoom_step을 적용해 정수좌표 계단현상(떨림)을 완화.
+    중앙 기준으로 줌인/줌아웃하며 x/y는 항상 가운데 정렬.
+    """
+    d = max(1, int(round(fps * float(duration))))
+    pre = max(1, int(prescale))
+    sw, sh = W * pre, H * pre
+    mz = max(1.0, float(max_zoom))
+    step = max(0.0, float(zoom_step))
+    dir_ = (direction or "in").lower()
+    if dir_ == "random":
+        dir_ = random.choice(("in", "out"))
+    if dir_ == "out":
+        z = f"if(eq(on,0),{mz:.4f},max(zoom-{step:.4f},1.0))"
+    else:  # in
+        z = f"min(zoom+{step:.4f},{mz:.4f})"
+    return (f"scale={sw}:{sh},"
+            f"zoompan=z='{z}':d={d}:"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={fps}")
 
 
 # ════════════════════════════════════════
@@ -111,9 +141,12 @@ def _draw_caption(canvas: Image.Image, text: str, position: str,
 
 
 def render_segment_frame(seg: ShortsSegment, caption_size: int = 56,
-                         caption_color: str = "#FFFFFF", with_caption: bool = True) -> Image.Image:
+                         caption_color: str = "#FFFFFF", with_caption: bool = True,
+                         with_watermark: bool = True) -> Image.Image:
     """세그먼트 1장을 1080×1920 프레임으로 렌더링 (미리보기에도 사용).
-    with_caption=False면 자막을 안 그림(빌드 시 ASS 전문 자막으로 입히기 위함)."""
+    with_caption=False면 자막을 안 그림(빌드 시 ASS 전문 자막으로 입히기 위함).
+    with_watermark=False면 워터마크를 프레임에 박지 않음(켄번스 모드에서 줌에 잘리지
+    않도록 최종 합치기 단계에서 영상에 입히기 위함 — 1-1)."""
     photo = None
     if seg.image_path and Path(seg.image_path).exists():
         try:
@@ -149,9 +182,10 @@ def render_segment_frame(seg: ShortsSegment, caption_size: int = 56,
 
     if with_caption:
         _draw_caption(canvas, seg.caption, cap_pos, caption_size, cap_color)
-    try:
-        from watermark import apply_to_frame
-        canvas = apply_to_frame(canvas)
-    except Exception:
-        pass
+    if with_watermark:
+        try:
+            from watermark import apply_to_frame
+            canvas = apply_to_frame(canvas)
+        except Exception:
+            pass
     return canvas

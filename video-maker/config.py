@@ -66,6 +66,18 @@ FFMPEG_DIR = BASE_DIR / "ffmpeg"
 FFMPEG_EXE = FFMPEG_DIR / "ffmpeg.exe"
 FFPROBE_EXE = FFMPEG_DIR / "ffprobe.exe"
 
+# ─── 켄번스(줌/팬 모션) — 1-1 ───
+# 정지 사진에 천천히 줌/팬을 줘 영상이 "살아있게" 한다(ffmpeg zoompan).
+# 떨림(정수좌표 계단현상) 방지를 위해 prescale로 업스케일 후 작은 zoom_step을 쓴다.
+KENBURNS = {
+    "enabled": True,       # 기본 on (쇼츠 탭 토글로 끌 수 있음)
+    "direction": "in",     # in(줌인) / out(줌아웃) / random(장면마다 랜덤)
+    "max_zoom": 1.15,      # 최대 배율
+    "zoom_step": 0.0008,   # 프레임당 줌 증가/감소량
+    "prescale": 2,         # zoompan 전 업스케일 배수(1=끄기). 계단현상 완화
+    "crf": 20,             # 모션 시 용량 급증 → CRF로 관리(작을수록 고화질·큰 용량)
+}
+
 # ─── 기본 설정값 ───
 # 이 앱(영상 기획 + 쇼츠 제작)에서 실제 쓰는 설정만 유지.
 # (GIF 메이커 잔재였던 merge_*/video_*/record_* 키는 사용처가 없어 제거)

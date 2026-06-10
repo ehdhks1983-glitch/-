@@ -6,6 +6,11 @@ ShortsSegment(장면 1개) / ShortsProject(전체 설정).
 
 from typing import List
 
+try:
+    from config import KENBURNS as _KENBURNS
+except Exception:
+    _KENBURNS = {}
+
 TEMPLATES = ("blur", "fill", "card")
 
 
@@ -31,3 +36,5 @@ class ShortsProject:
         self.caption_color: str = "#FFFFFF"
         self.output_path: str = ""
         self.cancelled: bool = False
+        # 켄번스 줌/팬 모션 on/off (1-1). 기본값은 config.KENBURNS["enabled"]
+        self.kenburns_enabled: bool = bool(_KENBURNS.get("enabled", True))

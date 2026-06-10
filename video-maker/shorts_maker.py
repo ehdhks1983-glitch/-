@@ -25,10 +25,11 @@ import tempfile
 from typing import List, Optional, Callable
 from pathlib import Path
 
+from config import KENBURNS
 from utils import find_ffmpeg, generate_output_name, format_filesize
 from shorts_common import W, H, _run, _audio_duration, _filter_available
 from shorts_models import ShortsSegment, ShortsProject, TEMPLATES
-from shorts_render import render_segment_frame
+from shorts_render import render_segment_frame, kenburns_vf
 from shorts_subtitle import _ass_font, _build_ass_file
 from shorts_tts import generate_narration
 
@@ -63,6 +64,23 @@ def build_shorts(project: ShortsProject,
     work = tempfile.mkdtemp(prefix="shorts_")
     try:
         use_ass = _filter_available(ff, "subtitles")
+
+        # ── 켄번스(줌/팬 모션) 준비 — 1-1 ──
+        kb = KENBURNS
+        kb_on = bool(getattr(project, "kenburns_enabled", True))
+        # 워터마크는 1.15배 줌에 화면 밖으로 잘려나가므로, 켄번스 on일 때는 프레임에
+        #   박지 않고 최종 합치기 단계에서 ffmpeg로 영상에 입힌다.
+        try:
+            import watermark as _wm
+            wm_active = bool(_wm.watermark.active)
+        except Exception:
+            _wm = None
+            wm_active = False
+        wm_via_ffmpeg = kb_on and wm_active
+        bake_wm = not wm_via_ffmpeg   # 켄번스+워터마크일 때만 프레임에 안 박음
+        # 일부 ffmpeg 빌드는 drawtext(libfreetype)가 없음 → 있을 때만 텍스트 워터마크 사용
+        wm_has_drawtext = _filter_available(ff, "drawtext") if wm_via_ffmpeg else False
+
         ass_events = []   # (start, end, caption)
         cur_t = 0.0
         seg_clips: List[str] = []
@@ -89,18 +107,26 @@ def build_shorts(project: ShortsProject,
                 ass_events.append((cur_t, cur_t + eff_dur, seg.caption.strip()))
             cur_t += eff_dur
 
-            # 2) 프레임 렌더 → PNG (ASS 쓰면 자막은 마지막에 입힘)
+            # 2) 프레임 렌더 → PNG (ASS 쓰면 자막은 마지막에, 켄번스면 워터마크도 마지막에 입힘)
             frame = render_segment_frame(seg, project.caption_size, project.caption_color,
-                                         with_caption=not use_ass)
+                                         with_caption=not use_ass, with_watermark=bake_wm)
             png = os.path.join(work, f"f{i}.png")
             frame.save(png)
             frame.close()
 
-            # 3) 무음 비디오 클립
+            # 3) 무음 비디오 클립 (켄번스 on이면 zoompan 모션, off면 기존 scale 그대로)
             clip = os.path.join(work, f"c{i}.mp4")
-            r = _run([ff, "-y", "-loop", "1", "-i", png, "-t", f"{eff_dur:.3f}",
-                      "-r", str(project.fps), "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                      "-vf", f"scale={W}:{H}", "-preset", "veryfast", clip], timeout=300)
+            clip_cmd = [ff, "-y", "-loop", "1", "-i", png, "-t", f"{eff_dur:.3f}",
+                        "-r", str(project.fps), "-c:v", "libx264", "-pix_fmt", "yuv420p"]
+            if kb_on:
+                clip_cmd += ["-vf", kenburns_vf(project.fps, eff_dur, kb.get("direction", "in"),
+                                                kb.get("max_zoom", 1.15), kb.get("zoom_step", 0.0008),
+                                                kb.get("prescale", 2)),
+                             "-crf", str(int(kb.get("crf", 20)))]
+            else:
+                clip_cmd += ["-vf", f"scale={W}:{H}"]
+            clip_cmd += ["-preset", "veryfast", clip]
+            r = _run(clip_cmd, timeout=300)
             if not Path(clip).exists():
                 err = r.stderr.decode("utf-8", "replace")[-200:]
                 prog(0, f"❌ 장면 {i+1} 클립 실패: {err.strip()}")
@@ -175,7 +201,7 @@ def build_shorts(project: ShortsProject,
             _run([ff, "-y", "-i", narration_track, "-c:a", "aac", "-b:a", "192k",
                   final_audio], timeout=120)
 
-        # 8) 영상 + 오디오 합치기 (+ ASS 전문 자막 입히기)
+        # 8) 영상 + 오디오 합치기 (+ ASS 전문 자막, 켄번스면 워터마크도 여기서 입힘)
         prog(93, "최종 합치는 중...")
         if not project.output_path:
             project.output_path = generate_output_name("shorts", "mp4")
@@ -183,8 +209,40 @@ def build_shorts(project: ShortsProject,
         if use_ass and ass_events:
             ass_path = os.path.join(work, "captions.ass")
             _build_ass_file(ass_events, ass_path, _ass_font(), project.caption_size)
-        if ass_path and Path(ass_path).exists():
+        has_ass = bool(ass_path and Path(ass_path).exists())
+
+        if wm_via_ffmpeg:
+            # 켄번스 모드: 프레임에 안 박은 워터마크를 영상에 입힌다.
+            #   텍스트=drawtext, 로고=overlay(추가 입력). 자막이 있으면 같은 체인에 합침.
+            vparts = []
+            if has_ass:
+                vparts.append("subtitles=captions.ass")
+            dt = _wm.drawtext_filter(H) if wm_has_drawtext else ""
+            if dt:
+                vparts.append(dt)
+            logo = _wm.video_logo_path()
+            inputs = ["-i", "video.mp4", "-i", "final.m4a"]
+            if logo:
+                base_chain = "[0:v]" + (",".join(vparts) if vparts else "null") + "[base]"
+                filter_complex = base_chain + ";" + _wm.video_logo_overlay(W, "[2:v]", "[base]", "[v]")
+                inputs += ["-i", logo]
+            else:
+                filter_complex = "[0:v]" + (",".join(vparts) if vparts else "null") + "[v]"
+            _run([ff, "-y", *inputs,
+                  "-filter_complex", filter_complex, "-map", "[v]", "-map", "1:a",
+                  "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(int(kb.get("crf", 20))),
+                  "-preset", "veryfast", "-c:a", "aac", "-shortest", "-movflags", "+faststart",
+                  project.output_path], timeout=600, cwd=work)
+        elif has_ass:
             # 작업폴더 기준 상대경로로 호출(윈도우 경로 이스케이프 회피)
+            _run([ff, "-y", "-i", "video.mp4", "-i", "final.m4a",
+                  "-filter_complex", "[0:v]subtitles=captions.ass[v]",
+                  "-map", "[v]", "-map", "1:a",
+                  "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "veryfast",
+                  "-c:a", "aac", "-shortest", "-movflags", "+faststart",
+                  project.output_path], timeout=600, cwd=work)
+        if not Path(project.output_path).exists() and wm_via_ffmpeg and has_ass:
+            # 워터마크 합성이 실패해도 최소한 자막은 살린다(자막만 번인)
             _run([ff, "-y", "-i", "video.mp4", "-i", "final.m4a",
                   "-filter_complex", "[0:v]subtitles=captions.ass[v]",
                   "-map", "[v]", "-map", "1:a",

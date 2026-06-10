@@ -11,7 +11,7 @@ from typing import List, Optional
 import customtkinter as ctk
 from PIL import Image
 
-from config import settings
+from config import settings, KENBURNS
 from utils import generate_output_name, is_image_file, IMAGE_EXTS
 from shorts_maker import (
     ShortsProject, ShortsSegment, build_shorts, render_segment_frame,
@@ -160,11 +160,19 @@ class ShortsTab(ctk.CTkFrame):
         ctk.CTkSlider(size_frame, from_=32, to=100, variable=self._capsize_var, width=130,
                       command=lambda _=None: self._apply_preview()).pack(side="left", padx=8)
 
+        # ── 모션(켄번스) — 1-1 ──
+        kb_frame = ctk.CTkFrame(right, fg_color="transparent")
+        kb_frame.grid(row=14, column=0, **pad)
+        self._kenburns_var = ctk.BooleanVar(value=bool(KENBURNS.get("enabled", True)))
+        ctk.CTkSwitch(kb_frame, text="🎞 모션(켄번스) — 사진 줌/팬",
+                      variable=self._kenburns_var,
+                      font=ctk.CTkFont(size=12)).pack(side="left")
+
         # ── 출력 폴더 ──
         ctk.CTkLabel(right, text="📂 출력 폴더",
-                     font=ctk.CTkFont(size=13, weight="bold")).grid(row=14, column=0, **pad)
+                     font=ctk.CTkFont(size=13, weight="bold")).grid(row=15, column=0, **pad)
         out_frame = ctk.CTkFrame(right, fg_color="transparent")
-        out_frame.grid(row=15, column=0, **pad)
+        out_frame.grid(row=16, column=0, **pad)
         self._output_dir = ctk.StringVar(value=settings.get("output_dir"))
         ctk.CTkEntry(out_frame, textvariable=self._output_dir, font=ctk.CTkFont(size=11),
                      height=28).pack(side="left", fill="x", expand=True, padx=(0, 4))
@@ -176,15 +184,15 @@ class ShortsTab(ctk.CTkFrame):
             right, text="🚀 쇼츠 만들기", height=44,
             font=ctk.CTkFont(size=15, weight="bold"),
             fg_color="#db2777", hover_color="#be185d", command=self._build)
-        self._build_btn.grid(row=16, column=0, padx=12, pady=(10, 4), sticky="ew")
+        self._build_btn.grid(row=17, column=0, padx=12, pady=(10, 4), sticky="ew")
 
         self._progress = ctk.CTkProgressBar(right, height=14)
-        self._progress.grid(row=17, column=0, padx=12, pady=4, sticky="ew")
+        self._progress.grid(row=18, column=0, padx=12, pady=4, sticky="ew")
         self._progress.set(0)
         self._status_label = ctk.CTkLabel(right, text="사진을 추가해 장면을 만들고, 자막·나래이션을 넣어보세요",
                                           font=ctk.CTkFont(size=11), text_color="gray50",
                                           wraplength=300, justify="left")
-        self._status_label.grid(row=18, column=0, padx=12, pady=(0, 8), sticky="w")
+        self._status_label.grid(row=19, column=0, padx=12, pady=(0, 8), sticky="w")
 
     # ════════════════════════════════════════
     # 장면 관리
@@ -393,6 +401,7 @@ class ShortsTab(ctk.CTkFrame):
         proj.bgm_path = self._bgm_path
         proj.bgm_volume = self._vol_var.get() / 100.0
         proj.caption_size = self._capsize_var.get()
+        proj.kenburns_enabled = bool(self._kenburns_var.get())
         proj.output_path = generate_output_name("shorts", "mp4", self._output_dir.get())
 
         def on_progress(pct, msg):

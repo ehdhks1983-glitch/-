@@ -224,8 +224,48 @@ def drawtext_filter(video_height: int = 480) -> str:
     else:  # br
         x, y = f"w-tw-{margin}", f"h-th-{margin}"
     esc = (txt.replace("\\", "\\\\").replace(":", "\\:")
-           .replace("'", "\\'").replace("%", "\\%"))
+           .replace("'", "\\'").replace("%", "\\%").replace(",", "\\,"))
     bw = max(1, size // 12)
     return (f"drawtext=text='{esc}':fontfile='{_wm_font_path()}':fontsize={size}:"
             f"fontcolor={col}@{opacity:.2f}:borderw={bw}:bordercolor=black@{opacity:.2f}:"
             f"x={x}:y={y}")
+
+
+def video_logo_path() -> Optional[str]:
+    """켄번스 모드에서 영상에 로고 워터마크를 입혀야 하면, 그 로고 이미지 경로를 반환.
+    (텍스트 전용이거나 로고 파일이 없으면 None — ffmpeg 추가 입력이 필요 없음)"""
+    if not watermark.active:
+        return None
+    if watermark.get("mode", "text") not in ("image", "both"):
+        return None
+    p = watermark.get("image_path") or ""
+    return p if p and Path(p).exists() else None
+
+
+def video_logo_overlay(video_w: int, logo_label: str, base_label: str,
+                       out_label: str) -> str:
+    """영상(ffmpeg)용 로고 워터마크 overlay filter_complex 조각.
+
+    logo_label(예: '[2:v]')을 스케일·투명도 적용 후 base_label 영상 위 지정 위치에 올려
+    out_label로 출력한다. 로고가 없으면 '' 반환(이 경우 base_label을 그대로 쓰면 됨).
+    `apply_to_frame`의 PIL 합성과 같은 위치/크기/투명도 규칙을 ffmpeg로 재현한다.
+    """
+    if video_logo_path() is None:
+        return ""
+    scale = max(2, int(watermark.get("scale"))) / 100.0
+    lw = max(1, int(video_w * scale))
+    opacity = max(0, min(100, int(watermark.get("opacity")))) / 100.0
+    margin = max(2, int(video_w * float(watermark.get("margin")) / 100))
+    pos = watermark.get("position", "br")
+    if pos == "tl":
+        x, y = f"{margin}", f"{margin}"
+    elif pos == "tr":
+        x, y = f"main_w-overlay_w-{margin}", f"{margin}"
+    elif pos == "bl":
+        x, y = f"{margin}", f"main_h-overlay_h-{margin}"
+    elif pos == "center":
+        x, y = "(main_w-overlay_w)/2", "(main_h-overlay_h)/2"
+    else:  # br
+        x, y = f"main_w-overlay_w-{margin}", f"main_h-overlay_h-{margin}"
+    return (f"{logo_label}scale={lw}:-1,format=rgba,colorchannelmixer=aa={opacity:.2f}[wm];"
+            f"{base_label}[wm]overlay={x}:{y}{out_label}")
