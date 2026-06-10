@@ -188,6 +188,7 @@ class PayloadBuilder:
             "originalPrice": pricing.original_price,
             "salePrice": pricing.sale_price,
             "maximumBuyCount": str(self.reg.stock_qty),       # 판매 가능 재고
+            # 0 = 인당 구매수량 제한 없음 (쿠팡 공식 예제 값. 첫 실등록 때 WING에서 최종 확인)
             "maximumBuyForPerson": str(self.reg.maximum_buy_for_person),
             "maximumBuyForPersonPeriod": "1",  # 1일
             "outboundShippingTimeDay": self.reg.outbound_shipping_time_day,

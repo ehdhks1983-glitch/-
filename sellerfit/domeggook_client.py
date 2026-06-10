@@ -341,7 +341,8 @@ class DomeggookClient:
         return ""
 
     def download_image(self, url: str, timeout: int = 15) -> Optional[bytes]:
-        """이미지 다운로드 (원본 바이너리)"""
+        """이미지 다운로드 (원본 바이너리).
+        ※ 현재 미사용 — Phase 1 이미지 자체 호스팅(R2)에서 사용 예정이라 유지."""
         try:
             resp = self.session.get(url, timeout=timeout, stream=True)
             if resp.status_code == 200:

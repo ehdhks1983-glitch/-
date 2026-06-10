@@ -208,7 +208,8 @@ class SellerFitService:
 
             # 3. 카테고리
             emit("카테고리 자동 매핑 중...")
-            cat = self.category_mapper.get_category(dome.title, brand=brand)
+            cat = self.category_mapper.get_category(
+                dome.title, dome_category_path=dome.category_path, brand=brand)
             snap.save("04_category", cat)
             if not cat.get("display_category_code"):
                 prepared.error = "카테고리 추천 실패"
