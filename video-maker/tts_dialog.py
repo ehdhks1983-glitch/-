@@ -12,7 +12,8 @@ from pathlib import Path
 import customtkinter as ctk
 
 from config import settings
-from tts_engine import tts_settings, test_elevenlabs
+from tts_engine import (tts_settings, test_elevenlabs, test_edge,
+                        KOREAN_EDGE_VOICES, EDGE_VOICE_NAMES, EDGE_VOICE_IDS)
 
 
 class TTSDialog(ctk.CTkToplevel):
@@ -34,14 +35,37 @@ class TTSDialog(ctk.CTkToplevel):
         f.pack(fill="both", expand=True, padx=12, pady=12)
         pad = {"padx": 14, "pady": (6, 2), "anchor": "w", "fill": "x"}
 
-        ctk.CTkLabel(f, text="자연스러운 AI 음성 (ElevenLabs)",
+        ctk.CTkLabel(f, text="나래이션 음성 설정",
                      font=ctk.CTkFont(size=16, weight="bold")).pack(**pad)
         ctk.CTkLabel(
             f, text="윈도우 기본 음성은 로봇 같아 유튜브엔 약합니다.\n"
-                    "ElevenLabs(월 $5~)를 연결하면 사람 같은 한국어 음성이 됩니다.\n"
-                    "키가 없으면 기본 음성으로 자동 동작해요.",
+                    "Edge(무료)는 사람 같은 한국어 음성을 공짜로 줍니다(인터넷 필요).\n"
+                    "ElevenLabs(월 $5~)는 가장 자연스럽지만 API 키가 필요해요.",
             font=ctk.CTkFont(size=11), text_color="gray60", justify="left").pack(**pad)
 
+        # ── 음성 엔진 선택 (1-2) ──
+        ctk.CTkLabel(f, text="음성 엔진", font=ctk.CTkFont(size=13, weight="bold")).pack(**pad)
+        self._engine_map = {"자동 (추천)": "auto", "Edge (무료)": "edge",
+                            "ElevenLabs": "elevenlabs", "시스템 음성": "system"}
+        self._engine_rev = {v: k for k, v in self._engine_map.items()}
+        self._engine_var = ctk.StringVar(
+            value=self._engine_rev.get(tts_settings.get("engine"), "자동 (추천)"))
+        ctk.CTkOptionMenu(f, values=list(self._engine_map.keys()),
+                          variable=self._engine_var).pack(**pad)
+
+        # ── Edge 한국어 보이스 (무료) ──
+        ctk.CTkLabel(f, text="Edge 한국어 보이스 (무료)",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(**pad)
+        self._edge_names = [n for n, _ in KOREAN_EDGE_VOICES]
+        self._edge_var = ctk.StringVar(
+            value=EDGE_VOICE_IDS.get(tts_settings.get("edge_voice"), self._edge_names[0]))
+        ctk.CTkOptionMenu(f, values=self._edge_names, variable=self._edge_var).pack(**pad)
+        ctk.CTkButton(f, text="🔊 Edge 음성 테스트", height=30,
+                      font=ctk.CTkFont(size=12), fg_color="#16a34a", hover_color="#15803d",
+                      command=self._test_edge).pack(**pad)
+
+        ctk.CTkLabel(f, text="── ElevenLabs (선택, 유료) ──",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(**pad)
         self._use = ctk.BooleanVar(value=tts_settings.get("use_elevenlabs"))
         ctk.CTkSwitch(f, text="ElevenLabs 자연스러운 음성 사용", variable=self._use,
                       font=ctk.CTkFont(size=13, weight="bold")).pack(**pad)
@@ -87,6 +111,9 @@ class TTSDialog(ctk.CTkToplevel):
         return var
 
     def _sync(self):
+        tts_settings.set("engine", self._engine_map.get(self._engine_var.get(), "auto"))
+        tts_settings.set("edge_voice",
+                         EDGE_VOICE_NAMES.get(self._edge_var.get(), "ko-KR-SunHiNeural"))
         tts_settings.set("use_elevenlabs", self._use.get())
         tts_settings.set("api_key", self._key.get().strip())
         tts_settings.set("voice_id", self._voice.get().strip())
@@ -123,4 +150,28 @@ class TTSDialog(ctk.CTkToplevel):
             else:
                 self._status.configure(
                     text="❌ 실패 — API 키/Voice ID 또는 인터넷 연결을 확인하세요", text_color="#ef4444")
+        self.after(0, done)
+
+    def _test_edge(self):
+        self._status.configure(text="🔊 Edge 음성 생성 중... (무료, 인터넷 필요, 몇 초)",
+                               text_color="white")
+        voice = EDGE_VOICE_NAMES.get(self._edge_var.get(), "ko-KR-SunHiNeural")
+        threading.Thread(target=self._run_edge_test, args=(voice,), daemon=True).start()
+
+    def _run_edge_test(self, voice):
+        out_dir = settings.get("output_dir") or str(Path.home())
+        out = os.path.join(out_dir, "voice_test_edge.mp3")
+        r = test_edge(voice, out)
+        def done():
+            if r and Path(r).exists():
+                self._status.configure(text=f"✅ 성공! 들어보세요: {Path(r).name}", text_color="#22c55e")
+                try:
+                    if sys.platform == "win32":
+                        os.startfile(r)
+                except Exception:
+                    pass
+            else:
+                self._status.configure(
+                    text="❌ Edge 실패 — 인터넷 연결을 확인하세요(edge-tts 설치 필요)",
+                    text_color="#ef4444")
         self.after(0, done)

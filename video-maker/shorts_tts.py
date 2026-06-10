@@ -15,27 +15,50 @@ from shorts_common import _run
 
 
 def generate_narration(text: str, out_wav: str) -> Optional[str]:
-    """글 → 음성. ElevenLabs(설정 시) → 시스템 음성(SAPI/espeak) 폴백. 실패 시 None."""
+    """글 → 음성. 엔진 설정에 따라 폴백. 실패 시 None.
+      - auto       : ElevenLabs(키 있을 때) → Edge-TTS → 시스템(SAPI/espeak)
+      - elevenlabs : ElevenLabs → Edge-TTS → 시스템
+      - edge       : Edge-TTS → 시스템
+      - system     : 시스템만
+    Edge-TTS는 무료 고품질이라 시스템 로봇 음성보다 항상 나은 폴백으로 둔다(1-2)."""
     text = (text or "").strip()
     if not text:
         return None
-    # 1) ElevenLabs (자연스러운 음성, 키 설정 시)
     try:
-        from tts_engine import tts_settings, elevenlabs_tts
-        if tts_settings.use_elevenlabs:
+        from tts_engine import tts_settings
+        engine = (tts_settings.get("engine") or "auto").lower()
+    except Exception:
+        engine = "auto"
+    try_el = engine in ("auto", "elevenlabs")
+    try_edge = engine in ("auto", "elevenlabs", "edge")
+
+    # 1) ElevenLabs (자연스러운 음성, 키 설정 시)
+    if try_el:
+        try:
+            from tts_engine import tts_settings as _ts, elevenlabs_tts
+            if _ts.use_elevenlabs:
+                mp3 = str(Path(out_wav).with_suffix(".mp3"))
+                r = elevenlabs_tts(text, mp3)
+                if r:
+                    return r
+        except Exception:
+            pass
+    # 2) Edge-TTS (무료 고품질, 네트워크 필요)
+    if try_edge:
+        try:
+            from tts_engine import edge_tts_synthesize
             mp3 = str(Path(out_wav).with_suffix(".mp3"))
-            r = elevenlabs_tts(text, mp3)
+            r = edge_tts_synthesize(text, mp3)
             if r:
                 return r
-    except Exception:
-        pass
-    # 2) 시스템 음성 폴백 (윈도우 SAPI / espeak)
+        except Exception:
+            pass
+    # 3) 시스템 음성 폴백 (윈도우 SAPI / espeak) → 최후 pyttsx3
     try:
         if sys.platform == "win32":
             return _tts_windows(text, out_wav)
         return _tts_espeak(text, out_wav)
     except Exception:
-        # 최후 폴백: pyttsx3
         try:
             import pyttsx3
             eng = pyttsx3.init()

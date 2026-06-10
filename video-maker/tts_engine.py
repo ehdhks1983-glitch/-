@@ -13,13 +13,24 @@ from config import DATA_DIR
 TTS_FILE = DATA_DIR / "tts.json"
 
 DEFAULTS = {
+    "engine": "auto",      # auto / elevenlabs / edge / system
     "use_elevenlabs": False,
     "api_key": "",
     "voice_id": "",
     "model": "eleven_multilingual_v2",
     "stability": 50,       # %
     "similarity": 75,      # %
+    "edge_voice": "ko-KR-SunHiNeural",   # Edge-TTS 한국어 보이스(무료)
 }
+
+# Edge-TTS 한국어 보이스(무료, 네트워크 필요). 표시명 ↔ 보이스 ID
+KOREAN_EDGE_VOICES = [
+    ("선히 (여성, 표준)", "ko-KR-SunHiNeural"),
+    ("인준 (남성, 표준)", "ko-KR-InJoonNeural"),
+    ("현수 (남성, 멀티)", "ko-KR-HyunsuMultilingualNeural"),
+]
+EDGE_VOICE_NAMES = {name: vid for name, vid in KOREAN_EDGE_VOICES}
+EDGE_VOICE_IDS = {vid: name for name, vid in KOREAN_EDGE_VOICES}
 
 
 class TTSSettings:
@@ -119,3 +130,43 @@ def list_voices(api_key: str) -> List[dict]:
                 for v in data.get("voices", [])]
     except Exception:
         return []
+
+
+# ════════════════════════════════════════
+# Edge-TTS (마이크로소프트 Edge 음성, 무료) — 1-2
+# ════════════════════════════════════════
+def edge_tts_synthesize(text: str, out_mp3: str, voice: str = "") -> Optional[str]:
+    """Edge-TTS로 음성 생성 → mp3. 무료지만 네트워크가 필요. 실패 시 None.
+
+    edge-tts는 비동기(asyncio) API라 동기 래퍼로 감싼다. 메인 GUI 이벤트 루프와
+    충돌하지 않도록 항상 새 이벤트 루프에서 실행한다(보통 백그라운드 스레드에서 호출).
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    voice = (voice or tts_settings.get("edge_voice") or "ko-KR-SunHiNeural").strip()
+    try:
+        import asyncio
+        import edge_tts  # pip install edge-tts
+    except Exception:
+        return None
+
+    async def _go():
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(out_mp3)
+
+    try:
+        Path(out_mp3).parent.mkdir(parents=True, exist_ok=True)
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_go())
+        finally:
+            loop.close()
+        return out_mp3 if Path(out_mp3).exists() and Path(out_mp3).stat().st_size > 0 else None
+    except Exception:
+        return None
+
+
+def test_edge(voice: str, out_mp3: str) -> Optional[str]:
+    """설정 창의 'Edge 음성 테스트' 버튼용 — 샘플 문장으로 생성."""
+    return edge_tts_synthesize("안녕하세요. 무료 에지 음성 테스트입니다.", out_mp3, voice)
