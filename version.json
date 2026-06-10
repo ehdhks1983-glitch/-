@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.103",
-  "build": "1.5.7",
-  "notes": "All-category coverage: redesigned FAQ obvious-question detector (category-neutral, real purchase-anxiety questions like refund/exchange/durability now pass instead of being wrongly flagged)"
+  "version": "v21.8.24.104",
+  "build": "1.5.8",
+  "notes": "Quality #4: image role differentiation (comparison diagram auto-switch, number-hook emphasis, tone alignment) + fix copy-plan/image-flow 1:1 alignment (validated copy was being dropped)"
 }
