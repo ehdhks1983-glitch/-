@@ -257,10 +257,22 @@
       if(cliche.test(all)) violations.push(`섹션${s.num}에 클리셰 표현(첫인상/단정함/비즈니스 무드/깔끔한 인상) — 실제 장면으로 교체`);
       if(escapeRe.test(all)) violations.push(`섹션${s.num}에 도망 문구(확인 필요/상세페이지 참조 류) — 그 항목은 빼고 확인된 내용만`);
       if((s.main && stiffEnding.test(s.main)) || (s.sub && stiffEnding.test(s.sub))) violations.push(`섹션${s.num}에 딱딱한 설명 어미(~제공/가능/도와줍니다 등) — 생활 장면형 구어체로 교체`);
-      // v21.8.24.96: FAQ/TRUST 섹션에 '보면 바로 아는 당연한 질문'이 들어가면 잡는다(후킹 0)
+      // v21.8.24.103: FAQ/TRUST '당연한 질문' 검출을 전체 카테고리 공용으로 재설계.
+      //  - 진짜 구매불안 질문(환불·교환·내구성·부작용·관리·호환 등)은 절대 당연질문으로 보지 않는다(거짓양성 차단).
+      //  - 외형 즉시 확인(색상/디자인/모양/크기 "있나요/인가요")이거나, 제품명 단어를 그대로 되묻는 질문만 '당연'으로 본다.
       if(/FAQ|TRUST/i.test(s.role) || /FAQ|TRUST/i.test(s.point)){
-        const obviousQ = /(고리|손잡이|색상|컬러|접(이|히)|버튼|자동)\s*인가요|있나요|되나요/;
-        s.cards.forEach(c => { if(c.head && obviousQ.test(c.head)) violations.push(`섹션${s.num}(FAQ) 당연한 질문("${c.head}") — 내구성/사용한계/관리/실패경험 같은 진짜 구매불안 질문으로 교체`); });
+        const nameStems = (String(productName || '').match(/[가-힣]{2,}/g) || []).map(t => t.slice(0, 2));
+        const realConcern = /환불|교환|반품|배송|에이에스|보증|보장|내구|얼마나|오래|며칠|고장|망가|부작용|트러블|자극|민감|알러지|호환|세탁|관리|세척|충전|보관|유통|진품|정품|정사이즈|안\s*맞|실패|후회|냄새|소음|무게|두께|호불호/;
+        const obviousAttr = /(색상|컬러|디자인|모양|크기|사이즈)\s*(있|인가|이에|예요|많|다양)/;
+        const echoQ = /(인가요|있나요|맞나요|되나요|일까요|인지)/;
+        s.cards.forEach(c => {
+          const h = String(c.head || '');
+          if(!h || realConcern.test(h)) return;                 // 진짜 불안질문은 통과
+          const hStems = (h.match(/[가-힣]{2,}/g) || []).map(t => t.slice(0, 2));
+          const echoesName = hStems.some(ht => nameStems.includes(ht));
+          if(obviousAttr.test(h) || (echoesName && echoQ.test(h)))
+            violations.push(`섹션${s.num}(FAQ) 당연한 질문("${h}") — 보면 바로 아는 외형/사양 말고 환불·내구성·사용법·부작용·관리 같은 진짜 구매불안 질문으로 교체`);
+        });
       }
       // 4) 길이 초과(여유 포함: 메인16→18, 서브26→30, 헤드8→10, 설명16→20)
       if(s.main && s.main.length > 18) violations.push(`섹션${s.num} 메인 카피가 너무 김(${s.main.length}자, 기준 16자) — 짧게`);

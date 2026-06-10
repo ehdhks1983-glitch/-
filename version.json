@@ -1,5 +1,5 @@
 {
-  "version": "v21.8.24.102",
-  "build": "1.5.6",
-  "notes": "Reference placeholder bug fix (reject [image-answer] junk, auto-clean persisted) + category-neutral examples in tone/planning rules and validator messages"
+  "version": "v21.8.24.103",
+  "build": "1.5.7",
+  "notes": "All-category coverage: redesigned FAQ obvious-question detector (category-neutral, real purchase-anxiety questions like refund/exchange/durability now pass instead of being wrongly flagged)"
 }
