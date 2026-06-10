@@ -370,7 +370,8 @@ class SellerFitService:
 
             if not resp.is_success:
                 result["error"] = resp.error_summary
-                emit(f"❌ 등록 실패: {resp.error_summary}")
+                emit(f"❌ 등록 실패: {resp.friendly_message}")
+                emit(f"   (상세: {resp.error_summary})")
                 if snap:
                     snap.finalize(status="failed_create", summary=result)
                 return result
@@ -393,7 +394,8 @@ class SellerFitService:
                 if ap.is_success:
                     emit("✅ 승인 요청 완료")
                 else:
-                    emit(f"⚠️ 승인 요청 실패 (등록은 됨): {ap.error_summary}")
+                    emit(f"⚠️ 승인 요청 실패 (등록은 됨): {ap.friendly_message} "
+                         f"/ 상세: {ap.error_summary}")
 
             result["ok"] = True
             if snap:

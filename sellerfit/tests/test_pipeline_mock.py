@@ -291,6 +291,25 @@ def test_mode_defaults():
 
 
 # ═══════════════════════════════════════════════════════════════
+# 8) 에러 메시지 한글화 (F-03)
+# ═══════════════════════════════════════════════════════════════
+def test_friendly_errors():
+    section("8) 에러 메시지 한글화 (F-03)")
+    check("401 → 키 인증 안내",
+          "인증" in WingResponse(401, {"code": "UNAUTHORIZED"}).friendly_message)
+    check("429 → 호출 한도 안내",
+          "한도" in WingResponse(429, {}).friendly_message)
+    m400 = WingResponse(400, {"code": "ERROR",
+                              "message": "필수 구매옵션 누락"}).friendly_message
+    check("400 → 쿠팡 원문 메시지 포함", "필수 구매옵션 누락" in m400, m400)
+    check("5xx → 서버 문제 안내", "서버" in WingResponse(503, {}).friendly_message)
+    check("timeout → 재시도 안내",
+          "다시" in WingResponse(0, {"error": "timeout"}).friendly_message)
+    check("성공 → 빈 문자열",
+          WingResponse(200, {"code": "SUCCESS", "data": {}}).friendly_message == "")
+
+
+# ═══════════════════════════════════════════════════════════════
 # 러너
 # ═══════════════════════════════════════════════════════════════
 def main():
@@ -305,6 +324,7 @@ def main():
     test_center_selection()
     test_recompute(product)
     test_mode_defaults()
+    test_friendly_errors()
 
     total = len(_RESULTS)
     passed = sum(_RESULTS)

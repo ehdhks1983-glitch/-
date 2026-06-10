@@ -80,6 +80,31 @@ class WingResponse:
         msg = self.body.get("message", "")
         return f"[{self.status_code}] code={code} message={msg}"
 
+    @property
+    def friendly_message(self) -> str:
+        """비개발자용 한글 에러 안내 (8대 원칙: 에러는 사람 말로). 성공이면 빈 문자열."""
+        if self.is_success:
+            return ""
+        msg = self.body.get("message", "") if isinstance(self.body, dict) else ""
+        if self.status_code == 0:
+            err = str(self.body.get("error", "")) if isinstance(self.body, dict) else ""
+            if "timeout" in err:
+                return "쿠팡 서버 응답이 늦어요. 잠시 후 다시 시도해 주세요."
+            if "미설정" in err:
+                return "쿠팡 API 키가 비어 있어요. .env 파일을 확인해 주세요."
+            return "쿠팡 서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요."
+        if self.status_code == 401:
+            return "쿠팡 API 키 인증에 실패했어요. Access Key/Secret Key를 확인해 주세요."
+        if self.status_code == 403:
+            return "권한이 없어요. WING에서 OpenAPI 사용 권한을 확인해 주세요."
+        if self.status_code == 429:
+            return "쿠팡 호출 한도를 초과했어요. 1분 뒤 다시 시도해 주세요."
+        if self.status_code == 400:
+            return f"쿠팡이 입력값을 거부했어요: {msg or '입력 정보를 확인해 주세요'}"
+        if 500 <= self.status_code < 600:
+            return "쿠팡 서버에 일시적인 문제가 있어요. 잠시 후 다시 시도해 주세요."
+        return f"쿠팡 오류({self.status_code}): {msg or '알 수 없는 오류'}"
+
 
 # ═══════════════════════════════════════════════════════════════
 # 클라이언트
