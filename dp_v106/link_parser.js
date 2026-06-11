@@ -391,6 +391,11 @@
     try { return new URL(src, base).href; } catch (_) { return src; }
   }
 
+  // v21.8.24.107: 수치 문자참조 디코딩을 fromCharCode → 코드포인트 기반으로 교체.
+  // BMP 밖 문자(이모지 등, U+10000 이상)가 깨지던 문제 수정. 유효 범위 밖 값은 무시한다.
+  function decodeNumericRef(n) {
+    return (Number.isFinite(n) && n >= 0 && n <= 0x10FFFF) ? String.fromCodePoint(n) : '';
+  }
   function decodeEntity(s) {
     if (!s) return '';
     return String(s)
@@ -399,8 +404,8 @@
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&#39;|&apos;/g, "'")
-      .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
-      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)));
+      .replace(/&#x([0-9a-f]+);/gi, (_, h) => decodeNumericRef(parseInt(h, 16)))
+      .replace(/&#(\d+);/g, (_, n) => decodeNumericRef(parseInt(n, 10)));
   }
 
   // v21.8.24.39: 해외(외국어) 소스 판별 — 번역/현지화 필요 여부 판단에 사용

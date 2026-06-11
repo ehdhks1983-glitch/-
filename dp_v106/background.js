@@ -16,10 +16,12 @@ chrome.action.onClicked.addListener(async (tab) => {
   } catch (e) {
     try {
       await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['styles.css'] });
-      // v21.8.13: content.js만 주입하던 버그 수정. 동적 프롬프트 생성기/분석기 모듈도 같이 주입.
+      // v21.8.24.107: 동적 주입 목록을 manifest content_scripts와 1:1 동일하게 유지.
+      // (v21.8.13에서 한 번 고쳤지만 이후 추가된 gif_encoder/zip_store/template_store/fix_panel이
+      //  빠져 있어, 이 경로로 주입되면 움짤·ZIP 내보내기·템플릿·고치기 패널이 동작하지 않던 문제 수정.)
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ['product_analyzer.js', 'prompt_short_dynamic.js', 'content.js']
+        files: ['product_analyzer.js', 'prompt_short_dynamic.js', 'gif_encoder.js', 'zip_store.js', 'content.js', 'template_store.js', 'fix_panel.js']
       });
     } catch (err) {
       console.error('AI 상세페이지 디렉터 주입 실패:', err);

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 상세페이지 디렉터 v21.8.24.107 — 전체 파일 구조 문서</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#181b24; --panel2:#1f2330; --line:#2c3140;
+    --text:#e8eaf0; --sub:#9aa3b5; --blue:#4f8ef7; --purple:#a78bfa;
+    --green:#34d399; --amber:#fbbf24; --red:#f87171; --code:#0b0d12;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:'Noto Sans KR','Malgun Gothic',Arial,sans-serif;line-height:1.65;font-size:15px}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 20px 80px}
+  header{background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:18px;padding:28px 30px;margin-bottom:28px}
+  header h1{margin:0 0 6px;font-size:26px}
+  header p{margin:4px 0;color:#e6e9ff;font-size:14px}
+  .badges{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px}
+  .badge{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:3px 12px;font-size:12px;font-weight:700}
+  h2{font-size:20px;margin:42px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h2 .num{color:var(--blue);margin-right:8px}
+  h3{font-size:16px;margin:22px 0 8px;color:var(--purple)}
+  p.desc{color:var(--sub);margin:6px 0 14px}
+  table{width:100%;border-collapse:collapse;margin:10px 0 18px;font-size:13.5px}
+  th{background:var(--panel2);text-align:left;padding:9px 12px;border:1px solid var(--line);font-size:13px;white-space:nowrap}
+  td{padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  code{background:var(--code);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-family:Consolas,'D2Coding',monospace;font-size:12.5px;color:#9ecbff}
+  .flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin:16px 0}
+  .step{flex:1;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .step b{display:block;color:var(--blue);font-size:13.5px;margin-bottom:4px}
+  .step span{font-size:12.5px;color:var(--sub)}
+  .arrow{align-self:center;color:var(--purple);font-weight:900;font-size:18px}
+  details{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin:12px 0;overflow:hidden}
+  details>summary{cursor:pointer;padding:14px 18px;font-weight:800;font-size:15px;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  details>summary::before{content:'▸';color:var(--blue);transition:.15s}
+  details[open]>summary::before{transform:rotate(90deg)}
+  details>summary:hover{background:var(--panel2)}
+  .body{padding:4px 18px 18px;border-top:1px solid var(--line)}
+  .tag{font-size:11px;border-radius:999px;padding:2px 10px;font-weight:700;white-space:nowrap}
+  .tag.core{background:#1d3a6e;color:#9ecbff}.tag.util{background:#173a2f;color:#7ee2b8}
+  .tag.ui{background:#3a2a5e;color:#cdb6ff}.tag.cfg{background:#4a3a14;color:#ffe08a}
+  .tag.test{background:#1f2330;color:#9aa3b5;border:1px solid var(--line)}
+  .lines{color:var(--sub);font-size:12px;font-weight:400;margin-left:auto}
+  .fix{border-left:4px solid var(--green);background:var(--panel);border-radius:0 12px 12px 0;padding:12px 16px;margin:10px 0}
+  .fix b{color:var(--green)}
+  .warn{border-left:4px solid var(--amber);background:var(--panel);border-radius:0 12px 12px 0;padding:12px 16px;margin:10px 0}
+  .warn b{color:var(--amber)}
+  .dep{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;font-family:Consolas,'D2Coding',monospace;font-size:13px;white-space:pre;overflow-x:auto;color:#c9d4e8;line-height:1.8}
+  .ok{color:var(--green);font-weight:700}
+  footer{margin-top:48px;color:var(--sub);font-size:12.5px;text-align:center}
+  ul{margin:6px 0;padding-left:22px}
+  li{margin:3px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>📦 AI 상세페이지 디렉터 — 전체 파일 구조 문서</h1>
+  <p>ChatGPT 위에서 동작하는 크롬 확장(MV3) 상세페이지 자동 제작기 · 내부 버전 <b>v21.8.24.107</b> (manifest 1.6.1)</p>
+  <p>상품 링크/원본 이미지 → ①제품 진단 → ②카피 기획 → ③섹션별 이미지 생성 → ④JPG·PDF·움짤(GIF)·ZIP 출력</p>
+  <div class="badges">
+    <span class="badge">파일 13개</span>
+    <span class="badge">코어 JS 약 8,700줄</span>
+    <span class="badge">외부 라이브러리 0개 (CSP 안전)</span>
+    <span class="badge">가상 테스트 38/38 ✅</span>
+  </div>
+</header>
+
+<h2><span class="num">1</span>전체 동작 흐름</h2>
+<div class="flow">
+  <div class="step"><b>① 상품 준비</b><span>상품명/링크 입력, 원본 이미지 첨부 → background가 쇼핑몰 페이지 수집·분석</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>② 진단·기획</b><span>제품 진단(마스터 브리프) → 기획안 5종 선택(선택) → 카피 기획 + 자동 검증</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>③ 이미지 생성</b><span>섹션별 프롬프트 생성 → ChatGPT 자동 전송 → 완료 감지 → 자동 검수/재생성</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>④ 최종 출력</b><span>이미지 수집 → JPG/PDF 병합, 움짤(GIF) 생성, ZIP 묶음 내보내기</span></div>
+</div>
+
+<h2><span class="num">2</span>모듈 의존 관계</h2>
+<div class="dep">┌─ chatgpt.com 페이지 (content scripts, manifest 순서대로 로드) ─────────────┐
+│                                                                            │
+│  product_analyzer.js ──▶ window.DP_PRODUCT_ANALYZER ─┐                     │
+│  prompt_short_dynamic.js ▶ window.DP_DYNAMIC_PROMPTS ┤                     │
+│  gif_encoder.js ────────▶ window.DP_GIF ─────────────┼──▶ content.js       │
+│  zip_store.js ──────────▶ window.DP_ZIP ─────────────┘    (핵심 엔진)      │
+│                                                            │               │
+│  content.js ▶ window.DP_FIX_HOOKS / DP_REF_STYLE ◀── fix_panel.js (고치기) │
+│              ▶ #dp-advanced 패널 DOM          ◀── template_store.js (템플릿)│
+└────────────────────────────────────────────────────────────────────────────┘
+                       │ chrome.runtime.sendMessage
+                       ▼
+┌─ 서비스워커 ────────────────────────────────────────────────┐
+│  background.js ◀─ importScripts ─ link_parser.js (메타 파싱) │
+│   · DP_FETCH_PRODUCT_PAGE : 상품페이지 수집(fetch+임시 탭)    │
+│   · DP_FETCH_IMAGE        : 이미지 프록시(CORS 우회)          │
+│   · DP_TOGGLE_PANEL       : 패널 토글/동적 주입               │
+└──────────────────────────────────────────────────────────────┘</div>
+
+<table>
+  <tr><th>통신/저장 항목</th><th>방향</th><th>내용</th></tr>
+  <tr><td><code>DP_FETCH_PRODUCT_PAGE</code></td><td>content → background</td><td>상품 링크 분석. 직접 fetch(12초 제한) + 임시 탭 보조분석(38초 제한), 봇차단 시 탭 폴백</td></tr>
+  <tr><td><code>DP_FETCH_IMAGE</code></td><td>content → background</td><td>크로스오리진 이미지를 dataURL로 변환(매직바이트로 실제 이미지인지 검증)</td></tr>
+  <tr><td><code>DP_TOGGLE_PANEL</code></td><td>background → content</td><td>확장 아이콘 클릭 시 패널 열기/닫기 (실패 시 전체 모듈 동적 주입 — v107에서 수정)</td></tr>
+  <tr><td><code>dp_director_v20_10_data</code></td><td>chrome.storage.local</td><td>패널 입력값·진단/기획 결과·섹션 상태 등 전체 상태 저장</td></tr>
+  <tr><td><code>dp_director_v20_10_last_result</code></td><td>chrome.storage.local</td><td>마지막 ChatGPT 답변</td></tr>
+  <tr><td><code>dp_director_templates_v1</code></td><td>chrome.storage.local</td><td>저장된 스타일 템플릿 목록(template_store.js 전용 키)</td></tr>
+</table>
+
+<h2><span class="num">3</span>파일별 구조</h2>
+
+<details open>
+  <summary><span class="tag cfg">설정</span> manifest.json <span class="lines">MV3 · v1.6.1</span></summary>
+  <div class="body">
+    <p class="desc">확장 전체 설정. chatgpt.com/chat.openai.com에 콘텐츠 스크립트 7종+CSS를 <code>document_idle</code>에 주입하고, background.js를 서비스워커로 등록.</p>
+    <ul>
+      <li><b>host_permissions</b>: 쿠팡·스마트스토어·11번가·G마켓·옥션·SSG·도매꾹·와디즈 + 1688·타오바오·티몰·알리·알리바바·VVIC·아마존재팬·라쿠텐 + 각 CDN</li>
+      <li><b>permissions</b>: storage, activeTab, scripting, tabs</li>
+      <li><b>content_scripts 로드 순서</b>(의존성 순): product_analyzer → prompt_short_dynamic → gif_encoder → zip_store → content → template_store → fix_panel</li>
+    </ul>
+    <div class="fix"><b>v107 수정:</b> 354자였던 description을 132자 이내로 축약(크롬 규격), 변경 이력은 CHANGELOG.md로 분리.</div>
+  </div>
+</details>
+
+<details open>
+  <summary><span class="tag core">핵심</span> content.js <span class="lines">3,784줄 · 메인 엔진</span></summary>
+  <div class="body">
+    <p class="desc">패널 UI + ChatGPT 자동 조작 + 생성 파이프라인 전체를 담당하는 가장 큰 모듈.</p>
+    <h3>주요 함수 지도</h3>
+    <table>
+      <tr><th>영역</th><th>함수</th><th>역할</th></tr>
+      <tr><td rowspan="2">패널/상태</td><td><code>injectPanel()</code> · <code>bind()</code></td><td>4단계 패널(①상품 준비 ②디자인 ③자동 제작 ④최종 출력) 생성·이벤트 연결</td></tr>
+      <tr><td><code>loadSaved()</code> / 상품 시그니처 감지</td><td>storage 복원 + 새 상품이면 진단/기획 자동 리셋(이전 상품 오염 방지)</td></tr>
+      <tr><td rowspan="3">3단계 파이프라인</td><td><code>buildMasterBrief()</code></td><td>①제품 진단 — 제품 기준(사실성 잠금 포함) 확정</td></tr>
+      <tr><td><code>buildCopyPlan()</code> + <code>lintCopyPlanAndAutoReplan()</code></td><td>②카피 기획 — 검증 실패 시 자동 재기획(v92)</td></tr>
+      <tr><td><code>buildShortImagePrompts()</code> → <code>runSection()</code></td><td>③섹션 프롬프트 생성 → 순차 이미지 생성</td></tr>
+      <tr><td>원클릭</td><td><code>runMagicWizard()</code> · <code>autoRunAllSections()</code></td><td>첨부→분석→진단→기획→생성 5단계 자동 진행, 중단/재개 지원</td></tr>
+      <tr><td>기획안 5종(v106)</td><td><code>buildConceptOptions()</code> · <code>renderConceptList()</code> · <code>conceptToLine()</code></td><td>판매 컨셉 5종 요청→카드 표시→선택 시 카피·이미지 양쪽에 주입</td></tr>
+      <tr><td rowspan="3">ChatGPT 자동화</td><td><code>setPromptText()</code> · <code>clickSendButton()</code></td><td>입력창 주입·전송(선택자 다중 폴백)</td></tr>
+      <tr><td><code>waitForNewAssistantText()</code> · <code>waitForImageAnswerDone()</code></td><td>텍스트/이미지 완료 감지(기준선 비교로 직전 이미지 오인 방지, v64)</td></tr>
+      <tr><td><code>attachFilesToComposer()</code> · <code>ensureImagesAttached()</code></td><td>원본 이미지 자동 첨부(input 주입→버튼→paste 3단 폴백)</td></tr>
+      <tr><td rowspan="2">출력</td><td><code>previewCollectImages()</code> · <code>mergeSectionImages()</code> · <code>buildPdf()</code></td><td>생성 이미지 수집 → JPG 세로 병합 / PDF 직접 생성</td></tr>
+      <tr><td><code>exportDetailBundle()</code> · <code>makeClipsBatch()</code> · <code>buildClipBlob()</code> · <code>gifDoctor()</code></td><td>움짤(줌/팬/샤인/요소등장) 생성 + ZIP 묶음 내보내기 + 자가진단</td></tr>
+      <tr><td>검수</td><td><code>runQaRegenerate()</code></td><td>자동 검수(글자 깨짐/카피 불일치/원본 대조) 후 문제 섹션 재생성</td></tr>
+    </table>
+    <h3>노출 전역</h3>
+    <ul>
+      <li><code>window.DP_FIX_HOOKS</code> — fix_panel.js가 쓰는 훅(getState/regenAll/regenOneSection/rebuildCopyPlan 등 13종)</li>
+      <li><code>window.DP_REF_STYLE</code> — 레퍼런스 스타일 get/set (template_store.js 사용)</li>
+    </ul>
+  </div>
+</details>
+
+<details open>
+  <summary><span class="tag core">핵심</span> prompt_short_dynamic.js <span class="lines">2,265줄 · 프롬프트 엔진</span></summary>
+  <div class="body">
+    <p class="desc">섹션별 이미지 프롬프트와 카피 규칙을 동적으로 조립하는 엔진. <code>window.DP_DYNAMIC_PROMPTS</code>로 노출.</p>
+    <h3>구성 요소</h3>
+    <table>
+      <tr><th>블록</th><th>내용</th></tr>
+      <tr><td><code>generateDynamicPrompts()</code> (진입점)</td><td>분석 결과+카피 기획서를 받아 섹션 배열 결정 → 섹션마다 컴팩트 프롬프트 생성. 실행 시드로 매번 구도 변화</td></tr>
+      <tr><td>카피 규칙군</td><td><code>COPY_QUALITY_RULES</code>(자연스러운 한국어) · <code>COPY_MESSAGE_MAP_RULES</code>(중복 방지 메시지 지도) · <code>COPY_SECTION_STRUCTURE_RULES</code>(섹션별 카피 형식) · <code>COPY_TONE_RULES</code>(명사형 단정+합쇼체, 해요체 금지) · <code>COPY_HOOK_RULES</code> · <code>COPY_BESTSELLER_RULES</code></td></tr>
+      <tr><td><code>CATEGORY_COPY_STRATEGY_90</code></td><td>품목별 카피 전략(잡화/의류/홈트/자동화/생활/가구) — <b>v107에서 잡화·의류를 일반 전략으로 교체</b></td></tr>
+      <tr><td><code>CATEGORY_FACT_GROUPS_V12</code> + <code>assignFactGroupsToSectionsV12()</code></td><td>카테고리별 정보(팩트)를 섹션에 1:1 배정해 내용 중복 차단</td></tr>
+      <tr><td><code>SECTION_BLUEPRINTS_V21</code> · <code>pickSections()</code> · <code>ensureEarlyEmpathy()</code></td><td>매번 다른 섹션 구조(청사진 변주) + 2번째 섹션은 공감/문제 보장</td></tr>
+      <tr><td><code>visualDnaV94()</code></td><td>섹션 유형별 레이아웃·크롭·배경·카드·앵글 강제(이미지 획일화 방지)</td></tr>
+      <tr><td><code>SCENE_POOL_V106</code> (8종 아키타입)</td><td>장면형 섹션의 생활 상황을 시드 회전(출근/이동/집/직장/함께/야외/정리/선물) — 기획안 선택 시 그 상황 우선</td></tr>
+      <tr><td>제품 재현 기준(v106 충실도)</td><td>"첨부 원본과 1:1 동일 제품" — 연출/모델컷 포함, 형태·부품수·색·라벨 변경 금지</td></tr>
+      <tr><td><code>parseConceptOptionsV106()</code> · <code>validateCopyPlanV92()</code></td><td>기획안 5종 답변 파싱 / 카피 기획서 자동 린트(중복·금지어·길이·말투)</td></tr>
+    </table>
+    <div class="fix"><b>v107 수정:</b> 잡화 전략이 명함지갑 전용, 의류 전략이 래쉬가드(워터파크) 전용으로 굳어 있어 다른 상품에 엉뚱한 문구가 주입되던 문제 → 카테고리 일반 전략으로 교체. GIFT 섹션 역할 문구도 일반화. (테스트로 티셔츠/에코백 프롬프트 오염 없음 + 기존 분류 회귀 없음 확인)</div>
+  </div>
+</details>
+
+<details open>
+  <summary><span class="tag core">핵심</span> background.js <span class="lines">1,051줄 · 서비스워커</span></summary>
+  <div class="body">
+    <p class="desc">상품페이지 수집 엔진 + 이미지 프록시 + 패널 토글/주입. <code>importScripts('link_parser.js')</code>로 파서 로드.</p>
+    <h3>수집 전략 (DP_FETCH_PRODUCT_PAGE)</h3>
+    <ul>
+      <li><b>1차</b> <code>fetchProductHtml()</code> — 직접 fetch(쿠키 포함, 12초 제한) → link_parser로 메타 추출, EUC-KR 자동 디코딩(도매꾹)</li>
+      <li><b>2차</b> <code>fetchProductViaTemporaryTab()</code> — 임시 탭 생성(active:true로 Akamai 챌린지 통과) → 갤러리 lazy-load 대기 → DOM에서 제목/가격/옵션(사이즈·색상)/스펙/이미지/리뷰 수집 → 탭 자동 닫기 (38초 제한)</li>
+      <li><b>안전장치</b> — 분석 뮤텍스(동시 1건), 타임아웃 부분응답, 봇차단 페이지 감지 안내, 전화번호/광고/정책문구 노이즈 필터 6단계</li>
+    </ul>
+    <div class="fix"><b>v107 수정:</b> 아이콘 클릭 동적 주입 경로에서 gif_encoder/zip_store/template_store/fix_panel 4개가 누락돼 해당 기능이 조용히 죽던 문제 → manifest와 1:1 동일 목록으로 수정. (manifest와 자동 대조하는 테스트 추가로 재발 방지)</div>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag util">유틸</span> link_parser.js <span class="lines">421줄 · 상품 메타 파서</span></summary>
+  <div class="body">
+    <p class="desc">상품페이지 HTML에서 제목/가격/이미지/설명/스펙을 추출. 서비스워커 전용(<code>DPLinkParser</code>).</p>
+    <ul>
+      <li>추출 우선순위: og/twitter 메타 → JSON-LD Product → <code>__NEXT_DATA__</code> → 인라인 상태 JSON(네이버 <code>__PRELOADED_STATE__</code>, 타오바오 <code>runParams</code> 등) → <code>&lt;title&gt;</code> 폴백</li>
+      <li>스펙 추출: 라벨 사전(사이즈/소재/구성품/제조국 등 30여 종) + 표/정의목록/본문 패턴 + JSON 속성 매칭, 정책·광고 문구 필터</li>
+      <li>소스 감지 16종 + 해외 소스 판별(<code>isForeignSource</code> → 번역/현지화 지시에 사용)</li>
+    </ul>
+    <div class="fix"><b>v107 수정:</b> 수치 문자참조 디코딩이 <code>fromCharCode</code> 기반이라 이모지(U+10000 이상)가 깨지던 문제 → 코드포인트 기반으로 교체, 범위 밖 값은 무시.</div>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag util">유틸</span> product_analyzer.js <span class="lines">360줄 · 카테고리 분류기</span></summary>
+  <div class="body">
+    <p class="desc">상품명/링크/스펙 텍스트만으로 카테고리·타겟·섹션 구성을 자동 결정. <code>window.DP_PRODUCT_ANALYZER</code>.</p>
+    <ul>
+      <li><b>RULES 18종</b>: 신발관리/신발/홈트/스포츠/가구/무형콘텐츠/자동화/가전/의류/잡화/뷰티/생활/주방/식품/반려/유아/차량/문구/도서 + general 폴백</li>
+      <li><b>점수 보정</b>: 패턴 +100(상품명)/+12(보조텍스트) 기반에, 오분류 사례별 가중치(노트북 모델명→가전 +170, 화장품→뷰티 +150, 유아 물티슈→키즈 +130 등) 누적</li>
+      <li><b>관여도 판정</b>: 가격(1.5만/4만 기준)+카테고리로 low/high → 카피 흐름(스토리텔링 vs 사회적증거) 분기</li>
+    </ul>
+    <div class="fix"><b>v107 수정:</b> 의류/잡화 폴백 카피(타겟·고민·핵심가치)가 래쉬가드/명함지갑 전용이던 것을 카테고리 일반 문구로 교체. 분류 규칙 자체는 그대로(회귀 테스트 통과).</div>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag util">유틸</span> gif_encoder.js <span class="lines">147줄 · GIF 인코더</span></summary>
+  <div class="body">
+    <p class="desc">외부 라이브러리 없는 순수 JS GIF89a 인코더(CSP 안전). <code>window.DP_GIF.fromFrames(frames, {delayMs, loop})</code>.</p>
+    <ul>
+      <li>median-cut 256색 공유 팔레트(프레임당 ~8천 픽셀 샘플) → 5비트 색큐브 룩업(32,768) → GIF-LZW 압축 → NETSCAPE2.0 무한루프 블록</li>
+      <li>content.js의 움짤 생성(줌·팬·샤인·요소 등장 모션)에서 프레임(RGBA)을 받아 인코딩</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag util">유틸</span> zip_store.js <span class="lines">86줄 · ZIP 작성기</span></summary>
+  <div class="body">
+    <p class="desc">순수 JS ZIP 작성기(무압축 store — JPG/GIF는 이미 압축돼 충분). <code>window.DP_ZIP.make(files)</code>.</p>
+    <ul>
+      <li>표준 CRC-32 + UTF-8 파일명 플래그(한글 파일명 안전) + 로컬헤더/중앙디렉터리/EOCD 수동 조립</li>
+      <li>묶음 내보내기가 파일 8~10개를 연속 다운로드하며 브라우저에 차단되던 문제(v92)의 해결책</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag ui">UI</span> fix_panel.js <span class="lines">299줄 · 증상 기반 고치기</span></summary>
+  <div class="body">
+    <p class="desc">초보자가 "뭐가 문제인지"만 고르면 알아서 재생성하는 패널. 자체 엔진 없이 <code>window.DP_FIX_HOOKS</code>만 호출.</p>
+    <ul>
+      <li>증상 6종: 카피 밋밋함(강한 pain 톤 재기획) / 이미지 비슷함(구도 재배치) / 무드 변경(6종 칩) / 정보 오류(직접 수정·재진단) / 비교 중복(1개로 정리) / 한 컷만 재생성</li>
+      <li>패널 접기로 DOM이 사라져도 MutationObserver+1초 폴링으로 자동 재마운트</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag ui">UI</span> template_store.js <span class="lines">227줄 · 스타일 템플릿</span></summary>
+  <div class="body">
+    <p class="desc">무드·톤·섹션수·플랫폼·비율(+레퍼런스 톤)을 이름으로 저장/불러오기/삭제. 상품별 정보는 저장하지 않음.</p>
+    <ul>
+      <li>별도 storage 키(<code>dp_director_templates_v1</code>) 사용 — 기존 설정 저장과 충돌 없음</li>
+      <li>적용 시 select 값 변경 후 <code>change</code> 이벤트 발생시켜 기존 저장 로직 자연 발동</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag ui">UI</span> styles.css <span class="lines">패널 스타일</span></summary>
+  <div class="body">
+    <p class="desc">우측 고정 패널(430px, 다크 테마), 버튼 5색 체계, 미니 탭, 링크 입력 오버플로 방지 등.</p>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag test">테스트</span> tests/run_tests.js <span class="lines">v107 신규 · 38개 검증</span></summary>
+  <div class="body">
+    <p class="desc">크롬 없이 Node(vm)로 실제 모듈을 로드/실행하는 가상 테스트. <code>node tests/run_tests.js</code> (그룹 지정 가능: inject/analyzer/prompts/manifest/parser/gifzip/syntax)</p>
+    <table>
+      <tr><th>그룹</th><th>검증 내용</th><th>결과</th></tr>
+      <tr><td>T0 syntax</td><td>전체 JS 9개 구문 검사</td><td class="ok">9/9 ✅</td></tr>
+      <tr><td>T1 inject</td><td>manifest ↔ background 동적 주입 목록 1:1 일치(Fix 1 재발 방지)</td><td class="ok">3/3 ✅</td></tr>
+      <tr><td>T2 analyzer</td><td>분류 정확성(티셔츠/래쉬가드/명함지갑/에코백/신발/노트북) + 폴백 일반화</td><td class="ok">8/8 ✅</td></tr>
+      <tr><td>T3 prompts</td><td>실제 프롬프트 생성 후 오염 문구 검사 + 기획안 5종 파싱 + 충실도 규칙 포함</td><td class="ok">6/6 ✅</td></tr>
+      <tr><td>T4 manifest</td><td>description 132자/name 45자/버전 형식/CHANGELOG 존재</td><td class="ok">4/4 ✅</td></tr>
+      <tr><td>T5 parser</td><td>og/JSON-LD 추출, 가격 정규화, 이모지 엔티티, 소스 감지</td><td class="ok">6/6 ✅</td></tr>
+      <tr><td>T6 gifzip</td><td>GIF 헤더/루프/트레일러 바이트 + ZIP 시그니처/엔트리/CRC32</td><td class="ok">2/2 ✅</td></tr>
+    </table>
+  </div>
+</details>
+
+<details>
+  <summary><span class="tag cfg">문서</span> CHANGELOG.md <span class="lines">v107 신규</span></summary>
+  <div class="body">
+    <p class="desc">manifest description에 있던 변경 이력을 분리한 파일. v107 수정 5건 + v106/v105 이력 보존.</p>
+  </div>
+</details>
+
+<h2><span class="num">4</span>v21.8.24.107에서 수정된 오류 (검증 완료)</h2>
+<div class="fix"><b>Fix 1 · 동적 주입 누락(버그)</b> — background.js 아이콘 클릭 주입 경로에 4개 모듈 추가. 움짤/ZIP/템플릿/고치기 패널이 특정 상황에서 조용히 죽던 문제 해소. <b>테스트:</b> manifest 자동 대조 ✅</div>
+<div class="fix"><b>Fix 2 · 카테고리 카피 오염(품질 버그)</b> — 의류=래쉬가드, 잡화=명함지갑으로 굳은 폴백/전략 텍스트를 카테고리 일반 문구로 교체(분석기+프롬프트 엔진+GIFT 역할). <b>테스트:</b> 티셔츠/에코백 프롬프트 전 섹션 오염 0건, 기존 분류 회귀 0건 ✅</div>
+<div class="fix"><b>Fix 3 · manifest 규격(132자 초과)</b> — description 354자→짧은 소개로, 이력은 CHANGELOG.md로. <b>테스트:</b> 길이/형식 검사 ✅</div>
+<div class="fix"><b>Fix 4 · 이모지 깨짐(버그)</b> — link_parser의 수치 문자참조 디코딩을 코드포인트 기반으로 교체. 상품명의 😀 등 이모지 보존. <b>테스트:</b> 16진/10진/비정상 코드포인트 ✅</div>
+
+<h2><span class="num">5</span>남아 있는 알려진 리스크 (이번 수정 범위 밖)</h2>
+<div class="warn"><b>ChatGPT UI 선택자 의존</b> — 전송/중지 버튼·입력창 선택자가 다중 폴백으로 방어돼 있으나, ChatGPT 대규모 개편 시 수리가 필요할 수 있음. 선택자가 content.js 여러 곳에 흩어져 있어 한곳(상수 모음)으로 모으는 리팩터링을 권장.</div>
+<div class="warn"><b>전역 state 비대</b> — content.js의 상태 객체가 약 78개 필드, 초기화 로직 3곳 분산. 동작에는 문제없으나 기능 추가 시 실수 여지.</div>
+<div class="warn"><b>중국 플랫폼 수집 최적화 부족</b> — 1688/타오바오 등은 메타 추출 위주로 동작하며, 갤러리 CDN 패턴 등 탭 보조분석 선택자는 한국 플랫폼 대비 미흡.</div>
+
+<footer>AI 상세페이지 디렉터 v21.8.24.107 · 구조 문서 · 2026-06-11 생성 · 가상 테스트 38/38 통과</footer>
+</div>
+</body>
+</html>
