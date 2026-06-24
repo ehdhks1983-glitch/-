@@ -4,8 +4,8 @@
 
 import { NextResponse } from "next/server";
 import { currentOwner } from "@/lib/auth";
-import { getBalance } from "@/lib/billing";
-import { POINTS } from "@/lib/config/points";
+import { chargePoints, getBalance } from "@/lib/billing";
+import { POINTS, USAGE_ACTION } from "@/lib/config/points";
 import { createLogger } from "@/lib/log";
 import { generateChannel } from "@/lib/pipeline/channels";
 import { strList, sanitizeLine } from "@/lib/pipeline/sanitize";
@@ -70,8 +70,20 @@ export async function POST(req: Request, ctx: Ctx) {
       content: result.content,
       ai_cost_usd: result.costUsd,
     });
-    log.info("채널 재생성", { id, channel, variant_no });
-    return NextResponse.json({ channel, variant_no, content: result.content });
+
+    // 차감 2P (§12.5, 생성 성공 후 — 실패엔 과금 X). 동일 원자 처리.
+    const charge = await chargePoints({
+      owner: owner as string,
+      points: POINTS.CHANNEL_REGEN,
+      action: USAGE_ACTION.REGEN_CHANNEL,
+      aiCostUsd: result.costUsd,
+      ref: id,
+      metadata: { channel, variant_no },
+    });
+    if (!charge.ok) log.warn("재생성 과금 실패 — 콘텐츠 유지", { id, channel, reason: charge.reason });
+
+    log.info("채널 재생성", { id, channel, variant_no, balance: charge.balance });
+    return NextResponse.json({ channel, variant_no, content: result.content, balance: charge.balance });
   } catch (err) {
     log.error("채널 재생성 실패", { id, channel, err: err instanceof Error ? err.message : String(err) });
     return NextResponse.json({ error: "재생성에 실패했어요. 다시 시도해 주세요." }, { status: 500 });

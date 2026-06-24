@@ -12,6 +12,7 @@
     "test:scraper": "tsx scripts/test-scraper.ts",
     "test:worker": "tsx scripts/test-worker.ts",
     "test:pipeline": "tsx scripts/test-pipeline.ts",
+    "test:billing": "tsx scripts/test-billing.ts",
     "worker": "tsx scripts/worker.ts",
     "demo": "tsx scripts/build-demo.tsx"
   },

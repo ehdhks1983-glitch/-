@@ -85,3 +85,12 @@ export function devWalletSnapshot() {
   ensureInit();
   return { balance, ledger: [...ledger], usage: [...usage] };
 }
+
+/** 검증용: 가입 직후 상태(잔액=체험 grant, 원장/사용 초기화)로 리셋. */
+export function __resetDevWallet() {
+  balance = SIGNUP_GRANT_POINTS;
+  ledger.length = 0;
+  usage.length = 0;
+  initialized = false;
+  ensureInit();
+}

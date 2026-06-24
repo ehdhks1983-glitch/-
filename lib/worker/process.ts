@@ -7,6 +7,8 @@ import { scrapeUrls, toSourceRef } from "@/lib/scraper";
 import { extractCore } from "@/lib/pipeline/core";
 import { generateChannel } from "@/lib/pipeline/channels";
 import { ALL_CHANNELS, type Channel, type GenerationStatus } from "@/lib/multipublish/types";
+import { chargePoints } from "@/lib/billing";
+import { POINTS, USAGE_ACTION } from "@/lib/config/points";
 import type { GenerationStore, StoredGeneration } from "@/lib/store/types";
 
 const log = createLogger("worker");
@@ -67,13 +69,26 @@ export async function processGeneration(store: GenerationStore, rec: StoredGener
       }
     }
 
-    // 5) 과금 — §15.9 (지금은 총원가 로깅만)
     const status: GenerationStatus = failCount === 0 ? "done" : okCount === 0 ? "failed" : "partial";
     await store.update(rec.id, {
       status,
       title: rec.title || blogTitle || rec.keyword,
       error: status === "failed" ? "모든 채널 생성 실패" : null,
     });
+
+    // 5) 과금 (§12.3): 완료(done/partial)에만 1세트 차감 + usage_event(ai_cost). 실패(failed)는 차감 0(§12.4).
+    if (status !== "failed") {
+      const charge = await chargePoints({
+        owner: rec.owner,
+        points: POINTS.SET,
+        action: USAGE_ACTION.GENERATE_SET,
+        aiCostUsd: totalAiCost,
+        ref: rec.id,
+        metadata: { channels: channels.length, okCount, failCount, status },
+      });
+      if (!charge.ok) log.warn("과금 실패 — 콘텐츠는 유지", { id: rec.id, reason: charge.reason });
+    }
+
     log.info("처리 완료", { id: rec.id, status, okCount, failCount, aiCostUsd: round6(totalAiCost), ms: Date.now() - t0 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
