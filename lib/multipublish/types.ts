@@ -112,12 +112,12 @@ export type ChannelContent = {
   shorts: ShortsContent;
 };
 
-/** 채널 산출물 1건 (generation_outputs 행에 대응). */
-export interface GenerationOutput<C extends Channel = Channel> {
-  channel: C;
+/** 채널 산출물 1건 (generation_outputs 행에 대응). content는 jsonb → 채널별 ChannelContent[channel]로 캐스팅해 사용. */
+export interface GenerationOutput {
+  channel: Channel;
   variant_no: number;
   status: "done" | "failed";
-  content: C extends Channel ? ChannelContent[C] : unknown;
+  content: unknown;
   ai_cost_usd: number;
   error?: string;
 }
