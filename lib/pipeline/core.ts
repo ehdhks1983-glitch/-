@@ -1,9 +1,10 @@
 // lib/pipeline/core.ts — 코어 추출 (스펙 §7 3단계, Haiku). 모든 채널 생성의 단일 입력 'core' 생성.
 // 콘텐츠 룰(코드 내장): facts는 출처 있는 항목만(할루시네이션 방지) — §13/§16.
+// 품질: 키워드 도배·일반론 금지, 그 주제만의 구체적 내용(§NATURALNESS).
 
 import { generate, safeParseJson } from "@/lib/gateway";
 import type { Core, Fact, GenOptions } from "@/lib/multipublish/types";
-import { SAFETY_RULES, monetizeHint, sourcesBlock, toneLabel } from "./prompts";
+import { NATURALNESS, SAFETY_RULES, monetizeHint, sourcesBlock, toneLabel } from "./prompts";
 import { dedupeTags, sanitizeLine, sanitizeTag } from "./sanitize";
 
 export interface CoreContext {
@@ -19,31 +20,32 @@ export interface CoreResult {
   mocked: boolean;
 }
 
-const SYSTEM = `너는 콘텐츠 코어 분석가다. 키워드와 (있다면) 참고자료를 읽고 글 전체의 '핵심(코어)'을 뽑아 JSON 객체 하나로만 출력한다. 설명·마크다운·코드펜스 없이 순수 JSON.
+const SYSTEM = `너는 해당 분야를 실제로 잘 아는 한국어 콘텐츠 기획자다. 주제(키워드)와 (있다면) 참고자료를 바탕으로 글의 '핵심(코어)'을 뽑아 JSON 객체 하나로만 출력한다. 설명·마크다운·코드펜스 없이 순수 JSON.
+
+${NATURALNESS}
 
 [뽑을 것]
-- core_message: 글 전체를 관통하는 핵심 메시지 1문장.
-- angles: 채널별로 골라 쓸 포인트 3~6개(짧은 구).
-- facts: [{ "claim": 사실, "source": 참고자료 URL 또는 구절 }]. 출처가 분명한 사실만 넣는다. 참고자료에 근거가 없으면 그 항목은 넣지 않는다(할루시네이션 방지). 참고자료가 없으면 facts = [].
-- target_reader: 이 글이 누구를 위한 것인지.
+- core_message: 이 주제로 글을 쓸 때 독자에게 전할 '구체적인 한 문장'. 그 주제에만 해당하는 실질적 통찰이어야 한다. (나쁜 예: "OO의 핵심은 기본기를 지키며 꾸준히 하는 것" / 좋은 예: 그 분야에서 실제로 갈리는 포인트를 콕 집은 문장)
+- angles: 채널별로 골라 쓸 구체적 포인트 4~6개(짧은 구). 일반론 말고 실제로 다룰 거리.
+- facts: [{ "claim": 사실, "source": 참고자료 URL 또는 구절 }]. 출처가 분명한 사실만. 근거 없으면 그 항목은 빼라(할루시네이션 방지). 참고자료가 없으면 facts = [].
+- target_reader: 누가 이 글을 검색해 읽을지 구체적으로.
 - tone: 아래 톤을 반영한 한 줄.
-- tag_candidates: 블로그에서 10개로 확정할 태그 후보 12~15개(해시 # 없이).
+- tag_candidates: 검색·노출에 실제 쓸 만한 관련 태그 후보 12~15개(해시 # 없이). '키워드+추천/초보/방법'식 변형 도배 금지 — 실제 연관어·동의어·세부주제로.
 
 [규칙]
 ${SAFETY_RULES}
 - 사실(facts)과 추정/주장(angles)을 섞지 않는다.
-- 한국어로 작성.
 
 스키마:
 { "core_message":"", "angles":["",""], "facts":[{"claim":"","source":""}], "target_reader":"", "tone":"", "tag_candidates":["",""] }`;
 
 function buildInput(ctx: CoreContext): string {
   const head = JSON.stringify({
-    keyword: ctx.keyword,
+    topic: ctx.keyword,
     tone: toneLabel(ctx.options.tone),
     monetize_hint: monetizeHint(ctx.options),
   });
-  return `${head}\n\n참고자료:\n${sourcesBlock(ctx.sources)}`;
+  return `주제: ${ctx.keyword}\n톤: ${toneLabel(ctx.options.tone)}\n옵션: ${head}\n\n참고자료:\n${sourcesBlock(ctx.sources)}`;
 }
 
 export async function extractCore(ctx: CoreContext): Promise<CoreResult> {
@@ -61,7 +63,7 @@ export async function extractCore(ctx: CoreContext): Promise<CoreResult> {
 
 /** 모델 출력 → 안전한 Core. 콘텐츠 룰을 코드로 강제. */
 export function normalizeCore(parsed: Partial<Core>, ctx: CoreContext): Core {
-  const k = ctx.keyword || "주제";
+  const k = ctx.keyword || "이 주제";
   const hasSources = ctx.sources.some((s) => (s.text || "").trim().length > 0);
 
   // facts: 출처 있는 항목만. 참고자료가 없으면 무조건 빈 배열(근거 없음).
@@ -78,12 +80,13 @@ export function normalizeCore(parsed: Partial<Core>, ctx: CoreContext): Core {
   ).slice(0, 15);
 
   return {
-    core_message: sanitizeLine(parsed.core_message, 300) || `${k}의 핵심을 한눈에 정리합니다.`,
-    angles: angles.length ? angles : [`${k} 기본기`, `${k} 흔한 실수`, `${k} 체크리스트`],
+    // 폴백도 키워드 도배·"핵심은" 문구를 피한 중립 문장으로.
+    core_message: sanitizeLine(parsed.core_message, 300) || `${k}에 대해, 막상 해보면 사소한 데서 결과가 갈립니다. 무엇을 먼저 챙겨야 하는지부터 정리해 드릴게요.`,
+    angles: angles.length ? angles : ["시작 전 꼭 확인할 것", "초보가 자주 하는 실수", "시간·비용 아끼는 현실 팁", "상황별 선택 기준"],
     facts,
-    target_reader: sanitizeLine(parsed.target_reader, 200) || `${k}에 막 관심을 가진 사람`,
+    target_reader: sanitizeLine(parsed.target_reader, 200) || `${k}을(를) 찾아보기 시작한 사람`,
     tone: sanitizeLine(parsed.tone, 120) || toneLabel(ctx.options.tone),
-    tag_candidates: tagCandidates.length ? tagCandidates : defaultTags(k),
+    tag_candidates: tagCandidates.length ? tagCandidates : fallbackTags(k),
   };
 }
 
@@ -92,22 +95,32 @@ function arr(v: unknown, maxItems: number, maxLen: number): string[] {
   return v.map((x) => sanitizeLine(x, maxLen)).filter(Boolean).slice(0, maxItems);
 }
 
-function defaultTags(k: string): string[] {
-  return [k, `${k}추천`, `${k}초보`, `${k}팁`, `${k}가이드`, `${k}방법`, `${k}후기`, `${k}정리`, `${k}비교`, `${k}입문`, `${k}꿀팁`, `${k}정보`];
+/** 모델이 태그를 못 줬을 때의 폴백 — 키워드 변형 도배 대신 일반 콘텐츠 태그 + 주제. */
+function fallbackTags(k: string): string[] {
+  return [k, "입문", "후기", "꿀팁", "정리", "추천", "노하우", "주의사항", "비교", "가이드", "초보", "정보"];
 }
 
-/** 키리스 목 모드용 코어(키워드 기반, 파이프라인 E2E 가능하게). */
+/**
+ * 키리스 목 모드용 코어. 실제 도메인 지식이 없으므로 '자연스러운 자리표시 초안'을 만든다.
+ * 키워드를 매 문장에 박지 않고, 주제는 1~2회만 자연스럽게 언급.
+ */
 function mockCore(ctx: CoreContext): string {
-  const k = ctx.keyword || "주제";
+  const k = ctx.keyword || "이 주제";
   return JSON.stringify({
-    core_message: `${k}의 핵심은 기본기를 지키며 꾸준히 하는 것이다.`,
-    angles: [`${k} 입문자 가이드`, `${k}에서 흔한 실수`, `${k} 시작 전 체크리스트`, `${k} 시간 절약 팁`, `${k} 초보 Q&A`],
+    core_message: `${k}, 막상 해보면 사소한 차이에서 결과가 갈리더라고요. 처음에 방향만 제대로 잡아두면 시간도 돈도 꽤 아낄 수 있습니다.`,
+    angles: [
+      "시작 전에 꼭 확인할 것",
+      "다들 한 번씩 겪는 실수와 그 이유",
+      "돈·시간을 아끼는 현실적인 팁",
+      "상황에 따라 달라지는 선택 기준",
+      "초보가 자주 묻는 질문",
+    ],
     facts: ctx.sources.filter((s) => s.text).map((s, i) => ({
-      claim: `${k}와 관련해 참고자료 ${i + 1}에서 확인된 핵심 포인트`,
+      claim: `참고자료 ${i + 1}에서 확인된 내용(체험 모드라 요약은 자리표시)`,
       source: s.url,
     })),
-    target_reader: `${k}에 막 관심을 가진 초보자`,
+    target_reader: `이제 막 ${k}에 관심이 생겨 정보를 찾아보는 사람`,
     tone: toneLabel(ctx.options.tone),
-    tag_candidates: defaultTags(k),
+    tag_candidates: [k, "입문", "후기", "꿀팁", "정리", "추천", "노하우", "주의사항", "비교", "가이드", "초보", "체크리스트"],
   });
 }
