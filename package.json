@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:ai": "tsx scripts/test-ai.ts",
+    "test:gateway": "tsx scripts/test-gateway.ts",
     "demo": "tsx scripts/build-demo.tsx"
   },
   "dependencies": {
