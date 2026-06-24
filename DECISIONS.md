@@ -22,3 +22,5 @@
 | 15 | **Playwright는 lazy import + graceful degrade** | 브라우저 바이너리 없는 환경에서도 빌드/실행되도록. 미설치 시 경고 로그 + 해당 URL 스킵("팩트 근거 없음"). serverExternalPackages로 번들 제외. |
 | 16 | **partial(일부 채널 실패)도 1세트(10P) 차감** | 스펙: 1세트=10P. partial은 코어+다수 채널을 전달하고 실패분은 2P 재생성 가능 → 가치 전달로 보고 풀 차감. failed(전 채널 실패)만 차감 0(§12.4). |
 | 17 | **보안 하드닝(리뷰 반영)**: SSRF 방어, 동시성 과금 가드, javascript: 스킴 XSS 차단, 정체 잡 reaper, variant unique index | 어드버셜 리뷰 2건 결과. 사용자 제공 URL fetch(SSRF) → 사설/메타데이터 IP 차단. 동시 생성 TOCTOU → in-flight 가드((진행중+1)×10≤잔액). 모델 생성 source의 위험 스킴 링크 차단. processing 5분 정체 잡 재점유. generation_outputs(generation_id,channel,variant_no) unique. 운영(prod)에서 키 누락 시 목 모드로 빠지지 않음. |
+| 18 | **생성 품질 개선**: 자연스러움/구체성 강제(NATURALNESS), 블로그 포맷 표준 해석 | 키워드 도배·일반론·로봇문체 금지를 전 프롬프트 공용 블록으로. 블로그 "가운데정렬 div"=📌핵심정리+CTA 블록(가운데정렬 렌더/복사), "형광펜 span"=본문 `==강조==`(React span 렌더 / 복사 시 `<span bg>`). dangerouslySetInnerHTML 없이 안전 렌더. 핵심태그 10개 폴백은 키워드 변형 대신 일반 콘텐츠 태그 풀. |
+| 19 | **키리스 목(mock)은 자연스러운 자리표시 + 체험 고지** | 목은 도메인 지식이 없어 진짜 구체 내용은 불가 → 키워드 도배 없는 자연스러운 초안 + 각 채널 결과 상단 "⚠️ 체험(목) 모드 — 실제 AI 아님" 고지 유지. 실제 구체성은 키 연결 시 모델이 담당. |
