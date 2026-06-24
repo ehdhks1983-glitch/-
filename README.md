@@ -1,104 +1,96 @@
-# PromptSite
+# 곰대리 멀티발행 (Gomdaeri Multi-publish)
 
-> 프롬프트 한 줄이면 랜딩페이지가 **딸깍** 완성. AI가 팔리는 카피와 디자인, 신청 폼까지 만들어 바로 게시합니다.
+> 키워드와 참고자료에서 **핵심(코어)** 을 뽑아, **SEO 블로그 + 스레드·인스타·카페·쇼츠**를 채널별 native하게 한 번에 생성. 발행은 사용자가 **복붙**(자동 포스팅 X → 계정/ToS 리스크 0).
 
-사용자가 사업/서비스를 한 줄로 적으면 → AI가 분석하고(부족하면 보완질문) → 전환 중심 카피를 생성해 → 어울리는 템플릿에 주입하고 → 공개 URL로 게시 → 방문자 이메일(리드)까지 수집합니다.
+비기술 1인 마케터·창작자를 위한 웹 SaaS. **제로 셋업 · AI 내장**(사용자 키 입력 X). 빌드 기준 문서: `gomdaeri_ultracode_build_spec_v1`.
 
 ## 핵심 파이프라인
 
 ```
-프롬프트 → analyzePrompt → (clarifyQuestions) → generateCopy → selectTemplate → 미리보기 → 게시(s/[slug]) → 리드 수집
+키워드 + 참고 URL → [워커] 스크래핑(§9) → 코어 추출(Haiku) → 병렬: 블로그(Sonnet) + 스레드·인스타·카페·쇼츠(Haiku)
+                  → 저장 → 포인트 차감(10P) + usage_event(실측 AI 원가) → 폴링으로 결과 표시
 ```
+
+- 무거운 생성은 **워커**에서(서버리스 타임아웃 회피 + UI 안 멈춤). UI는 `GET /api/generations/:id` 를 2~3초 폴링.
+- 모든 AI 호출은 **게이트웨이**(`lib/gateway`)만 경유 — 모델 티어링·재시도·**토큰 원가계산**·캐싱 한 곳에서.
 
 ## 기술 스택
 
-- **Next.js 16** (App Router) · **React 19** · **TypeScript** · **Tailwind CSS v4**
-- **AI**: `@anthropic-ai/sdk`, `@google/genai`, `openai` — 3사 폴백 체인 (`lib/ai/config.ts`)
-- **DB/Auth**: Supabase (`@supabase/ssr`, `@supabase/supabase-js`) + RLS
+- **Next.js 16**(App Router, Turbopack) · React 19 · TypeScript · Tailwind v4
+- **DB/Auth**: Supabase(Postgres + Auth, RLS). 포인트 정합성은 Postgres 원자 함수(`spend_points`).
+- **AI**: `@anthropic-ai/sdk` — 모델 티어링(블로그=Sonnet, 그 외=Haiku). 게이트웨이 경유.
+- **스크래핑**: 네이티브 fetch + `cheerio` → `playwright` 폴백(lazy)
+- **잡 큐**: `generations.status` 를 큐로(별도 워커 프로세스) — `npm run worker`
 
-## 빠른 시작
+> 스택은 스펙 §3 기준 "추천·교체 가능". Prisma+Clerk 대신 Supabase 채택 근거 등은 `DECISIONS.md` 참고.
+
+## 빠른 시작 (키 없이도 동작)
 
 ```bash
 npm install
-cp .env.example .env.local   # 키는 비워둬도 됨(아래 "목 모드" 참고)
-npm run dev                  # http://localhost:3000
+cp .env.example .env.local     # 비워둬도 됨 → AI 목 모드 + 인메모리 저장/지갑
+npm run dev                    # http://localhost:3000  → /workspace
 ```
 
-- **`/`** 마케팅 홈 → **`/project/new`** 에서 바로 생성 체험
-- 파이프라인만 콘솔로 확인: `npm run test:ai "온라인 PT 코칭 랜딩, 30대 직장인, 무료 상담"`
+키가 하나도 없으면: **AI=결정적 목(mock)**, **저장/인증/과금=인메모리 dev 모드**로 전체 흐름(생성→폴링→결과→복사→재생성→내 발행물)이 동작합니다. 강제 목: `GOMDAERI_MOCK=1`.
 
-### 목(mock) 모드
+## 검증 (§16 체크리스트)
 
-AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적 목 응답을 돌려줍니다.
-→ 키 없이도 생성→미리보기 흐름 전체를 개발/테스트할 수 있습니다. 강제로 켜려면 `PROMPTSITE_MOCK=1`.
+```bash
+npm run test:gateway    # 텍스트+토큰+costUsd, 티어 매핑, 캐시
+npm run test:scraper    # 네이버 모바일 경로 본문 추출 · 정규화 · 폴백
+npm run test:pipeline   # 키워드+참고 → 코어 → 블로그+4채널 / facts 출처 · 태그 정확히 10개
+npm run test:worker     # 큐 원자 점유 · 처리 루프
+npm run test:billing    # 완료 −10 + tx + usage(ai_cost) / 실패 0 / 재생성 −2 / 잔액 가드
+npm run lint && npm run build
+```
 
-## 환경변수 (`.env.local` / Vercel 대시보드)
+## 운영 배포 (키 연결)
+
+1. **Supabase 프로젝트** 생성 → SQL Editor에서 순서대로 실행:
+   1. `database/schema.sql` (profiles 등)
+   2. `database/multipublish_schema.sql` (멀티발행 9테이블 + RLS + 과금 함수 + 가입 트리거 + 시드)
+2. `.env.local`(또는 호스트 대시보드)에 키 입력 → 표 참고.
+3. **웹**(Next.js) + **워커**(`npm run worker`)를 분리해서 띄웁니다(Railway/Render 등 롱러닝 OK).
+
+### 환경변수
 
 | 변수 | 필수 | 설명 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | 권장 | Claude(카피 품질 주력). 없으면 하위 프로바이더로 폴백 |
-| `GEMINI_API_KEY` | 선택 | Gemini 폴백 |
-| `OPENAI_API_KEY` | 선택 | OpenAI 폴백(최후순위) |
-| `NEXT_PUBLIC_SUPABASE_URL` | 게시 기능 | Supabase 프로젝트 URL (클라이언트 노출 안전) |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | 게시 기능 | Supabase anon 키 (클라이언트 노출 안전) |
-| `SUPABASE_SERVICE_ROLE_KEY` | 선택 | 서버 전용 관리자 작업용. **절대 클라이언트 노출 금지** |
-| `OPENAI_TEXT_MODEL` 등 | 선택 | 모델 ID override (기본값은 `lib/ai/config.ts`) |
+| `ANTHROPIC_API_KEY` | 운영 | 게이트웨이(코어/블로그/채널). 없으면 목 모드 |
+| `NEXT_PUBLIC_SUPABASE_URL` | 운영 | Supabase URL(클라이언트 노출 안전) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | 운영 | anon 키(클라이언트 노출 안전) |
+| `SUPABASE_SERVICE_ROLE_KEY` | 운영(워커) | 워커가 RLS 우회로 과금/저장. **서버 전용, 절대 클라이언트 금지** |
+| `ANTHROPIC_MODEL_HAIKU` / `_SONNET` | 선택 | 모델 ID override |
+| `PRICE_HAIKU_IN/OUT`, `PRICE_SONNET_IN/OUT` | 선택 | 단가(per MTok) override |
+| `WORKER_POLL_MS`, `WORKER_CONCURRENCY` | 선택 | 워커 폴링/동시성 |
 
-> 키가 전부 비어 있어도 앱은 정상 빌드/구동됩니다. 생성은 목 모드, 인증/저장/게시는 안내 메시지로 비활성화됩니다.
+> **상용화 전 필요한 외부 계정/키**: Supabase 프로젝트(URL·anon·service_role) + Anthropic API 키. 이 둘만 연결하면 실제 모드로 전환됩니다.
 
-## Supabase 설정 (게시·리드 기능)
-
-1. [supabase.com](https://supabase.com) 에서 프로젝트 생성
-2. **SQL Editor** 에 `database/schema.sql` 전체를 붙여 실행 (profiles/projects/leads + RLS + 가입 트리거)
-3. **Project Settings → API** 에서 URL·anon 키를 복사해 `.env.local`(또는 Vercel)에 입력
-4. Auth → 이메일 가입을 사용하면 됩니다(기본). 확인 메일 설정은 Supabase Auth 설정에서 조정
-
-## Vercel 배포
-
-Next.js는 Vercel에서 zero-config 입니다.
-
-1. 이 저장소를 GitHub에 푸시
-2. Vercel에서 **New Project → 이 repo import**
-3. **Environment Variables** 에 위 표의 키 입력 (`.env.local` 은 배포 산출물에 포함되지 않음 — `.gitignore` 처리)
-4. Deploy → 임시 도메인에서 동작 확인
-
-> 생성 엔드포인트(`/api/generate`)는 AI 호출 때문에 함수 타임아웃이 필요합니다. 라우트에 `maxDuration = 60` 을 설정해 두었습니다(Vercel 플랜의 함수 실행시간 한도 확인 권장).
-
-## 디렉터리 구조
+## 디렉터리 (멀티발행)
 
 ```
-app/
-  page.tsx                     마케팅 홈
-  project/[id]/page.tsx        ★생성·보완질문·미리보기·게시
-  project/[id]/preview         전체화면 미리보기
-  s/[slug]/page.tsx            ★공개 게시 페이지(멀티테넌트) + 신청 폼
-  dashboard/                   내 프로젝트 / [projectId]/leads 신청자
-  (auth)/login·signup
-  api/generate · api/projects · api/leads
-components/templates/          SaasLaunch · Waitlist · Agency + TemplateRenderer
-lib/ai/                        types·config·core + analyze/clarify/generate/select/render
-lib/db/                        supabase(브라우저/서버) + projects/leads
-lib/sanitize.ts · lib/rateLimit.ts · lib/seo/meta.ts
-database/schema.sql            테이블 + RLS
-middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
+app/workspace/                  ★새 발행(컨피규레이터+결과) · library 내 발행물 · library/[id] 재열람
+app/api/generations/            POST 생성 · GET 목록 · [id] 폴링 · [id]/channels/[ch]/regenerate
+app/api/wallet/                 잔액
+lib/gateway/                    AI 게이트웨이(§8): 티어링·원가·재시도·캐싱·목
+lib/pipeline/                   core + channels/{blog,threads,instagram,cafe,shorts} + prompts/sanitize
+lib/scraper/                    config(사이트 규칙) + extract(cheerio) + index(fetch→playwright)
+lib/store/                      generations 큐 추상화(memory / supabase)
+lib/worker/                     process(파이프라인) + loop(runWorkerLoop) + kick
+lib/billing/                    getBalance + chargePoints(원자) + devWallet(키리스)
+lib/config/                     points(포인트 상수) · models(티어/단가)
+database/multipublish_schema.sql  9테이블 + RLS + spend/grant/claim 함수
+proxy.ts                        Next16 Proxy(구 middleware): 세션 갱신 + /workspace 보호
 ```
 
-## 모델 폴백 체인 (`lib/ai/config.ts`)
+## 보안 (§14)
 
-- **copy**(핵심 IP, 품질 우선): Claude Opus → Claude Sonnet → Gemini Pro → OpenAI
-- **analyze/clarify**(비용·속도 우선): Claude Sonnet → Gemini Flash → OpenAI
-- 상위 모델 실패/타임아웃 시 자동으로 하위로 폴백. 키 없는 프로바이더는 건너뜀.
-- 모델 ID·타임아웃·재시도는 전부 `config.ts`(또는 env)에서만 관리(하드코딩 금지).
+- AI 키는 **서버에만**(게이트웨이). 클라이언트엔 `NEXT_PUBLIC_*`(Supabase URL/anon)만 노출.
+- 비밀값 전부 env, 기본 빈 문자열. `.env*` 커밋 금지(`.env.example`만).
+- RLS 본인 스코프 + 과금은 원자 트랜잭션(이중차감·음수 잔액 방지).
+- 생성 텍스트는 정화 후 표시(`dangerouslySetInnerHTML` 미사용).
 
-## 보안
+---
 
-- AI 생성 텍스트는 React 자동 이스케이프 + `sanitizeCopy` 이중 방어. `dangerouslySetInnerHTML` 미사용.
-- Supabase RLS: 프로젝트/리드는 소유자만, 게시물은 공개 read, 리드는 게시된 프로젝트에만 insert.
-- 생성/저장/신청 엔드포인트에 IP 기준 rate limit (토큰 비용·스팸 방지).
-- `service_role` 키는 서버 전용. `.env*` 는 커밋 금지(`.env.example` 만 예외).
-
-## 다음 단계 (로드맵)
-
-- **2차**: 이미지 생성, 다국어, 광고 픽셀, GEO 고급(llms.txt/스키마), 프로젝트 재편집
-- **3차**: 결제(Toss/Lemon Squeezy), 커스텀 도메인
-```
+> 참고: 이 저장소에는 별도 제품 **PromptSite**(랜딩페이지 빌더)의 코드도 보존되어 있습니다(스펙 §1 "플랫폼 + 제품 N개" 구조). 멀티발행과 인프라(Supabase·AI·rate limit·sanitize)를 공유하며 라우트는 분리되어 있습니다.
