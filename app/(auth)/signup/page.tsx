@@ -37,7 +37,8 @@ export default function SignupPage() {
       return;
     }
     if (data.session) {
-      router.push("/dashboard");
+      const dest = new URLSearchParams(window.location.search).get("redirect") || "/workspace";
+      router.push(dest);
       router.refresh();
     } else {
       setMessage("확인 메일을 보냈어요. 메일의 링크를 눌러 가입을 완료해 주세요.");
@@ -45,7 +46,7 @@ export default function SignupPage() {
   }
 
   return (
-    <AuthShell title="회원가입" subtitle="만든 페이지를 저장하고 신청자를 받아보세요.">
+    <AuthShell title="회원가입" subtitle="가입하면 체험 포인트를 드려요. 바로 만들어보세요.">
       {message ? (
         <p className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p>
       ) : (
@@ -62,15 +63,15 @@ export default function SignupPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-indigo-600 px-4 py-3 font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+            className="w-full rounded-lg bg-emerald-600 px-4 py-3 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
           >
             {loading ? "가입 중…" : "회원가입"}
           </button>
         </form>
       )}
-      <p className="mt-6 text-center text-sm text-slate-500">
+      <p className="mt-6 text-center text-sm text-stone-500">
         이미 계정이 있으신가요?{" "}
-        <Link href="/login" className="font-medium text-indigo-600 hover:underline">
+        <Link href="/login" className="font-medium text-emerald-700 hover:underline">
           로그인
         </Link>
       </p>

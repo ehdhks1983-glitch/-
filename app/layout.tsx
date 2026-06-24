@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PromptSite — 딸깍으로 만드는 랜딩페이지",
-  description: "프롬프트 한 줄이면 팔리는 카피와 디자인, 신청 폼까지. AI가 만들어 바로 게시하는 랜딩페이지 빌더.",
+  title: "곰대리 멀티발행 — 키워드 하나로 블로그 + 4채널",
+  description:
+    "키워드와 참고자료에서 핵심을 뽑아 SEO 블로그와 스레드·인스타·카페·쇼츠를 채널별로 한 번에. 발행은 복붙으로.",
 };
 
 export default function RootLayout({
@@ -27,7 +28,7 @@ export default function RootLayout({
       lang="ko"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col bg-stone-50 text-stone-900">{children}</body>
     </html>
   );
 }

@@ -1,68 +1,66 @@
-// app/page.tsx  [신규] — PromptSite 마케팅 홈
+// app/page.tsx — 곰대리 멀티발행 랜딩(마케팅 홈). CTA → /workspace (미로그인 시 proxy가 /login 으로).
 import Link from "next/link";
 
 const STEPS = [
-  { n: "1", t: "한 줄로 설명", d: "무슨 사업·서비스인지 자유롭게 적어요." },
-  { n: "2", t: "AI가 작성", d: "팔리는 카피와 어울리는 디자인을 만들어요." },
-  { n: "3", t: "딸깍 게시", d: "공개 주소로 바로 띄우고 신청을 받아요." },
+  { n: "1", t: "키워드 + 참고자료", d: "쓰고 싶은 키워드와 참고 URL만 넣어요." },
+  { n: "2", t: "코어 추출", d: "참고자료에서 핵심 메시지·사실·앵글을 뽑아요." },
+  { n: "3", t: "블로그 + 4채널", d: "SEO 블로그와 스레드·인스타·카페·쇼츠를 한 번에." },
 ];
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen flex-col bg-white text-slate-900">
-      {/* Nav */}
-      <header className="border-b border-slate-100">
+    <div className="flex min-h-screen flex-col bg-white text-stone-900">
+      <header className="border-b border-stone-100">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <span className="font-bold tracking-tight">
-            Prompt<span className="text-indigo-600">Site</span>
+          <span className="flex items-center gap-2 font-extrabold tracking-tight">
+            <span aria-hidden className="text-xl">🐻</span>
+            곰대리 <span className="font-semibold text-emerald-700">멀티발행</span>
           </span>
           <Link
-            href="/project/new"
-            className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
+            href="/workspace"
+            className="rounded-full bg-stone-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-stone-700"
           >
-            만들기 시작
+            시작하기
           </Link>
         </div>
       </header>
 
-      {/* Hero */}
       <main className="flex-1">
-        <section className="bg-gradient-to-b from-indigo-50 to-white px-6 py-24 sm:py-32">
+        <section className="bg-gradient-to-b from-emerald-50 to-white px-6 py-24 sm:py-32">
           <div className="mx-auto max-w-3xl text-center">
-            <span className="inline-block rounded-full border border-indigo-200 bg-white px-4 py-1.5 text-sm font-medium text-indigo-700">
-              프롬프트 한 줄 → 랜딩페이지
+            <span className="inline-block rounded-full border border-emerald-200 bg-white px-4 py-1.5 text-sm font-medium text-emerald-800">
+              키워드 하나 → 블로그 + 스레드·인스타·카페·쇼츠
             </span>
             <h1 className="mt-6 text-4xl font-bold tracking-tight sm:text-6xl">
-              랜딩페이지, <span className="text-indigo-600">딸깍</span> 한 번에
+              한 번 쓰면, <span className="text-emerald-700">5채널</span>로 퍼집니다
             </h1>
-            <p className="mx-auto mt-6 max-w-xl text-lg leading-8 text-slate-600">
-              무엇을 위한 페이지인지 적기만 하세요. 팔리는 카피, 어울리는 디자인,
-              신청 폼까지 — AI가 만들어 바로 게시합니다.
+            <p className="mx-auto mt-6 max-w-xl text-lg leading-8 text-stone-600">
+              키워드와 참고자료에서 핵심(코어)을 뽑아, 채널마다 어울리는 글로 바꿔드려요.
+              블로그는 SEO 포맷, 나머지는 채널 native하게. 발행은 복붙이면 끝이에요.
             </p>
             <div className="mt-10 flex justify-center gap-3">
               <Link
-                href="/project/new"
-                className="rounded-full bg-indigo-600 px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-500"
+                href="/workspace"
+                className="rounded-full bg-emerald-600 px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-500"
               >
-                지금 만들어보기
+                새 발행 시작
               </Link>
             </div>
-            <p className="mt-3 text-sm text-slate-400">가입 없이 바로 체험할 수 있어요.</p>
+            <p className="mt-3 text-sm text-stone-400">가입하면 체험 포인트를 드려요.</p>
           </div>
         </section>
 
-        {/* How it works */}
         <section className="px-6 py-20">
           <div className="mx-auto max-w-4xl">
             <h2 className="text-center text-2xl font-bold sm:text-3xl">3단계면 충분해요</h2>
             <div className="mt-12 grid gap-8 sm:grid-cols-3">
               {STEPS.map((s) => (
-                <div key={s.n} className="rounded-2xl border border-slate-200 p-6 text-center">
-                  <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-xl font-bold text-indigo-600">
+                <div key={s.n} className="rounded-2xl border border-stone-200 p-6 text-center">
+                  <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-xl font-bold text-emerald-700">
                     {s.n}
                   </div>
                   <h3 className="text-lg font-semibold">{s.t}</h3>
-                  <p className="mt-2 text-slate-600">{s.d}</p>
+                  <p className="mt-2 text-stone-600">{s.d}</p>
                 </div>
               ))}
             </div>
@@ -70,10 +68,9 @@ export default function Home() {
         </section>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-100 px-6 py-8">
-        <div className="mx-auto max-w-5xl text-center text-sm text-slate-400">
-          PromptSite — 딸깍으로 만드는 랜딩페이지
+      <footer className="border-t border-stone-100 px-6 py-8">
+        <div className="mx-auto max-w-5xl text-center text-sm text-stone-400">
+          곰대리 멀티발행 · 결과 생성만, 발행은 사용자 복붙 (계정/ToS 리스크 0)
         </div>
       </footer>
     </div>

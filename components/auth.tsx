@@ -14,8 +14,9 @@ export function AuthShell({
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
       <div className="w-full max-w-sm">
-        <Link href="/" className="mb-6 block text-center font-bold tracking-tight">
-          Prompt<span className="text-indigo-600">Site</span>
+        <Link href="/" className="mb-6 flex items-center justify-center gap-2 text-center font-extrabold tracking-tight">
+          <span aria-hidden className="text-xl">🐻</span>
+          곰대리 <span className="text-emerald-700">멀티발행</span>
         </Link>
         <div className="rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
           <h1 className="text-xl font-bold">{title}</h1>
