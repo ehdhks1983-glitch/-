@@ -20,3 +20,5 @@
 | 13 | **보관(retention) 컬럼은 plans에 두되 배치 삭제는 미구현** | 스펙 §5에서 "보관 배치"는 P2 OUT. 정책값만 컬럼으로 보유. |
 | 14 | **스크래퍼 1순위 HTTP = `got` 대신 Node22 네이티브 fetch** | §9 의도는 "가벼운 fetch 우선". 네이티브 fetch가 바로 그 가벼운 fetch이며 ESM 번들 리스크 0·더 견고. cheerio 파싱 + Playwright fallback 구조는 그대로. 스택 교체 가능(§3). |
 | 15 | **Playwright는 lazy import + graceful degrade** | 브라우저 바이너리 없는 환경에서도 빌드/실행되도록. 미설치 시 경고 로그 + 해당 URL 스킵("팩트 근거 없음"). serverExternalPackages로 번들 제외. |
+| 16 | **partial(일부 채널 실패)도 1세트(10P) 차감** | 스펙: 1세트=10P. partial은 코어+다수 채널을 전달하고 실패분은 2P 재생성 가능 → 가치 전달로 보고 풀 차감. failed(전 채널 실패)만 차감 0(§12.4). |
+| 17 | **보안 하드닝(리뷰 반영)**: SSRF 방어, 동시성 과금 가드, javascript: 스킴 XSS 차단, 정체 잡 reaper, variant unique index | 어드버셜 리뷰 2건 결과. 사용자 제공 URL fetch(SSRF) → 사설/메타데이터 IP 차단. 동시 생성 TOCTOU → in-flight 가드((진행중+1)×10≤잔액). 모델 생성 source의 위험 스킴 링크 차단. processing 5분 정체 잡 재점유. generation_outputs(generation_id,channel,variant_no) unique. 운영(prod)에서 키 누락 시 목 모드로 빠지지 않음. |

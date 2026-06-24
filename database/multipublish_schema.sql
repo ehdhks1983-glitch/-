@@ -108,6 +108,8 @@ create table if not exists public.generation_outputs (
   created_at     timestamptz not null default now()
 );
 create index if not exists gen_outputs_gen_idx on public.generation_outputs (generation_id, channel, variant_no desc);
+-- 동일 채널 변형 번호 중복 방지(동시 재생성 레이스 backstop). 앱은 충돌 시 재계산·재시도.
+create unique index if not exists gen_outputs_unique on public.generation_outputs (generation_id, channel, variant_no);
 
 -- ───────────── updated_at 자동 갱신 ─────────────
 create or replace function public.touch_updated_at()
@@ -190,6 +192,8 @@ returns int language sql stable security definer set search_path = public as $$
 $$;
 
 -- 큐 점유: 가장 오래된 queued 1건을 processing 으로(FOR UPDATE SKIP LOCKED = 동시 워커 안전).
+-- 정체 회수: processing 상태로 5분 넘게 멈춘 잡(워커 크래시 등)도 재점유 → self-healing.
+--   과금은 done/partial에서만 일어나므로, 미과금 정체 잡의 재처리는 1회만 과금(이중과금 아님).
 create or replace function public.claim_next_generation()
 returns public.generations
 language plpgsql security definer set search_path = public as $$
@@ -197,6 +201,7 @@ declare v_row public.generations;
 begin
   select * into v_row from public.generations
    where status = 'queued'
+      or (status = 'processing' and updated_at < now() - interval '5 minutes')
    order by created_at
    for update skip locked
    limit 1;

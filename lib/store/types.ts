@@ -56,6 +56,8 @@ export interface GenerationStore {
   getById(id: string, owner?: string): Promise<StoredGeneration | null>;
   /** 소유자 발행물 목록(최신순). */
   listByOwner(owner: string, limit?: number): Promise<StoredGeneration[]>;
+  /** 진행 중(queued/processing) 잡 개수 — 동시 생성 과금 가드용(TOCTOU 완화). */
+  countActiveByOwner(owner: string): Promise<number>;
   /** 큐에서 다음 잡 원자적 점유(queued→processing). 없으면 null. */
   claimNext(): Promise<StoredGeneration | null>;
   /** 잡 필드 갱신. */

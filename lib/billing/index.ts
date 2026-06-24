@@ -68,8 +68,9 @@ export async function chargePoints(a: ChargeArgs): Promise<ChargeResult> {
     p_metadata: a.metadata ?? {},
   });
   if (error) {
-    const insufficient = /insufficient_points/.test(error.message);
-    if (!insufficient) log.error("spend 실패", { err: error.message });
+    // P0001 = spend_points 가 raise 한 insufficient_points(메시지 변경에도 견고하게 code 우선).
+    const insufficient = error.code === "P0001" || /insufficient_points/.test(error.message);
+    if (!insufficient) log.error("spend 실패", { err: error.message, code: error.code });
     return { ok: false, reason: insufficient ? "insufficient_points" : error.message };
   }
   return { ok: true, balance: typeof data === "number" ? data : undefined };

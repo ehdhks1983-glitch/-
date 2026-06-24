@@ -8,6 +8,7 @@ loadEnv({ path: ".env.local" });
 import { extractText, extractTitle } from "@/lib/scraper/extract";
 import { GENERIC_SELECTORS, SITE_RULES } from "@/lib/scraper/config";
 import { scrapeUrl } from "@/lib/scraper";
+import { assertPublicUrl } from "@/lib/scraper/ssrf";
 
 const BODY =
   "곰탕은 사골과 양지를 오래 끓여 만든 한국의 대표 보양식입니다. " +
@@ -71,6 +72,20 @@ async function main() {
   // 5) 잘못된 URL → ok:false (throw 안 함)
   const bad = await scrapeUrl("그냥-텍스트");
   check("잘못된 URL 안전 처리", bad.ok === false && bad.via === "none");
+
+  // 5b) SSRF 방어: 내부/사설/메타데이터 차단, 공개 IP 허용 (네트워크 불필요 — IP 리터럴)
+  const blocked = ["http://localhost/", "http://127.0.0.1/", "http://169.254.169.254/latest/meta-data/",
+    "http://10.1.2.3/", "http://192.168.0.1/", "http://[::1]/", "ftp://example.com/"];
+  let allBlocked = true;
+  for (const u of blocked) {
+    let threw = false;
+    try { await assertPublicUrl(u); } catch { threw = true; }
+    if (!threw) { allBlocked = false; console.log("   미차단:", u); }
+  }
+  check("SSRF: 내부/사설/메타데이터/비http 차단", allBlocked);
+  let publicOk = true;
+  try { await assertPublicUrl("http://8.8.8.8/"); } catch { publicOk = false; }
+  check("SSRF: 공개 IP 허용", publicOk);
 
   // 6) (선택) 라이브 스크랩
   const live = process.argv[2] || process.env.SCRAPER_LIVE_URL;

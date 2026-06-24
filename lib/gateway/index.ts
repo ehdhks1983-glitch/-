@@ -50,10 +50,16 @@ export interface GenerateResult {
   cached: boolean;
 }
 
-/** 키 없음 또는 강제 목 → 목 모드. */
+/**
+ * 목 모드 여부.
+ * - GOMDAERI_MOCK=1 → 항상 목(테스트/데모).
+ * - 키 없음 → 개발/검증에서만 목. **운영(NODE_ENV=production)에서는 목으로 빠지지 않는다**
+ *   (키 누락 misconfig 시 가짜 콘텐츠를 만들고 과금하는 것을 방지 → 실호출 시도→명확히 실패).
+ */
 export function isMockMode(): boolean {
   if (process.env.GOMDAERI_MOCK === "1") return true;
-  return !(process.env.ANTHROPIC_API_KEY ?? "").trim();
+  if ((process.env.ANTHROPIC_API_KEY ?? "").trim()) return false;
+  return process.env.NODE_ENV !== "production";
 }
 
 /**

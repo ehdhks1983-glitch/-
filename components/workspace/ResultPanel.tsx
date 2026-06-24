@@ -11,6 +11,16 @@ import { channelToCopyText } from "@/lib/multipublish/format";
 import ChannelContentView from "./ChannelContentView";
 import CopyButton from "./CopyButton";
 
+/** http(s) URL 일 때만 링크로 렌더(모델이 만든 javascript: 등 위험 스킴 차단). source는 URL 또는 구절일 수 있다. */
+function isHttpUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export default function ResultPanel({
   generation,
   regeneratingChannel,
@@ -78,7 +88,14 @@ export default function ResultPanel({
               <ul className="mt-1 space-y-1">
                 {generation.core.facts.map((f, i) => (
                   <li key={i} className="text-sm text-stone-600">
-                    • {f.claim} <a href={f.source} target="_blank" rel="noreferrer" className="text-emerald-700 underline">[출처]</a>
+                    • {f.claim}{" "}
+                    {isHttpUrl(f.source) ? (
+                      <a href={f.source} target="_blank" rel="noreferrer" className="text-emerald-700 underline">
+                        [출처]
+                      </a>
+                    ) : (
+                      <span className="text-stone-400">({f.source})</span>
+                    )}
                   </li>
                 ))}
               </ul>

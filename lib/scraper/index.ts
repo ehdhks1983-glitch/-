@@ -6,6 +6,7 @@
 import { createLogger } from "@/lib/log";
 import type { ScrapeResult } from "@/lib/multipublish/types";
 import { extractText } from "./extract";
+import { assertPublicUrl } from "./ssrf";
 import {
   GENERIC_SELECTORS,
   SCRAPER_CONFIG,
@@ -99,23 +100,35 @@ export function toSourceRef(r: ScrapeResult) {
 // ───────────────────────── HTTP (네이티브 fetch) ─────────────────────────
 
 async function httpGet(url: string, mobile: boolean): Promise<string> {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), SCRAPER_CONFIG.timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent": mobile ? USER_AGENTS.mobile : USER_AGENTS.desktop,
-        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
-  } finally {
-    clearTimeout(t);
+  // SSRF: redirect를 수동 처리하고 매 hop(초기 포함)마다 공개 URL인지 검증.
+  let current = url;
+  for (let hop = 0; hop <= 5; hop++) {
+    await assertPublicUrl(current);
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), SCRAPER_CONFIG.timeoutMs);
+    try {
+      const res = await fetch(current, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: {
+          "User-Agent": mobile ? USER_AGENTS.mobile : USER_AGENTS.desktop,
+          "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (!loc) throw new Error(`리다이렉트 Location 없음 (${res.status})`);
+        current = new URL(loc, current).toString();
+        continue;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
+    } finally {
+      clearTimeout(t);
+    }
   }
+  throw new Error("리다이렉트가 너무 많습니다");
 }
 
 // ───────────────────────── Playwright fallback (lazy) ─────────────────────────
@@ -130,6 +143,7 @@ async function playwrightExtract(
 
   let browser: import("playwright").Browser | null = null;
   try {
+    await assertPublicUrl(url); // SSRF: 초기 URL 검증(Playwright는 내부 redirect까지는 막지 못하므로 보조 방어)
     const { chromium } = await import("playwright");
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({

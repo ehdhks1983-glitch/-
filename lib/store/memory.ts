@@ -58,6 +58,10 @@ export const memoryStore: GenerationStore = {
       .map(clone);
   },
 
+  async countActiveByOwner(owner: string): Promise<number> {
+    return [...DB.values()].filter((r) => r.owner === owner && (r.status === "queued" || r.status === "processing")).length;
+  },
+
   async claimNext(): Promise<StoredGeneration | null> {
     // 가장 오래된 queued 1건 → processing (단일 프로세스라 원자성 보장).
     const queued = [...DB.values()]

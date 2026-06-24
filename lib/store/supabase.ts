@@ -92,6 +92,16 @@ export function createSupabaseStore(client: SupabaseClient): GenerationStore {
       return (data ?? []).map((g) => mapGeneration(g));
     },
 
+    async countActiveByOwner(owner: string): Promise<number> {
+      const { count, error } = await client
+        .from("generations")
+        .select("*", { count: "exact", head: true })
+        .eq("owner", owner)
+        .in("status", ["queued", "processing"]);
+      if (error) throw new Error(`진행중 카운트 실패: ${error.message}`);
+      return count ?? 0;
+    },
+
     async claimNext(): Promise<StoredGeneration | null> {
       const { data, error } = await client.rpc("claim_next_generation");
       if (error) throw new Error(`claim 실패: ${error.message}`);
@@ -114,27 +124,31 @@ export function createSupabaseStore(client: SupabaseClient): GenerationStore {
     },
 
     async addOutput(id: string, output: OutputInput): Promise<number> {
-      // 채널별 최대 variant_no + 1 (MVP: 동일 채널 동시 재생성 경합은 드묾).
-      const { data: existing, error: qErr } = await client
-        .from("generation_outputs")
-        .select("variant_no")
-        .eq("generation_id", id)
-        .eq("channel", output.channel)
-        .order("variant_no", { ascending: false })
-        .limit(1);
-      if (qErr) throw new Error(`variant 조회 실패: ${qErr.message}`);
-      const variant_no = (existing?.[0]?.variant_no ?? 0) + 1;
+      // 채널별 max(variant_no)+1. 동시 재생성 충돌(unique index 23505) 시 재계산·재시도.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { data: existing, error: qErr } = await client
+          .from("generation_outputs")
+          .select("variant_no")
+          .eq("generation_id", id)
+          .eq("channel", output.channel)
+          .order("variant_no", { ascending: false })
+          .limit(1);
+        if (qErr) throw new Error(`variant 조회 실패: ${qErr.message}`);
+        const variant_no = (existing?.[0]?.variant_no ?? 0) + 1;
 
-      const { error } = await client.from("generation_outputs").insert({
-        generation_id: id,
-        channel: output.channel,
-        variant_no,
-        status: output.status,
-        content: output.content,
-        ai_cost_usd: output.ai_cost_usd,
-      });
-      if (error) throw new Error(`output 저장 실패: ${error.message}`);
-      return variant_no;
+        const { error } = await client.from("generation_outputs").insert({
+          generation_id: id,
+          channel: output.channel,
+          variant_no,
+          status: output.status,
+          content: output.content,
+          ai_cost_usd: output.ai_cost_usd,
+        });
+        if (!error) return variant_no;
+        if (error.code === "23505") continue; // unique 충돌 → 재계산
+        throw new Error(`output 저장 실패: ${error.message}`);
+      }
+      throw new Error("output 저장 실패: variant 충돌 재시도 초과");
     },
   };
 }

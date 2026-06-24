@@ -71,6 +71,21 @@ export async function POST(req: Request) {
 
   try {
     const store = await requestStore();
+
+    // 동시성 가드(TOCTOU 완화): 진행 중 잡 + 이번 요청이 잔액을 넘으면 차단.
+    // 완료 시점의 원자적 차감(spend_points)과 함께, 잔액보다 많은 동시 생성으로 무료 발행되는 것을 방지.
+    const active = await store.countActiveByOwner(owner as string);
+    if ((active + 1) * POINTS.SET > balance) {
+      return NextResponse.json(
+        {
+          error: `진행 중인 생성이 있어 잔액이 부족해요. (진행 중 ${active}건, 보유 ${balance}P)`,
+          code: "insufficient_points",
+          balance,
+        },
+        { status: 402 },
+      );
+    }
+
     const rec = await store.create({
       owner: owner as string,
       keyword,

@@ -37,19 +37,20 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!rec) return NextResponse.json({ error: "찾을 수 없어요." }, { status: 404 });
   if (!rec.core) return NextResponse.json({ error: "코어가 아직 준비되지 않았어요." }, { status: 400 });
 
-  // 편집된 코어(선택) 반영 — 메시지/앵글/대상/톤/태그만, facts는 출처 보존 위해 유지.
+  // 편집된 코어(선택) 계산 — 메시지/앵글/대상/톤/태그만, facts는 출처 보존 위해 유지. (영속화는 잔액 통과 후)
   let core = rec.core;
+  let editedProvided = false;
   try {
     const body = (await req.json()) as { core?: Partial<Core> };
     if (body?.core && typeof body.core === "object") {
       core = mergeEditedCore(rec.core, body.core);
-      await workerStore().update(id, { core });
+      editedProvided = true;
     }
   } catch {
     /* 본문 없음/파싱 실패 → 기존 코어 사용 */
   }
 
-  // 잔액 체크(차감은 §15.9).
+  // 잔액 체크 — 편집 코어 영속화/생성 전에(거부 시 부수효과·과금 0).
   const balance = await getBalance();
   if (balance < POINTS.CHANNEL_REGEN) {
     return NextResponse.json(
@@ -57,6 +58,9 @@ export async function POST(req: Request, ctx: Ctx) {
       { status: 402 },
     );
   }
+
+  // 잔액 통과 후에만 편집 코어를 영속화(이후 생성에 반영).
+  if (editedProvided) await workerStore().update(id, { core });
 
   try {
     const result = await generateChannel(channel, core, {
