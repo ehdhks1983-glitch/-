@@ -189,12 +189,31 @@ returns int language sql stable security definer set search_path = public as $$
   select coalesce((select balance from public.point_wallets where user_id = p_user_id), 0);
 $$;
 
+-- 큐 점유: 가장 오래된 queued 1건을 processing 으로(FOR UPDATE SKIP LOCKED = 동시 워커 안전).
+create or replace function public.claim_next_generation()
+returns public.generations
+language plpgsql security definer set search_path = public as $$
+declare v_row public.generations;
+begin
+  select * into v_row from public.generations
+   where status = 'queued'
+   order by created_at
+   for update skip locked
+   limit 1;
+  if not found then return null; end if;
+  update public.generations set status = 'processing', updated_at = now()
+   where id = v_row.id returning * into v_row;
+  return v_row;
+end; $$;
+
 -- 과금 함수는 서버(워커=service_role)만 호출. 일반 사용자 직접 호출 차단.
 revoke all on function public.grant_points(uuid, int, jsonb) from public, anon, authenticated;
 revoke all on function public.spend_points(uuid, int, text, numeric, text, text, jsonb) from public, anon, authenticated;
 grant execute on function public.grant_points(uuid, int, jsonb) to service_role;
 grant execute on function public.spend_points(uuid, int, text, numeric, text, text, jsonb) to service_role;
 grant execute on function public.wallet_balance(uuid) to authenticated, service_role;
+revoke all on function public.claim_next_generation() from public, anon, authenticated;
+grant execute on function public.claim_next_generation() to service_role;
 
 -- ╔═══════════════════════════════════════════════════════════╗
 -- ║ 가입 트리거: profile + wallet + trial 구독 + 체험 grant     ║
