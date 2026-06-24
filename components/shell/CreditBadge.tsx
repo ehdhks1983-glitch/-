@@ -23,8 +23,10 @@ export default function CreditBadge() {
   }, []);
 
   useEffect(() => {
-    load();
-    const onRefresh = () => load();
+    // 마운트 시 1회 잔액 로드 + 'wallet:refresh' 구독. 비동기 fetch 후 setState(즉시 아님) — 의도된 effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+    const onRefresh = () => void load();
     window.addEventListener(WALLET_REFRESH_EVENT, onRefresh);
     return () => window.removeEventListener(WALLET_REFRESH_EVENT, onRefresh);
   }, [load]);

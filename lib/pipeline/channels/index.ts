@@ -1,16 +1,23 @@
 // lib/pipeline/channels/index.ts — 채널 생성기 레지스트리 + 디스패치.
-// §15.6: blog. §15.7에서 threads/instagram/cafe/shorts 추가.
+// 블로그(Sonnet) + 스레드/인스타/카페/쇼츠(Haiku). 입력은 모두 동일한 core.
 
 import type { Channel, Core } from "@/lib/multipublish/types";
 import { generateBlog } from "./blog";
+import { generateThreads } from "./threads";
+import { generateInstagram } from "./instagram";
+import { generateCafe } from "./cafe";
+import { generateShorts } from "./shorts";
 import type { ChannelContext, ChannelGenResult } from "./types";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyGenerator = (core: Core, ctx: ChannelContext) => Promise<ChannelGenResult<any>>;
 
-// §15.7에서 4채널 추가 예정. 등록되지 않은 채널 요청은 워커가 partial로 처리.
-const GENERATORS: Partial<Record<Channel, AnyGenerator>> = {
+const GENERATORS: Record<Channel, AnyGenerator> = {
   blog: generateBlog,
+  threads: generateThreads,
+  instagram: generateInstagram,
+  cafe: generateCafe,
+  shorts: generateShorts,
 };
 
 export interface AnyChannelResult {
@@ -19,7 +26,7 @@ export interface AnyChannelResult {
   mocked: boolean;
 }
 
-/** 채널 1개 생성. 미구현 채널은 예외(워커가 partial로 처리). */
+/** 채널 1개 생성. 미등록 채널은 예외(워커가 partial로 처리). */
 export async function generateChannel(
   channel: Channel,
   core: Core,

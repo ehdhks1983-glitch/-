@@ -14,7 +14,7 @@ import { generateBlog, BLOG_TAG_COUNT } from "@/lib/pipeline/channels/blog";
 import { memoryStore, __resetMemoryStore } from "@/lib/store/memory";
 import { drainOnce } from "@/lib/worker/loop";
 import { latestOutputs } from "@/lib/store/types";
-import type { GenOptions } from "@/lib/multipublish/types";
+import { ALL_CHANNELS, type CafeContent, type GenOptions, type InstagramContent, type ShortsContent, type ThreadsContent } from "@/lib/multipublish/types";
 
 const OPTS: GenOptions = { tone: 60, monetize: true, channels: ["blog"] };
 let fail = 0;
@@ -46,19 +46,39 @@ async function main() {
   check("제목/본문/메타 존재", !!blog.content.title && blog.content.body_markdown.length > 50 && !!blog.content.meta_description);
   check("썸네일 1:1 가이드", /1:1|정사각/.test(blog.content.thumbnail_guide));
 
-  // ── 워커 E2E: queued → done, core + 블로그 산출물 ──
+  // ── 워커 E2E: 전 채널(블로그+4채널) queued → done ──
   __resetMemoryStore();
-  const rec = await memoryStore.create({ owner: "u1", keyword: "곰탕 끓이는 법", sourceUrls: [], options: OPTS });
+  const rec = await memoryStore.create({
+    owner: "u1",
+    keyword: "곰탕 끓이는 법",
+    sourceUrls: [],
+    options: { tone: 60, monetize: true, channels: ALL_CHANNELS },
+  });
   await drainOnce();
   const done = await memoryStore.getById(rec.id);
   check("워커 처리 done", done?.status === "done", `status=${done?.status}`);
   check("core 저장됨", !!done?.core?.core_message);
-  const outs = latestOutputs(done?.outputs ?? []);
-  const blogOut = outs.find((o) => o.channel === "blog");
-  check("블로그 산출물 저장(10태그)", !!blogOut && (blogOut.content as { tags: string[] }).tags.length === BLOG_TAG_COUNT);
   check("제목 자동 설정", !!done?.title && done.title.length > 0, done?.title);
 
-  console.log(fail === 0 ? "\n✅ 파이프라인(코어→블로그) 검증 통과" : `\n❌ ${fail}건 실패`);
+  const outs = latestOutputs(done?.outputs ?? []);
+  check("5개 채널 산출물", outs.length === 5 && outs.every((o) => o.status === "done"), `${outs.length}개`);
+
+  const blogOut = outs.find((o) => o.channel === "blog");
+  check("블로그: 태그 10개", !!blogOut && (blogOut.content as { tags: string[] }).tags.length === BLOG_TAG_COUNT);
+
+  const th = outs.find((o) => o.channel === "threads")?.content as ThreadsContent | undefined;
+  check("스레드: posts 1~6 / 해시태그 ≤2", !!th && th.posts.length >= 1 && th.posts.length <= 6 && th.hashtags.length <= 2);
+
+  const ig = outs.find((o) => o.channel === "instagram")?.content as InstagramContent | undefined;
+  check("인스타: 해시태그 10~20 / 캐러셀 ≥1", !!ig && ig.hashtags.length >= 10 && ig.hashtags.length <= 20 && ig.carousel.length >= 1, `해시태그 ${ig?.hashtags.length}`);
+
+  const cafe = outs.find((o) => o.channel === "cafe")?.content as CafeContent | undefined;
+  check("카페: 제목/본문/댓글유도", !!cafe && !!cafe.title && !!cafe.body && !!cafe.comment_bait);
+
+  const sh = outs.find((o) => o.channel === "shorts")?.content as ShortsContent | undefined;
+  check("쇼츠: 장면 ≥1 / 길이 30~60초", !!sh && sh.scenes.length >= 1 && sh.duration_sec >= 30 && sh.duration_sec <= 60, `${sh?.duration_sec}초`);
+
+  console.log(fail === 0 ? "\n✅ 파이프라인(코어→블로그+4채널) 검증 통과" : `\n❌ ${fail}건 실패`);
   process.exit(fail === 0 ? 0 : 1);
 }
 
