@@ -18,17 +18,22 @@ export function channelToCopyText(channel: Channel, content: unknown): string {
   switch (channel) {
     case "blog": {
       const c = content as BlogContent;
-      return [
-        c.title,
-        "",
-        c.body_markdown,
-        "",
-        `태그: ${tags(c.tags)}`,
-        c.meta_description ? `\n[메타설명] ${c.meta_description}` : "",
-        c.thumbnail_guide ? `[썸네일] ${c.thumbnail_guide}` : "",
-      ]
-        .join("\n")
-        .trim();
+      // ==형광펜== → 노란 하이라이트 span / 핵심정리·CTA는 가운데정렬 div (블로그 에디터 붙여넣기용).
+      const body = (c.body_markdown ?? "").replace(
+        /==(.+?)==/g,
+        '<span style="background-color:#fef08a">$1</span>',
+      );
+      const summary = (c.key_points ?? []).length
+        ? `<div style="text-align:center">\n📌 핵심 정리\n${(c.key_points ?? []).map((p) => `· ${p}`).join("\n")}\n</div>`
+        : "";
+      const cta = c.cta ? `<div style="text-align:center">${c.cta}</div>` : "";
+      const parts = [c.title, "", body];
+      if (summary) parts.push("", summary);
+      if (cta) parts.push("", cta);
+      parts.push("", `태그: ${tags(c.tags)}`);
+      if (c.meta_description) parts.push("", `[메타설명] ${c.meta_description}`);
+      if (c.thumbnail_guide) parts.push(`[썸네일] ${c.thumbnail_guide}`);
+      return parts.join("\n").trim();
     }
     case "threads": {
       const c = content as ThreadsContent;

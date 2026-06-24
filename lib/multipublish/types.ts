@@ -68,8 +68,12 @@ export interface GenOptions {
 export interface BlogContent {
   title: string;
   meta_description: string;
-  /** 본문 마크다운(소제목/리스트 포함). */
+  /** 본문(소제목 ##/리스트 포함). 핵심 문구는 ==형광펜== 으로 표시(복사 시 span 하이라이트로 변환). */
   body_markdown: string;
+  /** 맨 끝 "📌 핵심 정리" 항목 3~5개(가운데정렬 div로 표시/복사). */
+  key_points: string[];
+  /** 수익화 모드일 때만: 자연스러운 CTA 1줄(가운데정렬). 아니면 빈 문자열. */
+  cta: string;
   /** 핵심 태그 — 정확히 10개(스펙 §16 코어룰). */
   tags: string[];
   /** 썸네일 1:1 가이드(스펙 §13). */

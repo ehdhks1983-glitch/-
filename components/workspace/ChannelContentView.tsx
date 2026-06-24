@@ -35,6 +35,22 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 
 const pre = "whitespace-pre-wrap break-words text-sm leading-relaxed text-stone-800";
 
+/** ==형광펜== 표시를 노란 하이라이트 span 으로 렌더(그 외는 자동 이스케이프 텍스트, 줄바꿈 보존). */
+function HighlightedText({ text }: { text: string }) {
+  const parts = (text ?? "").split(/==(.+?)==/g); // 짝수 index=일반, 홀수=하이라이트
+  return (
+    <div className={pre}>
+      {parts.map((p, i) =>
+        i % 2 === 1 ? (
+          <span key={i} className="rounded bg-yellow-200/70 px-0.5 font-medium">{p}</span>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
 export default function ChannelContentView({ channel, content }: { channel: Channel; content: unknown }) {
   if (!content || typeof content !== "object") {
     return <p className="text-sm text-stone-400">내용이 없어요.</p>;
@@ -48,8 +64,21 @@ export default function ChannelContentView({ channel, content }: { channel: Chan
           <h3 className="text-xl font-bold">{c.title}</h3>
           {c.meta_description && <p className="text-sm text-stone-500">{c.meta_description}</p>}
           <Block title="본문">
-            <div className={pre}>{c.body_markdown}</div>
+            <HighlightedText text={c.body_markdown} />
           </Block>
+          {c.key_points?.length > 0 && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-center">
+              <p className="font-bold text-emerald-900">📌 핵심 정리</p>
+              <ul className="mt-2 space-y-1 text-sm text-stone-700">
+                {c.key_points.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {c.cta && (
+            <div className="rounded-xl bg-stone-900 px-4 py-3 text-center text-sm font-semibold text-white">{c.cta}</div>
+          )}
           <Block title="핵심 태그 (10개)">
             <Tags items={c.tags ?? []} />
           </Block>
