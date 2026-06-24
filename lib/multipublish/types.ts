@@ -34,16 +34,22 @@ export interface Core {
   tag_candidates: string[];
 }
 
-/** 참고자료 1건 + 스크랩 결과 메타. */
+/** 참고자료 1건 + 스크랩 결과 메타. generations.source_refs(jsonb)에 저장(본문 텍스트는 제외 — 바이트/프라이버시). */
 export interface SourceRef {
   url: string;
   /** 스크랩 성공 여부. false면 "팩트 근거 없음" 플래그(스펙 §7.2). */
   ok: boolean;
   /** 추출 본문 길이(문자). */
   chars?: number;
-  /** 추출 방식 got+cheerio | playwright | none. */
+  /** 추출 방식. */
   via?: "cheerio" | "playwright" | "none";
+  /** 실패 사유 등 짧은 메모. */
   note?: string;
+}
+
+/** 스크랩 결과(워커 내부용) — SourceRef + 실제 본문 텍스트. 본문은 코어추출 입력으로만 쓰고 메타만 영속화. */
+export interface ScrapeResult extends SourceRef {
+  text: string;
 }
 
 /** 톤: 슬라이더(0=정중/전문 ↔ 100=캐주얼/친근). */

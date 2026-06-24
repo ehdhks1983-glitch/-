@@ -18,3 +18,5 @@
 | 11 | **미들웨어 → `proxy.ts`로 마이그레이션** | Next.js 16에서 Middleware→Proxy 리네임, `middleware.ts`는 `@deprecated`. AGENTS.md "deprecation 준수". |
 | 12 | **상태 전달 = GET 폴링(2~3초)** | 스펙 §4/§10 MVP는 폴링(SSE는 후일). |
 | 13 | **보관(retention) 컬럼은 plans에 두되 배치 삭제는 미구현** | 스펙 §5에서 "보관 배치"는 P2 OUT. 정책값만 컬럼으로 보유. |
+| 14 | **스크래퍼 1순위 HTTP = `got` 대신 Node22 네이티브 fetch** | §9 의도는 "가벼운 fetch 우선". 네이티브 fetch가 바로 그 가벼운 fetch이며 ESM 번들 리스크 0·더 견고. cheerio 파싱 + Playwright fallback 구조는 그대로. 스택 교체 가능(§3). |
+| 15 | **Playwright는 lazy import + graceful degrade** | 브라우저 바이너리 없는 환경에서도 빌드/실행되도록. 미설치 시 경고 로그 + 해당 URL 스킵("팩트 근거 없음"). serverExternalPackages로 번들 제외. |
