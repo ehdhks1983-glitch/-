@@ -8,6 +8,7 @@ import { getBalance } from "@/lib/billing";
 import { POINTS } from "@/lib/config/points";
 import { createLogger } from "@/lib/log";
 import { ALL_CHANNELS, type Channel, type GenOptions } from "@/lib/multipublish/types";
+import { toSummary } from "@/lib/multipublish/serialize";
 import { clientKey, rateLimit, sweep } from "@/lib/rateLimit";
 import { requestStore } from "@/lib/store";
 import { kickWorker } from "@/lib/worker/kick";
@@ -21,6 +22,20 @@ interface CreateBody {
   keyword?: unknown;
   sourceUrls?: unknown;
   options?: { tone?: unknown; monetize?: unknown; channels?: unknown };
+}
+
+/** GET /api/generations — 내 발행물 목록 (스펙 §11). 본인 것만, 최신순. */
+export async function GET() {
+  const { owner, configured } = await currentOwner();
+  if (configured && !owner) return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
+  try {
+    const store = await requestStore();
+    const items = await store.listByOwner(owner as string, 100);
+    return NextResponse.json({ generations: items.map(toSummary) });
+  } catch (err) {
+    log.error("목록 조회 실패", { err: err instanceof Error ? err.message : String(err) });
+    return NextResponse.json({ error: "목록 조회에 실패했어요." }, { status: 500 });
+  }
 }
 
 export async function POST(req: Request) {

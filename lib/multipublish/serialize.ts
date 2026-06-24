@@ -28,6 +28,29 @@ export interface ClientGeneration {
   expires_at: string | null;
 }
 
+/** 목록(내 발행물)용 경량 요약. */
+export interface ClientGenerationSummary {
+  id: string;
+  keyword: string;
+  title: string;
+  status: GenerationStatus;
+  channelCount: number;
+  starred: boolean;
+  created_at: string;
+}
+
+export function toSummary(rec: StoredGeneration): ClientGenerationSummary {
+  return {
+    id: rec.id,
+    keyword: rec.keyword,
+    title: rec.title || rec.keyword,
+    status: rec.status,
+    channelCount: rec.options?.channels?.length ?? 0,
+    starred: rec.starred,
+    created_at: rec.created_at,
+  };
+}
+
 export function toClientGeneration(rec: StoredGeneration): ClientGeneration {
   const order = (c: Channel) => ALL_CHANNELS.indexOf(c);
   const channels = latestOutputs(rec.outputs)
