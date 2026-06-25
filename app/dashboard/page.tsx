@@ -18,9 +18,14 @@ export default async function DashboardPage() {
           Supabase 환경변수를 설정하면 로그인·저장·게시를 쓸 수 있어요. 그 전에도 페이지 생성과
           미리보기는 그대로 동작합니다.
         </p>
-        <Link href="/project/new" className="mt-6 inline-block rounded-full bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white">
-          페이지 만들러 가기
-        </Link>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          <Link href="/project/new" className="inline-block rounded-full bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white">
+            페이지 만들러 가기
+          </Link>
+          <Link href="/discover" className="inline-block rounded-full border border-slate-200 px-6 py-2.5 text-sm font-medium transition hover:bg-slate-50">
+            아이디어 발굴
+          </Link>
+        </div>
       </Centered>
     );
   }
@@ -42,6 +47,18 @@ export default async function DashboardPage() {
           </Link>
           <div className="flex items-center gap-2">
             <LogoutButton />
+            <Link
+              href="/discover"
+              className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium transition hover:bg-slate-50"
+            >
+              아이디어 발굴
+            </Link>
+            <Link
+              href="/queue"
+              className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium transition hover:bg-slate-50"
+            >
+              대기열
+            </Link>
             <Link
               href="/project/new"
               className="rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500"
