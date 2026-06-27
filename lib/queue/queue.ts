@@ -23,6 +23,8 @@ export interface QueueItem {
   fitScore: number;
   /** 발굴에 쓴 시드(출처 추적용). */
   seed: string;
+  /** 생성 전 택1한 히어로 헤드라인(v1.1). 비어 있으면 자동 생성 헤드라인 사용. */
+  chosenHeadline: string;
   status: QueueStatus;
   /** 완료 시 생성된 공개 페이지 slug. */
   slug: string;
@@ -86,6 +88,7 @@ function normalize(raw: unknown): QueueItem | null {
     rationale: typeof r.rationale === "string" ? r.rationale : "",
     fitScore: Number.isFinite(fit) ? Math.max(0, Math.min(100, Math.round(fit))) : 0,
     seed: typeof r.seed === "string" ? r.seed : "",
+    chosenHeadline: typeof r.chosenHeadline === "string" ? r.chosenHeadline : "",
     status,
     slug: typeof r.slug === "string" ? r.slug : "",
     projectId: typeof r.projectId === "string" ? r.projectId : "",
@@ -144,6 +147,7 @@ export function addIdeas(ideas: DiscoveredIdea[], seed = ""): QueueItem[] {
       rationale: typeof d.rationale === "string" ? d.rationale.trim() : "",
       fitScore: Number.isFinite(fit) ? Math.max(0, Math.min(100, Math.round(fit))) : 0,
       seed,
+      chosenHeadline: "",
       status: "대기",
       slug: "",
       projectId: "",

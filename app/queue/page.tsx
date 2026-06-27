@@ -32,6 +32,10 @@ export default function QueuePage() {
   const [batch, setBatch] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState<AppStatus | null>(null);
+  // 헤드라인 후보(v1.1): 항목별 후보 리스트 / 로딩 중 항목 / 패널 열린 항목
+  const [headlineOpts, setHeadlineOpts] = useState<Record<string, string[]>>({});
+  const [headlineLoadingId, setHeadlineLoadingId] = useState("");
+  const [openHeadlineId, setOpenHeadlineId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -62,16 +66,21 @@ export default function QueuePage() {
     refresh();
     try {
       // 1) 원고(카피) 생성 — 보완질문은 건너뛰고 바로 생성(배치/무인)
+      //    택1 헤드라인이 있으면 기존 answers 채널로 본문 톤을 그 방향으로 스티어링(core 무수정)
+      const genBody: Record<string, unknown> = { prompt: item.idea, skipClarify: true };
+      if (item.chosenHeadline) {
+        genBody.answers = [{ question: "선호 헤드라인 방향", answer: item.chosenHeadline }];
+      }
       const gen = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: item.idea, skipClarify: true }),
+        body: JSON.stringify(genBody),
       });
       const gdata = (await gen.json().catch(() => ({}))) as {
         stage?: string;
         biz?: { service_name?: string };
         template?: string;
-        copy?: unknown;
+        copy?: { hero?: { headline?: string } };
         error?: string;
       };
       if (gen.status === 401) {
@@ -83,6 +92,10 @@ export default function QueuePage() {
       if (!gen.ok) throw new Error(gdata?.error || "생성에 실패했어요.");
       if (gdata.stage !== "done" || !gdata.copy) throw new Error("생성 결과가 비어 있어요.");
 
+      // 택1 헤드라인을 히어로 헤드라인에 강제 반영(자동 생성본을 덮어씀). 나머지 copy 필드는 그대로.
+      const copy = gdata.copy;
+      if (item.chosenHeadline && copy.hero) copy.hero.headline = item.chosenHeadline;
+
       // 2) 게시(저장) — 기존 수동 게시와 동일한 페이로드
       const save = await fetch("/api/projects", {
         method: "POST",
@@ -92,7 +105,7 @@ export default function QueuePage() {
           title: gdata.biz?.service_name ?? "",
           template: gdata.template,
           biz_info: gdata.biz,
-          copy: gdata.copy,
+          copy,
         }),
       });
       const sdata = (await save.json().catch(() => ({}))) as { id?: string; slug?: string; error?: string };
@@ -148,6 +161,32 @@ export default function QueuePage() {
 
   function onClearFinished() {
     setItems(clearFinished());
+  }
+
+  /** 항목의 idea로 헤드라인 후보 N개를 받아와 패널을 연다(v1.1). */
+  async function fetchHeadlines(item: QueueItem) {
+    setError("");
+    setHeadlineLoadingId(item.id);
+    try {
+      const res = await fetch("/api/headlines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idea: item.idea }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { headlines?: string[]; error?: string };
+      if (!res.ok) throw new Error(data?.error || "헤드라인 후보를 불러오지 못했어요.");
+      setHeadlineOpts((prev) => ({ ...prev, [item.id]: data.headlines ?? [] }));
+      setOpenHeadlineId(item.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "문제가 발생했어요.");
+    } finally {
+      setHeadlineLoadingId("");
+    }
+  }
+
+  /** 후보 중 하나를 택1해 큐 항목에 저장. 생성 시 히어로 헤드라인으로 강제 반영된다. */
+  function pickHeadline(id: string, headline: string) {
+    setItems(updateItem(id, { chosenHeadline: headline }));
   }
 
   const counts = countByStatus(items);
@@ -252,6 +291,53 @@ export default function QueuePage() {
                     </div>
                     <p className="mt-2 font-medium text-slate-800">{it.idea}</p>
                     {it.rationale && <p className="mt-1 text-sm text-slate-500">{it.rationale}</p>}
+
+                    {/* 헤드라인 후보 택1 (v1.1) — 생성 가능한 상태에서만 */}
+                    {(it.status === "대기" || it.status === "실패") && (
+                      <div className="mt-3">
+                        {it.chosenHeadline ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-md bg-indigo-50 px-2 py-1 text-sm text-indigo-700">
+                              헤드라인: {it.chosenHeadline}
+                            </span>
+                            <button
+                              onClick={() => fetchHeadlines(it)}
+                              disabled={busy || headlineLoadingId === it.id}
+                              className="text-xs text-slate-500 underline disabled:opacity-50"
+                            >
+                              {headlineLoadingId === it.id ? "불러오는 중…" : "변경"}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => fetchHeadlines(it)}
+                            disabled={busy || headlineLoadingId === it.id}
+                            className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {headlineLoadingId === it.id ? "후보 불러오는 중…" : "✨ 헤드라인 후보 고르기"}
+                          </button>
+                        )}
+                        {openHeadlineId === it.id && (headlineOpts[it.id]?.length ?? 0) > 0 && (
+                          <ul className="mt-2 space-y-1">
+                            {(headlineOpts[it.id] ?? []).map((h, hi) => (
+                              <li key={hi}>
+                                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm transition hover:bg-slate-50">
+                                  <input
+                                    type="radio"
+                                    name={`hl-${it.id}`}
+                                    checked={it.chosenHeadline === h}
+                                    onChange={() => pickHeadline(it.id, h)}
+                                    className="mt-0.5 accent-indigo-600"
+                                  />
+                                  <span>{h}</span>
+                                </label>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+
                     {it.status === "실패" && it.error && (
                       <p className="mt-1 text-sm text-red-600">실패: {it.error}</p>
                     )}
