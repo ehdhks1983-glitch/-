@@ -97,6 +97,15 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 - 생성/저장/신청 엔드포인트에 IP 기준 rate limit (토큰 비용·스팸 방지).
 - `service_role` 키는 서버 전용. `.env*` 는 커밋 금지(`.env.example` 만 예외).
 
+## 통합 라이선스(코드발급) 시스템
+
+윈도우 설치형 자동화 봇 6개를 하나로 묶어 **코드 1개로 전부 잠금 해제**하는 온라인 라이선스 기능이 포함돼 있습니다(기존 Supabase 인프라 재활용).
+
+- 관리 화면: **`/admin/licenses`** (관리자 이메일 전용) — 코드 발급·정지·기기초기화·삭제
+- 봇 검증 API: **`POST /api/license/verify`** `{ code, device_id, bot_id }`
+- 설정: `database/license-schema.sql` 실행 + `SUPABASE_SERVICE_ROLE_KEY`·`LICENSE_ADMIN_EMAILS` 환경변수
+- 상세 가이드(봇 C# 연동 예시 포함): **`docs/LICENSE_SYSTEM.md`**
+
 ## 다음 단계 (로드맵)
 
 - **2차**: 이미지 생성, 다국어, 광고 픽셀, GEO 고급(llms.txt/스키마), 프로젝트 재편집
