@@ -32,15 +32,15 @@ const REGIONS = ["제주", "강원(양양·속초)", "가평·양평", "경기",
 
 export const HOST_CONFIG: KindConfig = {
   kind: "host",
-  title: "숙소 신청",
-  subtitle: "감성 스테이·독채 펜션 운영자를 위한 캠페인 신청이에요. 큐레이션 심사 후 연락드려요.",
-  cta: "숙소 캠페인 신청하기",
+  title: "무료로 캠페인 만들기",
+  subtitle: "감성 독채·풀빌라 사장님을 위한 캠페인 신청이에요. 큐레이션 심사 후 연락드려요. (베타 오픈)",
+  cta: "무료로 캠페인 신청",
   fields: [
-    { name: "stayName", label: "숙소명", type: "text", required: true, placeholder: "예) 제주 돌담독채", maxLen: 80 },
-    { name: "name", label: "담당자 이름", type: "text", required: true, placeholder: "성함", maxLen: 40 },
-    { name: "region", label: "지역", type: "select", required: true, options: REGIONS },
+    { name: "stay_name", label: "숙소명", type: "text", required: true, placeholder: "예) 제주 돌담독채", maxLen: 80 },
+    { name: "advertiser_name", label: "사장님 성함", type: "text", required: true, placeholder: "성함", maxLen: 40 },
+    { name: "stay_region", label: "지역", type: "select", required: true, options: REGIONS },
     {
-      name: "stayType",
+      name: "stay_type",
       label: "숙소 유형",
       type: "select",
       required: true,
@@ -49,7 +49,7 @@ export const HOST_CONFIG: KindConfig = {
     { name: "email", label: "이메일", type: "email", required: true, placeholder: "you@example.com", maxLen: 254 },
     { name: "phone", label: "연락처", type: "tel", placeholder: "010-0000-0000", maxLen: 30 },
     {
-      name: "url",
+      name: "stay_url",
       label: "인스타·홈페이지·예약 링크",
       type: "text",
       placeholder: "https://instagram.com/...",
@@ -69,9 +69,9 @@ export const HOST_CONFIG: KindConfig = {
 
 export const CREATOR_CONFIG: KindConfig = {
   kind: "creator",
-  title: "크리에이터 신청",
+  title: "크리에이터 지원",
   subtitle: "여행·숙박·감성 라이프스타일 숏폼 크리에이터를 모십니다. 실제 1박 후 촬영하는 합법 캠페인이에요.",
-  cta: "크리에이터로 합류하기",
+  cta: "크리에이터로 지원하기",
   fields: [
     { name: "name", label: "이름 / 활동명", type: "text", required: true, placeholder: "성함 또는 활동명", maxLen: 40 },
     {

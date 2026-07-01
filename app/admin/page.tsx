@@ -181,10 +181,10 @@ export default async function AdminPage({
 
 /** payload(추가 필드)를 키-값으로 표시. 이미 윗줄에 나온 기본 필드는 건너뛴다. */
 function PayloadGrid({ payload }: { payload: Record<string, unknown> }) {
-  const SKIP = new Set(["name", "email", "phone", "region", "stayName"]);
+  const SKIP = new Set(["name", "advertiser_name", "email", "phone", "region", "stay_region", "stay_name"]);
   const entries = Object.entries(payload).filter(([k, v]) => !SKIP.has(k) && typeof v === "string" && v);
-  // stayName 은 숙소명이라 별도로 먼저 보여준다.
-  const stayName = typeof payload.stayName === "string" ? payload.stayName : "";
+  // 숙소명은 별도로 먼저 보여준다.
+  const stayName = typeof payload.stay_name === "string" ? payload.stay_name : "";
   if (!stayName && entries.length === 0) return null;
   return (
     <dl className="mt-3 grid gap-x-6 gap-y-1.5 border-t border-stone-100 pt-3 text-sm sm:grid-cols-2">

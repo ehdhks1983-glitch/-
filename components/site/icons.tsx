@@ -1,5 +1,4 @@
-// components/site/icons.tsx — 가벼운 인라인 SVG 아이콘 모음.
-// 단색(currentColor) + stroke 기반. 색은 부모 text-* 클래스로 제어.
+// components/site/icons.tsx — 가벼운 인라인 SVG 아이콘 모음(currentColor 기반).
 
 type P = { className?: string };
 const base = "h-6 w-6";
@@ -35,9 +34,8 @@ export function Curate({ className = base }: P) {
 
 export function Play({ className = base }: P) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <rect x="6" y="3" width="12" height="18" rx="2" />
-      <path d="M10.5 9l4 3-4 3V9z" />
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+      <path d="M8 5v14l11-7z" />
     </svg>
   );
 }
@@ -57,5 +55,27 @@ export function Check({ className = "h-5 w-5" }: P) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
       <path d="M5 12l5 5L20 7" />
     </svg>
+  );
+}
+
+export function MapPin({ className = "h-4 w-4" }: P) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11z" />
+      <circle cx="12" cy="10" r="2.5" />
+    </svg>
+  );
+}
+
+/** 원형 "실제 체크인 인증" 스탬프(세이지 배경 + 체크). 시그니처 요소. */
+export function CheckinStamp({ className = "h-16 w-16" }: P) {
+  return (
+    <div
+      className={`flex flex-col items-center justify-center rounded-full border border-white/30 bg-sage/95 text-center text-on-orange shadow-lg ${className}`}
+      aria-label="실제 체크인 인증"
+    >
+      <Check className="h-5 w-5 text-ink" />
+      <span className="mt-0.5 font-mono text-[8px] font-bold leading-tight text-ink">실제 체크인<br />인증</span>
+    </div>
   );
 }

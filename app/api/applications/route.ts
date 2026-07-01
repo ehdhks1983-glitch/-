@@ -69,10 +69,10 @@ export async function POST(req: Request) {
     const supabase = await createSupabaseServer();
     await insertApplication(supabase, {
       kind: body.kind,
-      name: clean.name || clean.stayName || "",
+      name: clean.name || clean.advertiser_name || clean.stay_name || "",
       email,
       phone: clean.phone || undefined,
-      region: clean.region || undefined,
+      region: clean.region || clean.stay_region || undefined,
       payload: clean,
     });
     return NextResponse.json({ ok: true });

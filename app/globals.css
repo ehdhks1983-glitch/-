@@ -1,31 +1,59 @@
 @import "tailwindcss";
 
+/* ── 머무는순간 · Film Proof 디자인 토큰 ── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #14151a; /* 배경(다크) */
+  --paper: #f3eee3; /* 카드/오프화이트 텍스트 */
+  --film-orange: #e85d2c; /* 포인트 컬러 — CTA, 유일한 강조색 */
+  --on-orange: #2b1206; /* 오렌지 위 텍스트 */
+  --sage: #8a8f72; /* 인증 배지 전용 */
+  --muted: #9b9a94; /* 보조 텍스트 */
+  --line: #33342e; /* 다크 배경 위 보더 */
+  --paper-dim: #cfc9bd; /* 본문 서브 톤 */
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-ink: var(--ink);
+  --color-paper: var(--paper);
+  --color-paper-dim: var(--paper-dim);
+  --color-film: var(--film-orange);
+  --color-on-orange: var(--on-orange);
+  --color-sage: var(--sage);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* Pretendard(헤드라인/UI) · Noto Serif KR(본문) · JetBrains Mono(캡션) */
+  --font-sans: "Pretendard Variable", "Pretendard", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: var(--font-noto-serif), "Noto Serif KR", Georgia, serif;
+  --font-mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
 
-/* 템플릿 히어로 진입 애니메이션 (점진적 향상 — 미지원 환경에선 그냥 표시) */
+/* 필름 콘택트시트 카드: 살짝 기울인 배치 */
+.tilt-l {
+  transform: rotate(-3deg);
+}
+.tilt-r {
+  transform: rotate(2deg);
+}
+.tilt-0 {
+  transform: rotate(-1deg);
+}
+
+/* 헤드라인 타이트 세팅 */
+.headline {
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+/* 진입 애니메이션(점진적 향상) */
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -36,7 +64,6 @@ body {
     transform: none;
   }
 }
-
 .animate-fade-up {
   animation: fade-up 0.6s ease-out both;
 }
@@ -52,5 +79,10 @@ body {
   .animate-fade-up-delay-1,
   .animate-fade-up-delay-2 {
     animation: none;
+  }
+  .tilt-l,
+  .tilt-r,
+  .tilt-0 {
+    transform: none;
   }
 }
