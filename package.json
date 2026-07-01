@@ -6,9 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "test:ai": "tsx scripts/test-ai.ts",
-    "demo": "tsx scripts/build-demo.tsx"
+    "lint": "eslint"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

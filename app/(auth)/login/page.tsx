@@ -33,12 +33,12 @@ export default function LoginPage() {
       setError("이메일 또는 비밀번호를 확인해 주세요.");
       return;
     }
-    router.push("/dashboard");
+    router.push("/admin");
     router.refresh();
   }
 
   return (
-    <AuthShell title="로그인" subtitle="대시보드에서 만든 페이지와 신청자를 관리하세요.">
+    <AuthShell title="운영자 로그인" subtitle="신청 목록과 캠페인을 관리하세요.">
       <form onSubmit={submit} className="space-y-4">
         <Field label="이메일" type="email" value={email} onChange={setEmail} autoComplete="email" />
         <Field
@@ -52,14 +52,14 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-lg bg-indigo-600 px-4 py-3 font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+          className="w-full rounded-lg bg-teal-700 px-4 py-3 font-semibold text-white transition hover:bg-teal-800 disabled:opacity-50"
         >
           {loading ? "로그인 중…" : "로그인"}
         </button>
       </form>
-      <p className="mt-6 text-center text-sm text-slate-500">
+      <p className="mt-6 text-center text-sm text-stone-500">
         계정이 없으신가요?{" "}
-        <Link href="/signup" className="font-medium text-indigo-600 hover:underline">
+        <Link href="/signup" className="font-medium text-teal-700 hover:underline">
           회원가입
         </Link>
       </p>

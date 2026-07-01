@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PromptSite — 딸깍으로 만드는 랜딩페이지",
-  description: "프롬프트 한 줄이면 팔리는 카피와 디자인, 신청 폼까지. AI가 만들어 바로 게시하는 랜딩페이지 빌더.",
+  title: "머무는순간 — 감성 스테이 숏폼 체험단",
+  description:
+    "감성 스테이·독채 펜션 전문 숏폼(릴스·네이버 클립) 체험단. 비주얼 되는 곳만, 공정위 100% 합법으로, 실제 1박 체험으로 알립니다.",
 };
 
 export default function RootLayout({
