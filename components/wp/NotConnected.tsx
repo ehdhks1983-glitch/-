@@ -21,6 +21,13 @@ export default function NotConnected() {
       >
         연결하러 가기
       </Link>
+      <p className="mt-4 text-xs text-slate-400">
+        워드프레스가 처음이라면{" "}
+        <Link href="/wordpress/guide" className="font-medium text-indigo-600 hover:underline">
+          입문 가이드
+        </Link>
+        부터 보세요.
+      </p>
     </div>
   );
 }

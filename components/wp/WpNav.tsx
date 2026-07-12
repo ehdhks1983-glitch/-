@@ -7,6 +7,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const TABS = [
+  { href: "/wordpress/guide", label: "입문 가이드", exact: false },
   { href: "/wordpress", label: "연결 설정", exact: true },
   { href: "/wordpress/categories", label: "카테고리 관리", exact: false },
   { href: "/wordpress/write", label: "AI 글쓰기", exact: false },

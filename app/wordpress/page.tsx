@@ -234,6 +234,13 @@ export default function WpConnectPage() {
             <br />· 연결을 끊고 싶으면 같은 화면에서 비밀번호를 <strong>철회</strong>하면 즉시
             무효화됩니다.
           </p>
+          <p className="mt-4 rounded-lg bg-white px-3 py-2.5 text-xs leading-5 text-slate-600">
+            🌱 워드프레스 사이트가 아직 없거나 용어가 낯설다면{" "}
+            <Link href="/wordpress/guide" className="font-semibold text-indigo-600 hover:underline">
+              입문 가이드
+            </Link>
+            에서 구조와 시작 방법(호스팅→설치→연결)을 먼저 확인하세요.
+          </p>
         </aside>
       </div>
     </div>
