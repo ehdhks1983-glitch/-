@@ -7,3 +7,4 @@ dist/
 jobs/
 *.mp4
 *.m4a
+windows/ffmpeg/

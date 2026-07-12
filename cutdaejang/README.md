@@ -4,6 +4,8 @@
 
 기획 문서: [docs/개발기획안_v1.2.md](docs/개발기획안_v1.2.md) · PoC 결과: [docs/POC_REPORT.md](docs/POC_REPORT.md) · 캡컷 수동 검증: [docs/CAPCUT_CHECKLIST.md](docs/CAPCUT_CHECKLIST.md)
 
+**👉 처음이라면: [실행가이드.md](실행가이드.md) — Windows에서 더블클릭 2번으로 데모 확인 (`windows/1_설치.bat` → `windows/2_데모실행.bat`)**
+
 ## 현재 상태 (v0.1)
 
 | 영역 | 상태 |
