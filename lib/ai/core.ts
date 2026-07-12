@@ -31,7 +31,7 @@ export async function withFallback(task: TaskKind, opts: CallOptions): Promise<s
     if (process.env.NODE_ENV !== "production") {
       console.warn(`[ai] MOCK 모드 (프로바이더 키 없음 / PROMPTSITE_MOCK=1) — task=${task}`);
     }
-    return mockResponse(opts.system);
+    return mockResponse(opts);
   }
 
   const chain = MODEL_CHAINS[task];
@@ -153,10 +153,42 @@ export function isMockMode(): boolean {
 }
 
 /** 키 없이도 파이프라인을 돌릴 수 있게 하는 결정적 목 응답. system 스키마로 작업을 구분. */
-function mockResponse(system: string): string {
-  if (system.includes('"hero"')) return JSON.stringify(MOCK_COPY);
-  if (system.includes('"options"')) return JSON.stringify(MOCK_CLARIFY);
+function mockResponse(opts: CallOptions): string {
+  if (opts.system.includes('"html"')) return JSON.stringify(mockPost(opts.user));
+  if (opts.system.includes('"hero"')) return JSON.stringify(MOCK_COPY);
+  if (opts.system.includes('"options"')) return JSON.stringify(MOCK_CLARIFY);
   return JSON.stringify(MOCK_BIZ);
+}
+
+/** 워드프레스 블로그 글 목 응답 — user 페이로드의 주제를 반영해 그럴듯한 초안을 돌려준다. */
+function mockPost(user: string): Record<string, unknown> {
+  let topic = "블로그 글쓰기";
+  try {
+    const parsed = JSON.parse(user) as Record<string, unknown>;
+    if (typeof parsed["주제_키워드"] === "string" && parsed["주제_키워드"].trim()) {
+      topic = parsed["주제_키워드"].trim();
+    }
+  } catch {
+    // user가 JSON이 아니면 기본 주제 사용
+  }
+  return {
+    title: `${topic}, 처음이라면 이 순서대로 시작하세요`,
+    html:
+      `<p>${topic}에 관심은 있는데 어디서부터 손대야 할지 막막했다면, 이 글 하나로 큰 그림을 잡을 수 있습니다. 복잡한 이론 대신 오늘 바로 해볼 수 있는 것들만 정리했습니다.</p>` +
+      `<h2>${topic}, 왜 지금 시작해야 할까</h2>` +
+      `<p>미루는 이유는 대부분 정보가 없어서가 아니라 순서가 없어서입니다. 처음 기준을 잡아두면 그다음부터는 반복만 하면 됩니다.</p>` +
+      `<h2>시작 전 준비 체크리스트</h2>` +
+      `<ul><li>목표를 한 줄로 적어보기 — 무엇이 되면 성공인지</li><li>일주일에 쓸 수 있는 시간 정하기</li><li>참고할 만한 사례 2~3개 모아두기</li></ul>` +
+      `<h2>단계별 실행 방법</h2>` +
+      `<p>처음에는 작게 시작하는 것이 핵심입니다. 완벽한 준비보다 작은 실행이 결과를 만듭니다.</p>` +
+      `<ol><li>가장 작은 단위로 첫 시도를 해봅니다.</li><li>결과를 기록하고 잘된 것 하나, 아쉬운 것 하나를 남깁니다.</li><li>일주일 뒤 같은 작업을 반복하며 개선합니다.</li></ol>` +
+      `<h2>자주 하는 실수</h2>` +
+      `<p>한 번에 모든 걸 갖추려는 욕심이 가장 큰 걸림돌입니다. <strong>도구보다 꾸준함</strong>이 결과를 좌우합니다.</p>` +
+      `<h2>정리</h2>` +
+      `<p>${topic}은 시작이 절반입니다. 오늘 체크리스트의 첫 항목 하나만 실행해 보세요. (이 글은 AI 키가 없어 생성된 예시 초안입니다.)</p>`,
+    excerpt: `${topic}을 처음 시작하는 사람을 위한 준비 체크리스트와 단계별 실행 방법을 정리했습니다.`,
+    tags: [topic, "초보 가이드", "시작하는 법"],
+  };
 }
 
 const MOCK_BIZ = {

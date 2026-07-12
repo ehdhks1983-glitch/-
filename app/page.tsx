@@ -16,12 +16,20 @@ export default function Home() {
           <span className="font-bold tracking-tight">
             Prompt<span className="text-indigo-600">Site</span>
           </span>
-          <Link
-            href="/project/new"
-            className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
-          >
-            만들기 시작
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/wordpress"
+              className="text-sm font-medium text-slate-600 transition hover:text-slate-900"
+            >
+              워드프레스 자동화
+            </Link>
+            <Link
+              href="/project/new"
+              className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
+            >
+              만들기 시작
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -66,6 +74,46 @@ export default function Home() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        {/* WordPress automation */}
+        <section className="border-t border-slate-100 bg-slate-50 px-6 py-20">
+          <div className="mx-auto flex max-w-4xl flex-col items-center gap-8 sm:flex-row">
+            <div className="flex-1">
+              <span className="inline-block rounded-full border border-indigo-200 bg-white px-3 py-1 text-xs font-semibold text-indigo-700">
+                NEW
+              </span>
+              <h2 className="mt-4 text-2xl font-bold sm:text-3xl">
+                워드프레스 블로그, <span className="text-indigo-600">자동으로</span> 채우세요
+              </h2>
+              <p className="mt-4 leading-7 text-slate-600">
+                키워드만 넣으면 AI가 글을 쓰고, 정한 간격으로 예약 발행까지. 카테고리 관리와 발행
+                현황도 한 화면에서 끝냅니다. 응용 프로그램 비밀번호로 1분이면 연결돼요.
+              </p>
+              <Link
+                href="/wordpress"
+                className="mt-6 inline-block rounded-full bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-500"
+              >
+                내 블로그 연결하기
+              </Link>
+            </div>
+            <ul className="w-full flex-1 space-y-3 text-sm">
+              {[
+                ["📂", "카테고리 추가·수정·삭제와 글 개수 확인"],
+                ["✍️", "키워드 → AI 초안 → 검토 후 바로 발행"],
+                ["⚡", "키워드 여러 개를 매일/매주 간격으로 예약 등록"],
+                ["📋", "발행·예약·임시글 현황 관리(즉시 발행·삭제)"],
+              ].map(([icon, text]) => (
+                <li
+                  key={text}
+                  className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3"
+                >
+                  <span>{icon}</span>
+                  <span className="text-slate-700">{text}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         </section>
       </main>

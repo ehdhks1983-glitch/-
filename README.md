@@ -4,6 +4,8 @@
 
 사용자가 사업/서비스를 한 줄로 적으면 → AI가 분석하고(부족하면 보완질문) → 전환 중심 카피를 생성해 → 어울리는 템플릿에 주입하고 → 공개 URL로 게시 → 방문자 이메일(리드)까지 수집합니다.
 
+여기에 **워드프레스 자동 발행**(`/wordpress`)이 추가되었습니다: 내 워드프레스 블로그를 연결해 카테고리를 관리하고, 키워드만으로 AI 글을 만들어 즉시/예약/대량 자동 발행까지 합니다. → [자세히](#워드프레스-자동-발행)
+
 ## 핵심 파이프라인
 
 ```
@@ -73,15 +75,60 @@ app/
   project/[id]/preview         전체화면 미리보기
   s/[slug]/page.tsx            ★공개 게시 페이지(멀티테넌트) + 신청 폼
   dashboard/                   내 프로젝트 / [projectId]/leads 신청자
+  wordpress/                   ★워드프레스 자동 발행(연결/카테고리/글쓰기/대량/현황)
   (auth)/login·signup
   api/generate · api/projects · api/leads
+  api/wp/                      WP REST 프록시(test·categories·posts·generate)
 components/templates/          SaasLaunch · Waitlist · Agency + TemplateRenderer
-lib/ai/                        types·config·core + analyze/clarify/generate/select/render
+components/wp/                 WpNav · NotConnected
+lib/ai/                        types·config·core + analyze/clarify/generate/select/render/generatePost
+lib/wp/                        types·connection·guard(SSRF)·client(WP REST)·sanitizeHtml·clientStore
 lib/db/                        supabase(브라우저/서버) + projects/leads
 lib/sanitize.ts · lib/rateLimit.ts · lib/seo/meta.ts
 database/schema.sql            테이블 + RLS
 middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 ```
+
+## 워드프레스 자동 발행
+
+`/wordpress` 에서 내 워드프레스 사이트를 연결하면:
+
+| 메뉴 | 기능 |
+|---|---|
+| 연결 설정 | 사이트 주소 + 아이디 + **응용 프로그램 비밀번호**로 연결 테스트·저장 |
+| 카테고리 관리 | 트리(글 개수 포함) 보기, 추가/수정/삭제, 슬러그·설명·상위 카테고리 |
+| AI 글쓰기 | 키워드 → AI 초안(제목·본문·요약·태그) → 검토·수정 → 즉시/임시/예약 발행 |
+| 대량 자동화 | 키워드 여러 개(최대 20)를 매일/2·3일/매주 간격으로 자동 생성·예약 등록 |
+| 발행 현황 | 발행/예약/임시글 필터, 즉시 발행·삭제, WP 관리자 편집 링크 |
+
+### 연결 준비 (1분)
+
+1. 워드프레스 관리자 → **사용자 → 프로필** → 아래쪽 **응용 프로그램 비밀번호**
+2. 이름(예: `promptsite`) 입력 후 **추가** → 표시되는 24자리 비밀번호 복사
+3. `/wordpress` 연결 설정에 사이트 주소(https), 아이디, 복사한 비밀번호 입력
+
+> 워드프레스 5.6+ 기본 기능입니다. 사이트가 **https** 여야 하고, 보안 플러그인이 REST API나
+> 응용 프로그램 비밀번호를 차단하면 해제가 필요합니다. 연결 해제는 같은 화면에서 비밀번호
+> **철회**로 즉시 가능합니다.
+
+### 동작 방식·보안
+
+- **무상태 프록시**: 접속 정보는 **브라우저 localStorage에만** 저장됩니다. 서버·DB에는 저장하지
+  않고, 요청마다 `x-wp-connection` 헤더로 받아 WP REST API(`/wp-json/wp/v2/*`)로 중계만 합니다.
+- **SSRF 가드**(`lib/wp/guard.ts`): https 강제, 내부망 도메인/사설·예약 IP 차단(리터럴 + DNS 조회
+  검사), 리다이렉트 미추적. (DNS 리바인딩까지 완전 차단하지는 않는 1차 방어입니다)
+- **본문 HTML 정화**(`lib/wp/sanitizeHtml.ts`): AI 본문은 허용 태그(h2·h3·p·ul·ol·li·strong·em 등)만
+  **속성 없이 재조립**합니다. 미리보기 렌더와 WP 전송 모두 이 결과만 사용하므로 스크립트/이벤트
+  속성이 끼어들 수 없습니다.
+- **비용 방어**: 글 생성 분당 12회, 프록시 분당 90회, 연결 테스트 분당 20회(IP 기준).
+- AI 키가 없으면 글 생성은 **목 모드**(예시 초안)로 동작 — 발행 파이프라인은 그대로 테스트 가능.
+
+### 알아둘 점
+
+- **예약 발행은 워드프레스(WP-Cron)가 처리**합니다. 방문이 거의 없는 사이트는 예약 시각이 지나도
+  다음 방문 때 발행되니, 정시가 중요하면 서버 크론으로 `wp-cron.php`를 걸어두세요.
+- 대량 자동화 실행 중에는 탭을 닫지 마세요(등록이 끝나면 닫아도 예약은 유지됩니다).
+- 카테고리 삭제 시 소속 글은 WP 기본 카테고리로 이동합니다(글은 삭제되지 않음).
 
 ## 모델 폴백 체인 (`lib/ai/config.ts`)
 
@@ -101,4 +148,6 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 
 - **2차**: 이미지 생성, 다국어, 광고 픽셀, GEO 고급(llms.txt/스키마), 프로젝트 재편집
 - **3차**: 결제(Toss/Lemon Squeezy), 커스텀 도메인
+- **WP 자동화**: 대표 이미지(미디어 업로드), 여러 사이트 저장, 접속정보 서버 보관(암호화+RLS),
+  글 재생성·리라이팅, 발행 결과 리포트
 ```

@@ -4,8 +4,8 @@
 
 export type Provider = "anthropic" | "google" | "openai";
 
-/** 파이프라인 작업 종류. analyze 체인은 clarify도 함께 사용한다. */
-export type TaskKind = "analyze" | "copy";
+/** 파이프라인 작업 종류. analyze 체인은 clarify도 함께 사용한다. post는 워드프레스 블로그 글. */
+export type TaskKind = "analyze" | "copy" | "post";
 
 export interface ModelSpec {
   provider: Provider;
@@ -58,6 +58,13 @@ export const MODEL_CHAINS: Record<TaskKind, ModelSpec[]> = {
     { provider: "anthropic", model: MODEL_IDS.claudeSecondary, maxTokens: 2048 },
     { provider: "google", model: MODEL_IDS.geminiSecondary, maxTokens: 2048 },
     { provider: "openai", model: MODEL_IDS.openaiText, maxTokens: 2048 },
+  ],
+  // 워드프레스 블로그 글 = 카피와 같은 품질 우선 체인, 긴 본문이라 토큰 상한만 상향
+  post: [
+    { provider: "anthropic", model: MODEL_IDS.claudePrimary, maxTokens: 8192 },
+    { provider: "anthropic", model: MODEL_IDS.claudeSecondary, maxTokens: 8192 },
+    { provider: "google", model: MODEL_IDS.geminiPrimary, maxTokens: 8192 },
+    { provider: "openai", model: MODEL_IDS.openaiText, maxTokens: 8192 },
   ],
 };
 
