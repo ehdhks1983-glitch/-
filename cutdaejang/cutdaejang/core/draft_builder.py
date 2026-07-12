@@ -81,12 +81,22 @@ def build_draft(spec: TimelineSpec, drafts_dir: str, draft_name: str) -> DraftRe
     script.add_track(cc.TrackType.text, "subtitles")
     script.add_track(cc.TrackType.audio, "voice")
 
-    # ── 배경 (이미지 duration = 전체 길이) ──
+    # ── 배경 (이미지 duration = 전체 길이, Ken Burns 키프레임) ──
     if spec.background.type == "image":
-        script.add_segment(
-            cc.VideoSegment(spec.background.path, cc.trange(0, spec.duration_us)),
-            "background",
-        )
+        bg_seg = cc.VideoSegment(spec.background.path, cc.trange(0, spec.duration_us))
+        if spec.background.motion != "off":
+            amt = spec.background.motion_amount
+            start_v, end_v = (
+                (1.0, 1.0 + amt) if spec.background.motion == "zoom_in" else (1.0 + amt, 1.0)
+            )
+            try:
+                bg_seg.add_keyframe(cc.KeyframeProperty.uniform_scale, 0, start_v)
+                bg_seg.add_keyframe(
+                    cc.KeyframeProperty.uniform_scale, spec.duration_us, end_v
+                )
+            except Exception:  # 키프레임 실패는 정적 배경으로 폴백 (PoC에서 캘리브레이션)
+                pass
+        script.add_segment(bg_seg, "background")
     else:
         raise DraftBuildError(
             "draft 출력은 background.type=image만 지원합니다 "
@@ -158,6 +168,25 @@ def build_draft(spec: TimelineSpec, drafts_dir: str, draft_name: str) -> DraftRe
             cc.AudioSegment(a.path, cc.trange(a.start_us, a.end_us - a.start_us)),
             "voice",
         )
+
+    # ── BGM (별도 오디오 트랙, 볼륨 동일값 — 지시서 PATCH 3) ──
+    if spec.bgm is not None:
+        script.add_track(cc.TrackType.audio, "bgm")
+        bgm_dur = ff.probe_duration_us(spec.bgm.path)
+        linear = 10 ** (spec.bgm.volume_db / 20)  # dB → 선형 (예: -20dB → 0.1)
+        t = 0
+        while t < spec.duration_us and bgm_dur > 0:  # 짧은 음원은 이어붙여 루프
+            seg_dur = min(bgm_dur, spec.duration_us - t)
+            script.add_segment(
+                cc.AudioSegment(
+                    spec.bgm.path,
+                    cc.trange(t, seg_dur),
+                    source_timerange=cc.trange(0, seg_dur),
+                    volume=linear,
+                ),
+                "bgm",
+            )
+            t += seg_dur
 
     script.save()
 

@@ -36,6 +36,8 @@ def build_spec(
     style: Style,
     canvas: Optional[Canvas] = None,
     main_video: Optional[MainVideo] = None,
+    bgm=None,
+    highlights: Optional[List[str]] = None,
     mode: str = "shorts",
     opts: Optional[TimelineOptions] = None,
 ) -> TimelineSpec:
@@ -43,14 +45,22 @@ def build_spec(
         raise ValueError(f"문장 수({len(sentences)})와 오디오 수({len(audio_paths)}) 불일치")
     canvas = canvas or Canvas()
     opts = opts or TimelineOptions()
+    highlights = highlights or []
 
     audio: List[AudioClip] = []
     subtitles: List[Subtitle] = []
     t = opts.lead_in_us
-    for text, path in zip(sentences, audio_paths):
+    for i, (text, path) in enumerate(zip(sentences, audio_paths)):
         dur = probe_duration_us(str(Path(path)))
         audio.append(AudioClip(path=str(path), start_us=t, end_us=t + dur))
-        subtitles.append(Subtitle(text=text, start_us=t, end_us=t + dur))
+        subtitles.append(
+            Subtitle(
+                text=text,
+                start_us=t,
+                end_us=t + dur,
+                highlight=highlights[i] if i < len(highlights) else "",
+            )
+        )
         t += dur + opts.gap_us
 
     duration_us = (t - opts.gap_us) + opts.tail_us if audio else opts.lead_in_us + opts.tail_us
@@ -61,6 +71,7 @@ def build_spec(
         duration_us=duration_us,
         background=background,
         main_video=main_video,
+        bgm=bgm,
         audio=audio,
         subtitles=subtitles,
         style=style,

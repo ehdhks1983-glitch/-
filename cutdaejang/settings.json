@@ -1,0 +1,18 @@
+{
+  "tts": {
+    "rpm_limit": 8,
+    "max_retries": 5,
+    "retry_wait_cap_s": 120,
+    "fallback_chain": ["gemini", "openai"],
+    "style_preset": "정보형",
+    "voice_gemini": "Kore",
+    "voice_openai": "nova",
+    "model_gemini": "gemini-2.5-flash-preview-tts",
+    "model_openai": "gpt-4o-mini-tts"
+  },
+  "audio": { "gap_ms": 220, "trim_threshold_db": -45, "edge_pad_ms": 30, "lufs": -16 },
+  "bgm": { "enabled": false, "file": "", "volume_db": -20, "duck": false },
+  "bg": { "motion": "zoom_in", "motion_amount": 0.08 },
+  "subtitle": { "font_size": 76, "outline": 4, "shadow": 1, "margin_v": 420,
+                "fade": true, "highlight_color": "#FFD400" }
+}

@@ -33,6 +33,13 @@ class JobStore:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(jobs)")}
+        if "tts_provider" not in cols:  # v0.3: 폴백 추적용 (지시서 1-4)
+            self._conn.execute("ALTER TABLE jobs ADD COLUMN tts_provider TEXT")
+            self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -50,25 +57,27 @@ class JobStore:
         out_mp4: Optional[str] = None,
         out_draft: Optional[str] = None,
         error: Optional[str] = None,
+        tts_provider: Optional[str] = None,
     ) -> None:
         self._conn.execute(
             """
             INSERT INTO jobs (id, created_at, title, mode, outputs, status,
-                              duration_us, spec_json, out_mp4, out_draft, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              duration_us, spec_json, out_mp4, out_draft, error, tts_provider)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title, mode=excluded.mode, outputs=excluded.outputs,
                 status=excluded.status, duration_us=excluded.duration_us,
                 spec_json=COALESCE(excluded.spec_json, jobs.spec_json),
                 out_mp4=COALESCE(excluded.out_mp4, jobs.out_mp4),
                 out_draft=COALESCE(excluded.out_draft, jobs.out_draft),
-                error=excluded.error
+                error=excluded.error,
+                tts_provider=COALESCE(excluded.tts_provider, jobs.tts_provider)
             """,
             (
                 job_id,
                 _dt.datetime.now().isoformat(timespec="seconds"),
                 title, mode, outputs, status, duration_us,
-                spec_json, out_mp4, out_draft, error,
+                spec_json, out_mp4, out_draft, error, tts_provider,
             ),
         )
         self._conn.commit()

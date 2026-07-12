@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -17,7 +18,7 @@ from typing import Callable, Optional
 from ... import presets
 from ...spec import TimelineSpec
 from ...utils import ffmpeg as ff
-from ...utils.timefmt import us_to_seconds_str
+from ...utils.timefmt import US_PER_SECOND, us_to_seconds_str
 
 
 @dataclass
@@ -57,16 +58,34 @@ def build_command(
     args: list = ["-y"]
     filters: list = []
 
-    # ── 입력 0: 배경 ──
-    if spec.background.type == "image":
-        args += ["-loop", "1", "-t", dur_s, "-i", spec.background.path]
+    # ── 입력 0: 배경 (Ken Burns 모션 — 지시서 PATCH 4) ──
+    motion = spec.background.motion if spec.background.type == "image" else "off"
+    if spec.background.type == "image" and motion != "off":
+        # 단일 프레임 입력 → zoompan이 프레임을 생성. 2배 사전 업스케일로 지터 방지.
+        args += ["-i", spec.background.path]
+        total_frames = math.ceil(spec.duration_us * c.fps / US_PER_SECOND)
+        amt = spec.background.motion_amount
+        if motion == "zoom_in":
+            z_expr = f"min(1+{amt}*on/{total_frames},1+{amt})"
+        else:  # zoom_out: 시작을 확대 상태에서 1.0으로
+            z_expr = f"max(1+{amt}-{amt}*on/{total_frames},1)"
+        filters.append(
+            f"[0:v]scale={c.w * 2}:{c.h * 2}:force_original_aspect_ratio=increase,"
+            f"crop={c.w * 2}:{c.h * 2},"
+            f"zoompan=z='{z_expr}'"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d={total_frames}:s={c.w}x{c.h}:fps={c.fps},setsar=1[bg]"
+        )
     else:
-        color = (spec.background.color or "#000000").replace("#", "0x")
-        args += ["-f", "lavfi", "-i", f"color=c={color}:s={c.w}x{c.h}:r={c.fps}:d={dur_s}"]
-    filters.append(
-        f"[0:v]scale={c.w}:{c.h}:force_original_aspect_ratio=increase,"
-        f"crop={c.w}:{c.h},setsar=1[bg]"
-    )
+        if spec.background.type == "image":
+            args += ["-loop", "1", "-t", dur_s, "-i", spec.background.path]
+        else:
+            color = (spec.background.color or "#000000").replace("#", "0x")
+            args += ["-f", "lavfi", "-i", f"color=c={color}:s={c.w}x{c.h}:r={c.fps}:d={dur_s}"]
+        filters.append(
+            f"[0:v]scale={c.w}:{c.h}:force_original_aspect_ratio=increase,"
+            f"crop={c.w}:{c.h},setsar=1[bg]"
+        )
     next_input = 1
     last_label = "bg"
 
@@ -108,6 +127,33 @@ def build_command(
     voice_idx = next_input
     next_input += 1
 
+    # ── 입력(선택): BGM (지시서 PATCH 3) — 루프·감쇠·페이드·무손실 믹스 ──
+    audio_map = f"{voice_idx}:a"
+    if spec.bgm is not None:
+        args += ["-stream_loop", "-1", "-i", spec.bgm.path]
+        bgm_idx = next_input
+        next_input += 1
+        fade_out_st = max(0.0, spec.duration_us / US_PER_SECOND - 1.5)
+        bgm_chain = (
+            f"[{bgm_idx}:a]volume={spec.bgm.volume_db}dB,atrim=0:{dur_s},"
+            f"afade=t=in:d=0.5,afade=t=out:st={fade_out_st:.3f}:d=1.5"
+        )
+        if spec.bgm.duck:
+            filters.append(f"[{voice_idx}:a]asplit[vmain][vside]")
+            filters.append(bgm_chain + "[bgm0]")
+            filters.append(
+                "[bgm0][vside]sidechaincompress="
+                "threshold=0.03:ratio=8:attack=20:release=300[bgduck]"
+            )
+            # normalize=0 필수 — amix 기본 동작이 음성 볼륨을 깎는다
+            filters.append("[vmain][bgduck]amix=inputs=2:duration=first:normalize=0[aout]")
+        else:
+            filters.append(bgm_chain + "[bgma]")
+            filters.append(
+                f"[{voice_idx}:a][bgma]amix=inputs=2:duration=first:normalize=0[aout]"
+            )
+        audio_map = "[aout]"
+
     # ── 입력(선택): 하단 그라데이션 오버레이 ──
     if gradient_path:
         args += ["-loop", "1", "-t", dur_s, "-i", str(gradient_path)]
@@ -133,7 +179,7 @@ def build_command(
 
     args += [
         "-filter_complex", ";".join(filters),
-        "-map", "[v]", "-map", f"{voice_idx}:a",
+        "-map", "[v]", "-map", audio_map,
         *video_args,
         "-pix_fmt", "yuv420p", "-r", str(c.fps),
         "-c:a", "aac", "-b:a", opts.audio_bitrate,

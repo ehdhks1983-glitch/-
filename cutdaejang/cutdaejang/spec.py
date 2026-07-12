@@ -34,6 +34,8 @@ class Background:
     type: str = "image"  # "image" | "color"
     path: Optional[str] = None
     color: Optional[str] = None  # 예: "#101020" (type=color일 때)
+    motion: str = "off"          # Ken Burns: "zoom_in" | "zoom_out" | "off"
+    motion_amount: float = 0.08  # 총 줌 비율
 
 
 @dataclass
@@ -57,6 +59,14 @@ class Subtitle:
     text: str
     start_us: int
     end_us: int
+    highlight: str = ""  # 문장 내 강조 단어 (없으면 빈 문자열)
+
+
+@dataclass
+class Bgm:
+    path: str = ""
+    volume_db: float = -20.0
+    duck: bool = False  # 음성 구간 자동 덕킹(sidechaincompress)
 
 
 @dataclass
@@ -64,11 +74,14 @@ class Style:
     font: str = "Pretendard-ExtraBold"
     size: int = 64
     outline: int = 3
+    shadow: int = 0
     position: str = "bottom"   # "bottom" | "center" | "top"
     gradient_overlay: bool = True
     primary_color: str = "#FFFFFF"
     outline_color: str = "#000000"
     margin_v: Optional[int] = None  # 지정 시 position 프리셋의 세로 여백을 덮어씀
+    fade: bool = False              # 자막 등장/퇴장 페이드 {\fad(100,60)}
+    highlight_color: str = "#FFD400"
 
 
 @dataclass
@@ -78,6 +91,7 @@ class TimelineSpec:
     duration_us: int = 0
     background: Background = field(default_factory=Background)
     main_video: Optional[MainVideo] = None
+    bgm: Optional[Bgm] = None
     audio: List[AudioClip] = field(default_factory=list)
     subtitles: List[Subtitle] = field(default_factory=list)
     style: Style = field(default_factory=Style)
@@ -88,6 +102,8 @@ class TimelineSpec:
         d = asdict(self)
         if self.main_video is None:
             d.pop("main_video")
+        if self.bgm is None:
+            d.pop("bgm")
         return d
 
     def to_json(self) -> str:
@@ -108,6 +124,7 @@ class TimelineSpec:
             duration_us=d.get("duration_us", 0),
             background=pick(Background, d.get("background")),
             main_video=pick(MainVideo, d["main_video"]) if d.get("main_video") else None,
+            bgm=pick(Bgm, d["bgm"]) if d.get("bgm") else None,
             audio=[pick(AudioClip, a) for a in d.get("audio", [])],
             subtitles=[pick(Subtitle, s) for s in d.get("subtitles", [])],
             style=pick(Style, d.get("style")),
@@ -140,6 +157,11 @@ class TimelineSpec:
                 raise SpecError("background.type=color에는 color가 필요합니다")
         else:
             raise SpecError(f"지원하지 않는 background.type: {self.background.type}")
+        if self.background.motion not in ("zoom_in", "zoom_out", "off"):
+            raise SpecError(f"지원하지 않는 background.motion: {self.background.motion}")
+
+        if self.bgm is not None and not self.bgm.path:
+            raise SpecError("bgm에는 path가 필요합니다")
 
         if self.main_video is not None:
             mv = self.main_video
@@ -188,6 +210,8 @@ class TimelineSpec:
             missing.append(self.background.path)
         if self.main_video and not ok(self.main_video.path):
             missing.append(self.main_video.path)
+        if self.bgm and not ok(self.bgm.path):
+            missing.append(self.bgm.path)
         missing += [a.path for a in self.audio if not ok(a.path)]
         return missing
 
@@ -205,6 +229,8 @@ class TimelineSpec:
         spec.background.path = absolutize(spec.background.path)
         if spec.main_video:
             spec.main_video.path = absolutize(spec.main_video.path)
+        if spec.bgm:
+            spec.bgm.path = absolutize(spec.bgm.path)
         for a in spec.audio:
             a.path = absolutize(a.path)
         return spec

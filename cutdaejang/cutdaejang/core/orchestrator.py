@@ -1,46 +1,49 @@
-"""파이프라인 오케스트레이터 (기획안 §3.1, §5.6).
+"""파이프라인 오케스트레이터 (기획안 §3.1, §5.6 + 작업지시서 v0.3).
 
 검토 모드: 대본 생성 → (사용자 확정 후) run_job(script=...)로 재개.
 자동 모드: 주제 입력 → 대본·TTS·배경·스펙·렌더까지 무개입 진행.
-    실패 정책: 대본 JSON 파싱 실패 1회 재생성 / TTS 문장 재시도 2회 / 렌더 실패 리포트.
-모든 산출물(대본·오디오·배경·스펙·결과)은 작업 폴더에 보존 → 히스토리에서 열람·재생성.
+    실패 정책: 대본 JSON 파싱 실패 1회 재생성 / TTS는 레이트리미터+retryDelay 재시도
+    +제공자 폴백 체인(작업 단위) / 렌더 실패 리포트.
+모든 산출물은 작업 폴더에 보존, TTS 클립은 workdir/cache/tts에 영구 캐시.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 import logging
+import random
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from ..spec import Background, Canvas, MainVideo, Style, TimelineSpec
-from .. import presets
-from . import background_generator, render_engine, timeline_calculator
+from .. import config, presets
+from ..spec import Background, Bgm, MainVideo, Style
+from . import background_generator, render_engine, timeline_calculator, tts_engine
 from .render_engine import RenderResult
 from .render_engine.ffmpeg_composer import RenderOptions
 from .script_generator import Script, ScriptParseError
-from .tts_engine import TTSEngine
 
 log = logging.getLogger("cutdaejang")
+
+DEFAULT_BGM_DIR = Path(__file__).resolve().parents[2] / "resources" / "bgm"
+_BGM_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 
 
 @dataclass
 class JobOptions:
     outputs: tuple = ("mp4",)            # "mp4"(출력 B) / "draft"(출력 A)
     auto_mode: bool = False
+    tts_chain: List[str] = field(default_factory=lambda: ["stub"])
     voice: str = ""
+    tts_style: str = ""                  # 비면 settings.tts.style_preset
     tone: str = "정보형"
     target_sec: int = 60
-    style_preset: str = "shorts_basic"
+    bgm: str = ""                        # ""(없음) | "random" | 파일명/경로
     user_background: Optional[str] = None
     main_video_path: Optional[str] = None
-    drafts_dir: Optional[str] = None     # 출력 A 사용 시 CapCut Drafts 폴더
+    drafts_dir: Optional[str] = None
     render: RenderOptions = field(default_factory=RenderOptions)
-    timeline: timeline_calculator.TimelineOptions = field(
-        default_factory=timeline_calculator.TimelineOptions
-    )
 
 
 @dataclass
@@ -53,6 +56,8 @@ class JobResult:
     spec_path: str = ""
     mp4: Optional[RenderResult] = None
     draft_path: str = ""
+    tts_provider: str = ""               # 실제 사용된 제공자 (폴백 추적)
+    fallback_note: Optional[str] = None
     errors: List[str] = field(default_factory=list)
 
 
@@ -71,17 +76,59 @@ def generate_script(script_provider, topic: str, opts: JobOptions) -> Script:
         return script_provider.generate(topic, tone=opts.tone, target_sec=opts.target_sec)
 
 
+def build_style(settings: dict) -> Style:
+    """settings.subtitle → 공통 Style (A/B 출력 동일 기준)."""
+    sub = settings["subtitle"]
+    return Style(
+        font="Pretendard-ExtraBold",
+        size=sub["font_size"],
+        outline=sub["outline"],
+        shadow=sub.get("shadow", 1),
+        position="bottom",
+        gradient_overlay=True,
+        margin_v=sub.get("margin_v"),
+        fade=sub.get("fade", True),
+        highlight_color=sub.get("highlight_color", "#FFD400"),
+    )
+
+
+def resolve_bgm(choice: str, settings: dict, bgm_dir: Optional[Path] = None) -> Optional[Bgm]:
+    """""(없음) / "random" / 파일명·경로 → Bgm 스펙. 파일이 없으면 None (작업은 계속)."""
+    if not choice:
+        return None
+    bgm_dir = bgm_dir or DEFAULT_BGM_DIR
+    path: Optional[Path] = None
+    if choice == "random":
+        files = sorted(
+            p for p in bgm_dir.glob("*") if p.suffix.lower() in _BGM_EXTS and p.is_file()
+        )
+        path = random.choice(files) if files else None
+    else:
+        cand = Path(choice)
+        path = cand if cand.is_file() else (bgm_dir / choice if (bgm_dir / choice).is_file() else None)
+    if path is None:
+        log.warning("BGM 파일을 찾지 못해 BGM 없이 진행: %r", choice)
+        return None
+    cfg = settings["bgm"]
+    return Bgm(path=str(path), volume_db=cfg.get("volume_db", -20), duck=cfg.get("duck", False))
+
+
 def run_job(
     workdir_root,
     script: Script,
-    tts: TTSEngine,
     opts: Optional[JobOptions] = None,
+    settings: Optional[dict] = None,
     image_provider: Optional[background_generator.GeminiImage] = None,
     progress_cb: Optional[Callable[[str, float], None]] = None,
+    status_cb: Optional[Callable[[str], None]] = None,
     job_id: Optional[str] = None,
 ) -> JobResult:
     """확정된 대본으로 ③TTS→④타임라인→⑤배경→⑥출력(A/B)을 수행한다."""
     opts = opts or JobOptions()
+    settings = settings or config.load_settings()
+    if opts.tts_style:
+        settings = config.deep_merge(settings, {"tts": {"style_preset": opts.tts_style}})
+
     job_id = job_id or new_job_id(script.title)
     job_dir = Path(workdir_root) / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -91,19 +138,29 @@ def run_job(
         if progress_cb:
             progress_cb(stage, frac)
 
-    # 대본 보존 (자동 모드 사후 검수용, §1.3)
+    def note(msg: str) -> None:
+        log.info("%s", msg)
+        if status_cb:
+            status_cb(msg)
+
     script_path = job_dir / "script.json"
     script_path.write_text(script.to_json(), encoding="utf-8")
     result.script_path = str(script_path)
 
     try:
-        # ③ 문장별 TTS
+        # ③ 문장별 TTS — 영구 캐시 + 레이트리미터 + 폴백 체인 (지시서 PATCH 1)
         report("tts", 0.0)
-        audio_paths = tts.synth_all(
+        audio_paths, used_provider, fallback_note = tts_engine.synth_with_fallback(
             script.sentences,
+            chain=list(opts.tts_chain),
+            cache_root=Path(workdir_root) / "cache" / "tts",
+            settings=settings,
             voice=opts.voice,
+            status_cb=note,
             on_progress=lambda i, n: report("tts", i / n),
         )
+        result.tts_provider = used_provider
+        result.fallback_note = fallback_note
 
         # ⑤ 배경
         report("background", 0.0)
@@ -116,21 +173,29 @@ def run_job(
             prompt=script.background_prompt or script.title,
             provider=image_provider,
         )
+        bg_cfg = settings["bg"]
+        background = Background(
+            type="image", path=bg_path,
+            motion=bg_cfg.get("motion", "zoom_in"),
+            motion_amount=bg_cfg.get("motion_amount", 0.08),
+        )
 
         # ④ 타임라인 실측 → Timeline Spec 확정
         report("timeline", 0.0)
-        style = presets.SUBTITLE_STYLE_PRESETS[opts.style_preset]
-        main_video = (
-            MainVideo(path=opts.main_video_path) if opts.main_video_path else None
-        )
         spec = timeline_calculator.build_spec(
             sentences=script.sentences,
             audio_paths=[str(p) for p in audio_paths],
-            background=Background(type="image", path=bg_path),
-            style=style,
+            background=background,
+            style=build_style(settings),
             canvas=canvas,
-            main_video=main_video,
-            opts=opts.timeline,
+            main_video=(
+                MainVideo(path=opts.main_video_path) if opts.main_video_path else None
+            ),
+            bgm=resolve_bgm(opts.bgm, settings),
+            highlights=script.highlights,
+            opts=timeline_calculator.TimelineOptions(
+                gap_us=settings["audio"]["gap_ms"] * 1000
+            ),
         )
         spec_path = job_dir / "spec.json"
         spec.save(spec_path)
@@ -171,6 +236,9 @@ def run_job(
     except Exception as e:
         log.exception("작업 실패: %s", job_id)
         result.errors.append(str(e))
+        raw = getattr(e, "raw", "")
+        if raw:
+            result.errors.append(f"[원본 오류] {raw[:1500]}")
         result.status = "failed"
     return result
 
@@ -179,10 +247,11 @@ def run_topic(
     workdir_root,
     topic: str,
     script_provider,
-    tts: TTSEngine,
     opts: Optional[JobOptions] = None,
+    settings: Optional[dict] = None,
     image_provider: Optional[background_generator.GeminiImage] = None,
     progress_cb: Optional[Callable[[str, float], None]] = None,
+    status_cb: Optional[Callable[[str], None]] = None,
 ) -> JobResult:
     """주제 → 완성까지. 자동 모드가 아니면 대본 생성 후 검토 대기 상태로 반환 (§1.3)."""
     opts = opts or JobOptions()
@@ -203,6 +272,6 @@ def run_topic(
         )
 
     return run_job(
-        workdir_root, script, tts, opts=opts,
-        image_provider=image_provider, progress_cb=progress_cb,
+        workdir_root, script, opts=opts, settings=settings,
+        image_provider=image_provider, progress_cb=progress_cb, status_cb=status_cb,
     )

@@ -23,7 +23,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{size},{primary},&H000000FF,{outline_color},&H80000000,0,0,0,0,100,100,0,0,1,{outline},0,{alignment},60,60,{margin_v},1
+Style: Default,{font},{size},{primary},&H000000FF,{outline_color},&H80000000,0,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},60,60,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -53,6 +53,33 @@ def escape_ass_text(text: str) -> str:
     )
 
 
+def _inline_color(hex_rgb: str) -> str:
+    """``#RRGGBB`` → 인라인 오버라이드용 ``&HBBGGRR&`` (예: #FFD400 → &H00D4FF&)."""
+    rgb = hex_rgb.lstrip("#")
+    return f"&H{rgb[4:6]}{rgb[2:4]}{rgb[0:2]}&".upper()
+
+
+def dialogue_text(sub, style) -> str:
+    """자막 본문 조립 — 페이드 태그 + 강조 단어 인라인 컬러 (지시서 PATCH 5).
+
+    강조색 적용 후 기본색을 명시적으로 복원한다.
+    """
+    if sub.highlight and sub.highlight in sub.text:
+        pre, _, post = sub.text.partition(sub.highlight)
+        body = (
+            escape_ass_text(pre)
+            + "{\\1c" + _inline_color(style.highlight_color) + "}"
+            + escape_ass_text(sub.highlight)
+            + "{\\1c" + _inline_color(style.primary_color) + "}"
+            + escape_ass_text(post)
+        )
+    else:
+        body = escape_ass_text(sub.text)
+    if style.fade:
+        body = "{\\fad(100,60)}" + body
+    return body
+
+
 def write_ass(spec: TimelineSpec, out_path) -> str:
     """spec.subtitles → .ass 파일 생성. 생성된 경로를 반환."""
     style = spec.style
@@ -64,6 +91,7 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         primary=ass_color(style.primary_color),
         outline_color=ass_color(style.outline_color),
         outline=style.outline,
+        shadow=style.shadow,
         alignment=presets.subtitle_alignment(style.position),
         margin_v=(
             style.margin_v
@@ -73,7 +101,7 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
     )
     lines = [
         "Dialogue: 0,{start},{end},Default,,0,0,0,,{text}".format(
-            start=us_to_ass(s.start_us), end=us_to_ass(s.end_us), text=escape_ass_text(s.text)
+            start=us_to_ass(s.start_us), end=us_to_ass(s.end_us), text=dialogue_text(s, style)
         )
         for s in spec.subtitles
     ]

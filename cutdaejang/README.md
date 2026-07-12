@@ -2,6 +2,10 @@
 
 > 주제만 입력하면 대본·TTS·배경·자막을 자동 조립해 **①수정 가능한 CapCut 프로젝트(draft)** 또는 **②업로드 준비 완료된 mp4**로 뽑아주는 프로그램.
 
+**v0.3**: TTS 429 안정화(레이트리미터·retryDelay 재시도·영구 캐시·제공자 폴백), 무음 트림 pacing,
+BGM 트랙, 배경 Ken Burns 줌, 자막 강조 컬러·스타일 상향, 보이스 말투 프리셋+미리듣기.
+설정은 [settings.json](settings.json), 패치 상세는 [docs/PATCH_v0.3_보고서.md](docs/PATCH_v0.3_보고서.md).
+
 기획 문서: [docs/개발기획안_v1.2.md](docs/개발기획안_v1.2.md) · PoC 결과: [docs/POC_REPORT.md](docs/POC_REPORT.md) · 캡컷 수동 검증: [docs/CAPCUT_CHECKLIST.md](docs/CAPCUT_CHECKLIST.md)
 
 **👉 처음이라면: [실행가이드.md](실행가이드.md) — Windows에서 더블클릭 2번이면 브라우저 UI가 뜹니다 (`windows/1_설치.bat` → `windows/2_UI실행.bat`)**

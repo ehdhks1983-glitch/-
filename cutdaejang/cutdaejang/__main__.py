@@ -18,12 +18,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, presets
+from . import __version__, config
 from .core import orchestrator, render_engine
 from .core.render_engine.ffmpeg_composer import RenderOptions
 from .core.script_generator import SCRIPT_PROVIDERS, Script
 from .core.tts_engine import PROVIDERS as TTS_PROVIDERS
-from .core.tts_engine import TTSEngine
+from .core.tts_engine import STYLE_INSTRUCTIONS
 from .spec import TimelineSpec
 from .utils import ffmpeg as ff
 
@@ -83,31 +83,36 @@ def cmd_doctor(_: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def _build_tts(provider_name: str, cache_dir: str) -> TTSEngine:
-    provider_cls = TTS_PROVIDERS[provider_name]
-    return TTSEngine(provider_cls(), cache_dir)
-
-
 def cmd_run(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    settings = config.load_settings()
     outputs = tuple(o.strip() for o in args.outputs.split(",") if o.strip())
+    chain = (
+        list(settings["tts"]["fallback_chain"]) if args.tts == "gemini" else [args.tts]
+    )
     opts = orchestrator.JobOptions(
         outputs=outputs,
         auto_mode=args.auto,
+        tts_chain=chain,
         voice=args.voice,
+        tts_style=args.tts_style,
         target_sec=args.target_sec,
-        style_preset=args.style,
+        bgm=args.bgm,
         user_background=args.background,
         main_video_path=args.main_video,
         drafts_dir=args.drafts_dir,
         render=RenderOptions(crf=args.crf, use_gpu=args.gpu),
     )
-    tts = _build_tts(args.tts, Path(args.workdir) / "_tts_cache")
+
+    def status_note(msg: str) -> None:
+        sys.stdout.write(f"\n  ℹ {msg}")
+        sys.stdout.flush()
 
     if args.script_file:
         script = Script.from_json_text(Path(args.script_file).read_text(encoding="utf-8"))
         result = orchestrator.run_job(
-            args.workdir, script, tts, opts=opts, progress_cb=_progress_printer
+            args.workdir, script, opts=opts, settings=settings,
+            progress_cb=_progress_printer, status_cb=status_note,
         )
     else:
         if not args.topic:
@@ -115,7 +120,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 2
         provider = SCRIPT_PROVIDERS[args.script_provider]()
         result = orchestrator.run_topic(
-            args.workdir, args.topic, provider, tts, opts=opts, progress_cb=_progress_printer
+            args.workdir, args.topic, provider, opts=opts, settings=settings,
+            progress_cb=_progress_printer, status_cb=status_note,
         )
 
     _record_history(args, result, opts)
@@ -127,6 +133,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 0
 
     print(f"\n작업 {result.job_id}: {result.status}")
+    if result.tts_provider:
+        note = f" ({result.fallback_note})" if result.fallback_note else ""
+        print(f"  목소리 제공자: {result.tts_provider}{note}")
     if result.mp4:
         print(f"  mp4: {result.mp4.out_path} "
               f"(인코더 {result.mp4.encoder}, 실측 {result.mp4.measured_duration_us / 1e6:.2f}s)")
@@ -156,6 +165,7 @@ def _record_history(args, result, opts) -> None:
             out_mp4=result.mp4.out_path if result.mp4 else None,
             out_draft=result.draft_path or None,
             error="; ".join(result.errors) or None,
+            tts_provider=result.tts_provider or None,
         )
         store.close()
     except Exception as e:  # 히스토리 기록 실패는 작업 성패에 영향 없음
@@ -216,10 +226,13 @@ def main(argv=None) -> int:
     run_p.add_argument("--auto", action="store_true", help="자동 모드 (검토 게이트 스킵, 기본 OFF)")
     run_p.add_argument("--outputs", default="mp4", help="mp4,draft (기본 mp4)")
     run_p.add_argument("--script-provider", choices=tuple(SCRIPT_PROVIDERS), default="gemini")
-    run_p.add_argument("--tts", choices=tuple(TTS_PROVIDERS), default="gemini")
-    run_p.add_argument("--voice", default="", help="TTS 보이스명")
+    run_p.add_argument("--tts", choices=tuple(TTS_PROVIDERS), default="gemini",
+                       help="gemini 선택 시 settings.json의 폴백 체인 적용")
+    run_p.add_argument("--voice", default="", help="TTS 보이스명 (비면 설정/프리셋 기준)")
+    run_p.add_argument("--tts-style", choices=tuple(STYLE_INSTRUCTIONS), default="",
+                       help="보이스 스타일 프리셋 (기본: settings.json)")
+    run_p.add_argument("--bgm", default="", help="BGM: 파일명(resources/bgm) 또는 'random'")
     run_p.add_argument("--target-sec", type=int, default=60)
-    run_p.add_argument("--style", choices=tuple(presets.SUBTITLE_STYLE_PRESETS), default="shorts_basic")
     run_p.add_argument("--background", help="사용자 배경 이미지 경로")
     run_p.add_argument("--main-video", help="메인 영상 파일 경로")
     run_p.add_argument("--drafts-dir", help="CapCut Drafts 폴더 (출력 A)")
@@ -230,12 +243,12 @@ def main(argv=None) -> int:
     demo_p.add_argument("--topic", default=None)
     demo_p.add_argument("--outputs", default="mp4")
     demo_p.add_argument("--voice", default="")
+    demo_p.add_argument("--bgm", default="")
     demo_p.add_argument("--target-sec", type=int, default=30)
-    demo_p.add_argument("--style", choices=tuple(presets.SUBTITLE_STYLE_PRESETS), default="shorts_basic")
     demo_p.add_argument("--background", default=None)
     demo_p.add_argument("--main-video", default=None)
     demo_p.add_argument("--drafts-dir", default=None)
-    demo_p.set_defaults(func=cmd_demo)
+    demo_p.set_defaults(func=cmd_demo, tts_style="")
 
     ui_p = sub.add_parser("ui", help="브라우저 UI 실행 (로컬 웹 화면)")
     ui_p.add_argument("--workdir", default="jobs")

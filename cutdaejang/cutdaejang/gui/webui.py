@@ -17,13 +17,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
-from .. import presets
-from ..core import background_generator, orchestrator
+from .. import config
+from ..core import background_generator, orchestrator, tts_engine
 from ..core.orchestrator import JobOptions
 from ..core.render_engine.ffmpeg_composer import RenderOptions
 from ..core.script_generator import SCRIPT_PROVIDERS, Script
-from ..core.tts_engine import PROVIDERS as TTS_PROVIDERS
-from ..core.tts_engine import TTSEngine
+from ..core.tts_engine import GEMINI_VOICES, STYLE_INSTRUCTIONS
 
 _JOBS: dict = {}
 _LOCK = threading.Lock()
@@ -73,14 +72,25 @@ def _apply_keys(params: dict) -> None:
             os.environ[env] = value
 
 
-def _job_options(params: dict) -> JobOptions:
+def _tts_chain(params: dict, settings: dict) -> list:
+    provider = params.get("tts_provider", "stub")
+    if provider == "gemini":
+        return list(settings["tts"]["fallback_chain"])
+    return [provider]
+
+
+def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
+    settings = settings or config.load_settings()
     outputs = ["mp4"]
     if params.get("draft"):
         outputs.append("draft")
     return JobOptions(
         outputs=tuple(outputs),
         auto_mode=bool(params.get("auto", True)),
+        tts_chain=_tts_chain(params, settings),
         voice=params.get("voice", ""),
+        tts_style=params.get("tts_style", ""),
+        bgm=params.get("bgm", ""),
         target_sec=int(params.get("target_sec") or 60),
         drafts_dir=(params.get("drafts_dir") or "").strip() or None,
         render=RenderOptions(use_gpu=params.get("gpu", "auto")),
@@ -106,6 +116,7 @@ def _record_history(workdir: str, result, opts: JobOptions) -> None:
             out_mp4=result.mp4.out_path if result.mp4 else None,
             out_draft=result.draft_path or None,
             error="; ".join(result.errors) or None,
+            tts_provider=result.tts_provider or None,
         )
         store.close()
     except Exception:
@@ -113,19 +124,18 @@ def _record_history(workdir: str, result, opts: JobOptions) -> None:
 
 
 def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> None:
-    opts = _job_options(params)
+    settings = config.load_settings()
+    opts = _job_options(params, settings)
     try:
-        tts = TTSEngine(
-            TTS_PROVIDERS[params.get("tts_provider", "stub")](),
-            Path(workdir) / "_tts_cache",
-        )
         image_provider = None
         if os.environ.get("GEMINI_API_KEY") and params.get("script_provider") == "gemini":
             image_provider = background_generator.GeminiImage()
 
         result = orchestrator.run_job(
-            workdir, script, tts, opts=opts, image_provider=image_provider,
+            workdir, script, opts=opts, settings=settings,
+            image_provider=image_provider,
             progress_cb=lambda stage, frac: _set_job(job_id, stage=stage, frac=frac),
+            status_cb=lambda msg: _set_job(job_id, note=msg),
             job_id=job_id,
         )
         _set_job(
@@ -133,10 +143,14 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
             status=result.status,
             stage="done",
             frac=1.0,
+            note="",
             title=result.title,
             job_dir=result.job_dir,
             mp4=result.mp4.out_path if (result.mp4 and result.mp4.ok) else None,
             draft=result.draft_path or None,
+            tts_provider=result.tts_provider,
+            requested_tts=params.get("tts_provider", ""),
+            fallback_note=result.fallback_note,
             errors=result.errors,
         )
         _record_history(workdir, result, opts)
@@ -166,6 +180,7 @@ def _run_generate(job_id: str, params: dict, workdir: str) -> None:
                 stage="review",
                 title=script.title,
                 script={"title": script.title, "sentences": script.sentences,
+                        "highlights": script.highlights,
                         "background_prompt": script.background_prompt},
             )
     except Exception as e:
@@ -208,6 +223,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(self._state())
         elif path.startswith("/video/"):
             self._serve_video(path.split("/", 2)[2])
+        elif path.startswith("/preview/"):
+            self._serve_preview(path.split("/", 2)[2])
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -237,13 +254,22 @@ class _Handler(BaseHTTPRequestHandler):
             if not job or job.get("status") != "awaiting_review":
                 self._send_json({"error": "검토 대기 중인 작업이 아닙니다"}, 400)
                 return
-            sentences = [s.strip() for s in params.get("sentences", []) if s.strip()]
+            # "문장 | 강조단어" 형식 지원 (지시서 5-1 검토 모드 강조 수정)
+            sentences, highlights = [], []
+            for line in params.get("sentences", []):
+                line = line.strip()
+                if not line:
+                    continue
+                text, _, hl = line.partition("|")
+                sentences.append(text.strip())
+                highlights.append(hl.strip())
             if not sentences:
                 self._send_json({"error": "문장이 비어 있습니다"}, 400)
                 return
             script = Script(
                 title=params.get("title") or job.get("title", ""),
                 sentences=sentences,
+                highlights=highlights,
                 background_prompt=(job.get("script") or {}).get("background_prompt", ""),
             )
             _set_job(job["id"], status="running", stage="tts", frac=0.0)
@@ -253,8 +279,49 @@ class _Handler(BaseHTTPRequestHandler):
                 daemon=True,
             ).start()
             self._send_json({"ok": True})
+        elif path == "/api/preview":
+            self._preview(params)
         else:
             self._send_json({"error": "not found"}, 404)
+
+    # ---------- 목소리 미리듣기 (지시서 PATCH 6) ----------
+
+    def _preview(self, params: dict) -> None:
+        _apply_keys(params)
+        settings = config.load_settings()
+        if params.get("tts_style"):
+            settings = config.deep_merge(
+                settings, {"tts": {"style_preset": params["tts_style"]}}
+            )
+        try:
+            provider = tts_engine.make_provider(params.get("tts_provider", "stub"), settings)
+            engine = tts_engine.TTSEngine(
+                provider,
+                Path(self.server.workdir) / "cache" / "tts",  # type: ignore[attr-defined]
+                settings=settings,
+            )
+            path = engine.synth_sentence(
+                params.get("text") or "안녕하세요, 컷대장 목소리 미리듣기입니다.",
+                voice=params.get("voice", ""),
+            )
+            self._send_json({"url": f"/preview/{path.name}"})
+        except tts_engine.TTSError as e:
+            self._send_json({"error": str(e)}, 400)
+
+    def _serve_preview(self, name: str) -> None:
+        if not (name.endswith(".wav") and name[:-4].isalnum()):  # 캐시 해시 파일만
+            self._send_json({"error": "not found"}, 404)
+            return
+        path = Path(self.server.workdir) / "cache" / "tts" / name  # type: ignore[attr-defined]
+        if not path.is_file():
+            self._send_json({"error": "not found"}, 404)
+            return
+        body = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     # ---------- 상태 ----------
 
@@ -292,9 +359,15 @@ class _Handler(BaseHTTPRequestHandler):
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
             },
-            "presets": list(presets.SUBTITLE_STYLE_PRESETS),
             "platform": sys.platform,
             "env": _env_check(),
+            "bgm_files": sorted(
+                p.name
+                for p in orchestrator.DEFAULT_BGM_DIR.glob("*")
+                if p.suffix.lower() in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
+            ),
+            "voices": GEMINI_VOICES,
+            "styles": list(STYLE_INSTRUCTIONS),
         }
 
     # ---------- 영상 서빙 (Range 지원 — 브라우저 탐색바용) ----------
@@ -438,7 +511,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.2)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.3)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="card" id="formCard">
@@ -469,6 +542,30 @@ _HTML = """<!doctype html>
       <input type="password" id="geminiKey" placeholder="AIza...">
     </div>
 
+    <div id="geminiOpts" class="hidden">
+      <div class="row">
+        <div>
+          <label>보이스</label>
+          <select id="voiceSel"></select>
+        </div>
+        <div>
+          <label>말투 스타일</label>
+          <select id="styleSel"></select>
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="ghost" style="margin-bottom:1px" onclick="previewVoice(event)">🔊 미리듣기</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>배경음악 (BGM)</label>
+        <select id="bgmSel"><option value="">없음</option></select>
+        <div class="hint">resources/bgm 폴더에 음원을 넣으면 목록에 나타납니다. 저작권 확인된 음원만 사용하세요.</div>
+      </div>
+    </div>
+
     <div class="chk">
       <input type="checkbox" id="draftChk">
       <span>캡컷 draft도 생성 (출력 A — 캡컷 설치 PC)</span>
@@ -485,20 +582,26 @@ _HTML = """<!doctype html>
     <div id="statusTitle" style="font-weight:700"></div>
     <div class="bar"><div id="barFill"></div></div>
     <div class="stage" id="stageText"></div>
+    <div class="stage" id="noteText" style="color:#e8b34b"></div>
 
     <div id="reviewBox" class="hidden">
       <label>제목</label>
       <input type="text" id="rvTitle">
-      <label>대본 (한 줄 = 자막 한 줄 = TTS 한 문장)</label>
+      <label>대본 (한 줄 = 자막 한 줄 = TTS 한 문장 · 강조 단어는 <code>문장 | 단어</code>)</label>
       <textarea id="rvSentences"></textarea>
       <button onclick="confirmScript()">이 대본으로 계속</button>
     </div>
 
     <div id="doneBox" class="hidden">
+      <div class="stage" id="providerBadge"></div>
       <video id="player" controls playsinline></video>
       <div class="stage" id="outPaths"></div>
     </div>
     <div class="err hidden" id="errBox"></div>
+    <details class="hidden" id="rawErr" style="margin-top:8px">
+      <summary class="hint" style="cursor:pointer">자세히 (원본 오류)</summary>
+      <pre class="err" id="rawErrText" style="overflow-x:auto"></pre>
+    </details>
     <button class="ghost" style="margin-top:14px" onclick="resetForm()">+ 새 작업</button>
   </div>
 
@@ -518,7 +621,9 @@ const STAGE_KO = {script:'대본 생성', tts:'목소리 합성(TTS)', backgroun
                   review:'대본 검토 대기', done:'완료'};
 
 document.querySelectorAll('input[name=prov]').forEach(r => r.onchange = () => {
-  $('keyRow').classList.toggle('hidden', pick('prov') !== 'gemini' || window._hasGeminiKey);
+  const isGemini = pick('prov') === 'gemini';
+  $('keyRow').classList.toggle('hidden', !isGemini || window._hasGeminiKey);
+  $('geminiOpts').classList.toggle('hidden', !isGemini);
 });
 $('draftChk').onchange = () => $('draftRow').classList.toggle('hidden', !$('draftChk').checked);
 
@@ -530,6 +635,9 @@ async function generate(){
     topic: $('topic').value, auto: pick('mode') === 'auto',
     script_provider: prov === 'gemini' ? 'gemini' : 'stub',  // 진짜 대본은 Gemini만
     tts_provider: prov,
+    voice: prov === 'gemini' ? $('voiceSel').value : '',
+    tts_style: prov === 'gemini' ? $('styleSel').value : '',
+    bgm: $('bgmSel').value,
     gemini_key: $('geminiKey').value,
     draft: $('draftChk').checked, drafts_dir: $('draftsDir').value,
   };
@@ -540,8 +648,31 @@ async function generate(){
   $('goBtn').disabled = true;
   $('statusCard').classList.remove('hidden');
   $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  $('rawErr').classList.add('hidden'); $('noteText').textContent='';
   poll();
   timer = setInterval(poll, 900);
+}
+
+async function previewVoice(ev){
+  ev.preventDefault();
+  const btn = ev.target;
+  btn.disabled = true; btn.textContent = '합성 중...';
+  try{
+    const res = await fetch('/api/preview', {method:'POST', body: JSON.stringify({
+      tts_provider: pick('prov'), voice: $('voiceSel').value,
+      tts_style: $('styleSel').value, gemini_key: $('geminiKey').value,
+    })});
+    const data = await res.json();
+    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+  } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
+}
+
+function showErrors(errs){
+  const raw = (errs||[]).filter(e => e.startsWith('[원본 오류]'));
+  const main = (errs||[]).filter(e => !e.startsWith('[원본 오류]'));
+  if(main.length){ $('errBox').classList.remove('hidden'); $('errBox').textContent = main.join('\\n'); }
+  $('rawErr').classList.toggle('hidden', raw.length === 0);
+  $('rawErrText').textContent = raw.join('\\n');
 }
 
 async function confirmScript(){
@@ -562,6 +693,15 @@ async function poll(){
     $('provWinLabel').classList.remove('hidden');
     if(!window._defaultSet){ window._defaultSet = true; $('provWin').checked = true; }
   }
+  if(!window._optsFilled){
+    window._optsFilled = true;
+    for(const v of state.voices || []) $('voiceSel').add(new Option(v, v));
+    for(const s of state.styles || []) $('styleSel').add(new Option(s, s));
+    if((state.bgm_files || []).length){
+      $('bgmSel').add(new Option('랜덤', 'random'));
+      for(const f of state.bgm_files) $('bgmSel').add(new Option(f, f));
+    }
+  }
   const env = state.env || {};
   const problems = [];
   if(env.ffmpeg === false) problems.push('⚠ FFmpeg가 없습니다 — windows 폴더의 1_설치.bat 을 먼저 실행한 뒤 이 화면을 새로고침하세요.');
@@ -579,32 +719,42 @@ async function poll(){
   $('barFill').style.width = (job.status==='ok'||job.status==='partial' ? 100 : Math.round(frac*100)) + '%';
   $('stageText').textContent = (STAGE_KO[job.stage] || job.stage || '') +
       (job.status==='running' && job.stage!=='review' ? ` — ${Math.round(frac*100)}%` : '');
+  $('noteText').textContent = job.status === 'running' ? (job.note || '') : '';
 
   if(job.status === 'awaiting_review' && job.script){
     clearInterval(timer); timer = null;
     $('reviewBox').classList.remove('hidden');
     if(!$('rvTitle').value) $('rvTitle').value = job.script.title;
-    if(!$('rvSentences').value) $('rvSentences').value = job.script.sentences.join('\\n');
+    if(!$('rvSentences').value){
+      const hls = job.script.highlights || [];
+      $('rvSentences').value = job.script.sentences
+        .map((t, i) => hls[i] ? `${t} | ${hls[i]}` : t).join('\\n');
+    }
   }
+  const provKo = {gemini:'Gemini', openai:'OpenAI', windows:'Windows 내장 음성', stub:'테스트 톤'};
   if(job.status === 'ok' || job.status === 'partial'){
     clearInterval(timer); timer = null;
     $('stageText').innerHTML = job.status === 'ok'
       ? '<span class="ok-badge">✔ 완료 — 자가검증 통과</span>'
       : '<span class="fail-badge">부분 완료</span>';
+    let badge = job.tts_provider ? '목소리: ' + (provKo[job.tts_provider] || job.tts_provider) : '';
+    if(job.requested_tts && job.tts_provider && job.requested_tts !== job.tts_provider)
+      badge = '⚠ ' + (provKo[job.tts_provider] || job.tts_provider) + '로 대체 생성됨 (원래 선택: ' + (provKo[job.requested_tts] || job.requested_tts) + ')';
+    $('providerBadge').textContent = badge;
     if(job.mp4){
       $('doneBox').classList.remove('hidden');
       $('player').src = '/video/' + job.id + '?t=' + Date.now() + '#t=0.1';
       $('outPaths').textContent = 'mp4: ' + job.mp4 + (job.draft ? '  |  draft: ' + job.draft : '');
     }
-    if(job.errors && job.errors.length){ $('errBox').classList.remove('hidden');
-      $('errBox').textContent = job.errors.join('\\n'); }
+    showErrors(job.errors);
     $('goBtn').disabled = false;
   }
   if(job.status === 'failed'){
     clearInterval(timer); timer = null;
     $('stageText').innerHTML = '<span class="fail-badge">✘ 실패</span>';
+    if(!(job.errors || []).length) $('errBox').textContent = '알 수 없는 오류';
+    showErrors(job.errors);
     $('errBox').classList.remove('hidden');
-    $('errBox').textContent = (job.errors || []).join('\\n') || '알 수 없는 오류';
     $('goBtn').disabled = false;
   }
 }
@@ -635,6 +785,8 @@ function resetForm(){
   $('statusCard').classList.add('hidden');
   $('reviewBox').classList.add('hidden');
   $('rvTitle').value = ''; $('rvSentences').value = '';
+  $('noteText').textContent = ''; $('providerBadge').textContent = '';
+  $('errBox').classList.add('hidden'); $('rawErr').classList.add('hidden');
   $('goBtn').disabled = false;
 }
 
