@@ -125,6 +125,62 @@ class OpenAITTS:
         return str(out_path)
 
 
+_SAPI_PS1 = r"""param($TextFile, $OutWav)
+Add-Type -AssemblyName System.Speech
+$text = [IO.File]::ReadAllText($TextFile, [Text.Encoding]::UTF8)
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$ko = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ko*' } | Select-Object -First 1
+if (-not $ko) { $s.Dispose(); exit 3 }
+$s.SelectVoice($ko.VoiceInfo.Name)
+$s.Rate = 0
+$s.SetOutputToWaveFile($OutWav)
+$s.Speak($text)
+$s.Dispose()
+exit 0
+"""
+
+
+class WindowsTTS:
+    """Windows 내장 한국어 음성(SAPI) — API 키·인터넷 없이 무료로 실제 음성 생성.
+
+    품질은 클라우드 TTS보다 낮지만(로봇톤), 키 없이도 '말하는 영상'이 나오게 하는
+    기본 경로. 한국어 Windows 10/11에는 보통 Microsoft Heami가 설치되어 있다.
+    """
+
+    name = "windows"
+
+    def synthesize(self, text: str, voice: str, out_path: str) -> str:
+        import subprocess  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+
+        if sys.platform != "win32":
+            raise TTSError("Windows 내장 음성은 Windows에서만 사용할 수 있습니다")
+        with tempfile.TemporaryDirectory() as tmp:
+            ps1 = Path(tmp) / "sapi.ps1"
+            txt = Path(tmp) / "text.txt"
+            ps1.write_text(_SAPI_PS1, encoding="utf-8-sig")
+            txt.write_text(text, encoding="utf-8")
+            proc = subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(ps1), str(txt), str(out_path),
+                ],
+                capture_output=True, timeout=120,
+            )
+        if proc.returncode == 3:
+            raise TTSError(
+                "이 PC에 한국어 음성이 없습니다. Windows 설정 → 시간 및 언어 → 음성에서 "
+                "한국어 음성을 추가하거나, Gemini API 키로 실전 모드를 사용하세요."
+            )
+        if proc.returncode != 0 or not Path(out_path).exists():
+            raise TTSError(
+                f"Windows 음성 합성 실패(rc={proc.returncode}): "
+                f"{proc.stderr.decode('utf-8', 'replace')[-300:]}"
+            )
+        return str(out_path)
+
+
 class StubTTS:
     """오프라인 대역 — 문장 길이에 비례하는 사인파 톤 생성 (API 키 없이 파이프라인 검증용)."""
 
@@ -145,7 +201,12 @@ class StubTTS:
         return str(out_path)
 
 
-PROVIDERS = {"gemini": GeminiTTS, "openai": OpenAITTS, "stub": StubTTS}
+PROVIDERS = {
+    "gemini": GeminiTTS,
+    "openai": OpenAITTS,
+    "windows": WindowsTTS,
+    "stub": StubTTS,
+}
 
 
 class TTSEngine:

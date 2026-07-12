@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import urllib.parse
 import webbrowser
@@ -37,6 +38,21 @@ def _get_job(job_id: str) -> Optional[dict]:
     with _LOCK:
         job = _JOBS.get(job_id)
         return dict(job) if job else None
+
+
+def _env_check() -> dict:
+    """UI 첫 화면에서 환경 문제를 미리 알려주기 위한 점검 (실패해도 화면은 뜨게)."""
+    from ..core import render_engine  # noqa: PLC0415
+    from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+    try:
+        ff.ffmpeg_bin()
+        ff.ffprobe_bin()
+        ffmpeg_ok = True
+    except ff.FFmpegError:
+        ffmpeg_ok = False
+    font_ok = (Path(render_engine.DEFAULT_FONTS_DIR) / "Pretendard-ExtraBold.ttf").exists()
+    return {"ffmpeg": ffmpeg_ok, "font": font_ok}
 
 
 def default_drafts_dir() -> str:
@@ -277,6 +293,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
             },
             "presets": list(presets.SUBTITLE_STYLE_PRESETS),
+            "platform": sys.platform,
+            "env": _env_check(),
         }
 
     # ---------- 영상 서빙 (Range 지원 — 브라우저 탐색바용) ----------
@@ -344,7 +362,16 @@ def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
 
 
 def serve(workdir: str = "jobs", port: int = 7860, open_browser: bool = True) -> int:
-    httpd = create_server(workdir, port)
+    httpd = None
+    for candidate in range(port, port + 10):  # 이전 서버가 켜져 있어도 다음 포트로
+        try:
+            httpd = create_server(workdir, candidate)
+            break
+        except OSError:
+            continue
+    if httpd is None:
+        print(f"[!] {port}~{port + 9} 포트를 모두 사용 중입니다. 켜져 있는 컷대장 창을 닫아주세요.")
+        return 1
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     print(f"컷대장 UI: {url}   (끝내려면 Ctrl+C — 이 창을 닫으면 UI도 꺼집니다)")
     if open_browser:
@@ -403,13 +430,16 @@ _HTML = """<!doctype html>
   th, td { text-align:left; padding:8px 6px; border-bottom:1px solid #232838; color:#cdd3e0; }
   th { color:#8b93a7; font-weight:400; }
   .hint { font-size:12px; color:#6b7387; margin-top:4px; }
+  .banner { background:#3a1520; border:1px solid #ff7b8a; color:#ffb3bd; border-radius:10px;
+            padding:12px 14px; margin-top:14px; font-size:13px; }
   .hidden { display:none !important; }
   code { background:#0f1117; padding:2px 6px; border-radius:4px; font-size:12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.1)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.2)</small></h1>
+  <div class="banner hidden" id="envBanner"></div>
 
   <div class="card" id="formCard">
     <label>쇼츠 주제</label>
@@ -424,12 +454,13 @@ _HTML = """<!doctype html>
         </div>
       </div>
       <div>
-        <label>대본·목소리</label>
+        <label>목소리</label>
         <div class="toggle">
-          <label><input type="radio" name="prov" value="stub" checked><span>테스트용 (키 불필요)</span></label>
-          <label><input type="radio" name="prov" value="gemini"><span>Gemini (실전)</span></label>
+          <label id="provWinLabel" class="hidden"><input type="radio" name="prov" value="windows" id="provWin"><span>내장 음성 (무료)</span></label>
+          <label><input type="radio" name="prov" value="gemini"><span>Gemini (실전 품질)</span></label>
+          <label><input type="radio" name="prov" value="stub" checked><span>테스트 톤</span></label>
         </div>
-        <div class="hint">테스트용 목소리는 "삐-" 톤입니다. 실전은 Gemini API 키 필요.</div>
+        <div class="hint">내장 음성 = Windows 한국어 음성(키·인터넷 불필요) · Gemini = 성우급 + <b>진짜 대본 생성</b> · 테스트 톤 = "삐-" 소리(기계 점검용)</div>
       </div>
     </div>
 
@@ -497,7 +528,8 @@ async function generate(){
   const prov = pick('prov');
   const body = {
     topic: $('topic').value, auto: pick('mode') === 'auto',
-    script_provider: prov, tts_provider: prov,
+    script_provider: prov === 'gemini' ? 'gemini' : 'stub',  // 진짜 대본은 Gemini만
+    tts_provider: prov,
     gemini_key: $('geminiKey').value,
     draft: $('draftChk').checked, drafts_dir: $('draftsDir').value,
   };
@@ -525,6 +557,18 @@ async function poll(){
   const state = await (await fetch('/api/state')).json();
   window._hasGeminiKey = state.keys.gemini;
   if(!$('draftsDir').value && state.drafts_dir) $('draftsDir').value = state.drafts_dir;
+
+  if((state.platform || '').startsWith('win')){
+    $('provWinLabel').classList.remove('hidden');
+    if(!window._defaultSet){ window._defaultSet = true; $('provWin').checked = true; }
+  }
+  const env = state.env || {};
+  const problems = [];
+  if(env.ffmpeg === false) problems.push('⚠ FFmpeg가 없습니다 — windows 폴더의 1_설치.bat 을 먼저 실행한 뒤 이 화면을 새로고침하세요.');
+  if(env.font === false) problems.push('⚠ 자막 폰트가 없습니다 — zip을 다시 풀어주세요 (resources/fonts 폴더).');
+  $('envBanner').classList.toggle('hidden', problems.length === 0);
+  $('envBanner').textContent = problems.join('  ');
+
   renderHistory(state.history);
   if(!currentJob) return;
   const job = state.jobs.find(j => j.id === currentJob);

@@ -56,5 +56,5 @@ set "CUTDAEJANG_FFPROBE=%CD%\windows\ffmpeg\bin\ffprobe.exe"
 echo.
 python -m cutdaejang doctor
 echo.
-echo 위에 "진단 결과: 정상" 이 보이면 성공입니다. 이어서 2_데모실행.bat 을 실행하세요.
-pause
+echo 위에 "진단 결과: 정상" 이 보이면 성공입니다. 이어서 2_UI실행.bat 을 실행하세요.
+if /i not "%~1"=="auto" pause
