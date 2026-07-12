@@ -67,6 +67,13 @@ def new_job_id(title_hint: str = "") -> str:
     return f"{stamp}-{slug}" if slug else stamp
 
 
+def safe_filename(title: str, fallback: str = "output") -> str:
+    """제목 → 파일명 (Windows 금지 문자 제거, 길이 제한)."""
+    name = re.sub(r'[\\/:*?"<>|\r\n]+', " ", title).strip().rstrip(".")
+    name = re.sub(r"\s+", " ", name)[:60].strip()
+    return name or fallback
+
+
 def generate_script(script_provider, topic: str, opts: JobOptions) -> Script:
     """대본 생성 — JSON 파싱 실패 시 1회 재생성 (§5.6)."""
     try:
@@ -207,7 +214,7 @@ def run_job(
             result.mp4 = render_engine.render(
                 spec,
                 job_dir / "render",
-                out_path=str(job_dir / "output.mp4"),
+                out_path=str(job_dir / f"{safe_filename(script.title)}.mp4"),
                 opts=opts.render,
                 progress_cb=lambda f: report("render", f),
             )

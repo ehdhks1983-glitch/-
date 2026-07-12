@@ -39,6 +39,12 @@ def _get_job(job_id: str) -> Optional[dict]:
         return dict(job) if job else None
 
 
+def _dt_stamp() -> str:
+    import datetime  # noqa: PLC0415
+
+    return datetime.datetime.now().strftime("%H%M%S")
+
+
 def _env_check() -> dict:
     """UI 첫 화면에서 환경 문제를 미리 알려주기 위한 점검 (실패해도 화면은 뜨게)."""
     from ..core import render_engine  # noqa: PLC0415
@@ -65,11 +71,16 @@ def default_drafts_dir() -> str:
 
 
 def _apply_keys(params: dict) -> None:
-    """UI에서 입력한 API 키를 이 프로세스 환경변수로만 반영 (디스크 저장 없음)."""
-    for field, env in (("gemini_key", "GEMINI_API_KEY"), ("openai_key", "OPENAI_API_KEY")):
+    """UI에서 입력한 API 키를 환경변수로 반영. save_key면 파일에도 저장(선택 기능)."""
+    for field, env, name in (
+        ("gemini_key", "GEMINI_API_KEY", "gemini"),
+        ("openai_key", "OPENAI_API_KEY", "openai"),
+    ):
         value = (params.get(field) or "").strip()
         if value:
             os.environ[env] = value
+            if params.get("save_key"):
+                config.save_api_key(name, value)
 
 
 def _tts_chain(params: dict, settings: dict) -> list:
@@ -281,8 +292,150 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
         elif path == "/api/preview":
             self._preview(params)
+        elif path == "/api/pronounce":
+            from ..utils.pronounce import pronounce_ko  # noqa: PLC0415
+
+            self._send_json({"lines": [pronounce_ko(l) for l in params.get("lines", [])]})
+        elif path == "/api/settings":
+            try:
+                saved_to = config.save_settings(params.get("settings") or {})
+                self._send_json({"ok": True, "path": saved_to})
+            except OSError as e:
+                self._send_json({"error": f"설정 저장 실패: {e}"}, 500)
+        elif path == "/api/keys":
+            if params.get("action") == "clear":
+                config.clear_api_keys()
+                self._send_json({"ok": True})
+            else:
+                self._send_json({"error": "지원하지 않는 동작"}, 400)
+        elif path == "/api/regenerate":
+            self._regenerate(params, workdir)
+        elif path == "/api/diagnostic":
+            self._diagnostic(workdir)
+        elif path == "/api/open_folder":
+            self._open_folder(params, workdir)
         else:
             self._send_json({"error": "not found"}, 404)
+
+    # ---------- 재생성 (히스토리 → 저장된 spec 재렌더) ----------
+
+    def _regenerate(self, params: dict, workdir: str) -> None:
+        from ..db.jobs import JobStore  # noqa: PLC0415
+        from ..spec import TimelineSpec  # noqa: PLC0415
+
+        store = JobStore(Path(workdir) / "history.db")
+        row = store.get(params.get("job_id", ""))
+        store.close()
+        if not row or not row["spec_json"]:
+            self._send_json({"error": "재생성할 spec이 없습니다"}, 404)
+            return
+        spec = TimelineSpec.from_json(row["spec_json"])
+        missing = spec.missing_files()
+        if missing:
+            self._send_json(
+                {"error": "원본 소재 파일이 삭제되어 재생성 불가: " + ", ".join(missing[:3])}, 409
+            )
+            return
+
+        new_id = f"{row['id']}-r{_dt_stamp()}"
+        title = row["title"] or row["id"]
+        _set_job(new_id, status="running", stage="render", frac=0.0, title=f"{title} (재생성)")
+
+        def run():
+            try:
+                from ..core import render_engine  # noqa: PLC0415
+                from ..core.orchestrator import safe_filename  # noqa: PLC0415
+
+                job_dir = Path(workdir) / new_id
+                result = render_engine.render(
+                    spec, job_dir / "render",
+                    out_path=str(job_dir / f"{safe_filename(title)}.mp4"),
+                    progress_cb=lambda f: _set_job(new_id, stage="render", frac=f),
+                )
+                _set_job(
+                    new_id,
+                    status="ok" if result.ok else "failed",
+                    stage="done", frac=1.0, job_dir=str(job_dir),
+                    mp4=result.out_path if result.ok else None,
+                    errors=[] if result.ok else result.errors,
+                )
+                try:
+                    store2 = JobStore(Path(workdir) / "history.db")
+                    store2.upsert(
+                        new_id, title=f"{title} (재생성)", mode=row["mode"],
+                        outputs="mp4", status="ok" if result.ok else "failed",
+                        duration_us=spec.duration_us, spec_json=row["spec_json"],
+                        out_mp4=result.out_path if result.ok else None,
+                        tts_provider=row["tts_provider"],
+                    )
+                    store2.close()
+                except Exception:
+                    pass
+            except Exception as e:
+                _set_job(new_id, status="failed", errors=[str(e)])
+
+        threading.Thread(target=run, daemon=True).start()
+        self._send_json({"job_id": new_id})
+
+    # ---------- 진단 리포트 / 폴더 열기 ----------
+
+    def _diagnostic(self, workdir: str) -> None:
+        import datetime as dt  # noqa: PLC0415
+        import platform  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+
+        from .. import __version__  # noqa: PLC0415
+        from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+        lines = [
+            f"컷대장 진단 리포트  {dt.datetime.now().isoformat(timespec='seconds')}",
+            f"버전: v{__version__} / Python {platform.python_version()} / {platform.platform()}",
+        ]
+        try:
+            ver = subprocess.run([ff.ffmpeg_bin(), "-version"], capture_output=True, timeout=15)
+            lines.append("ffmpeg: " + ver.stdout.decode("utf-8", "replace").splitlines()[0])
+        except Exception as e:
+            lines.append(f"ffmpeg: ✘ {e}")
+        env = _env_check()
+        lines.append(f"libass 폰트 동봉: {'OK' if env['font'] else '없음'}")
+        for name, on in self._state()["keys"].items():
+            lines.append(f"{name} 키: {'설정됨' if on else '없음'}")
+        lines.append("")
+        lines.append("── 최근 작업 5건 ──")
+        for r in self._state()["history"][:5]:
+            lines.append(f"{r['created_at']}  [{r['status']}] {r['title']} (목소리: {r['tts_provider'] or '-'})")
+        with _LOCK:
+            for j in list(_JOBS.values())[-3:]:
+                if j.get("errors"):
+                    lines.append("")
+                    lines.append(f"── 오류 ({j['id']}) ──")
+                    lines += [str(e)[:500] for e in j["errors"]]
+        log_file = Path(workdir) / "logs" / "cutdaejang.log"
+        if log_file.exists():
+            lines.append("")
+            lines.append("── 로그 꼬리 ──")
+            lines += log_file.read_text(encoding="utf-8", errors="replace").splitlines()[-60:]
+
+        out = Path(workdir) / f"진단리포트_{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        out.write_text("\n".join(lines), encoding="utf-8")
+        self._send_json({"path": str(out.resolve())})
+
+    def _open_folder(self, params: dict, workdir: str) -> None:
+        job = _get_job(params.get("job_id", ""))
+        target = Path(job["job_dir"]) if job and job.get("job_dir") else Path(workdir)
+        if not target.is_dir():
+            self._send_json({"error": "폴더 없음"}, 404)
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(target))  # noqa: S606
+            else:
+                import subprocess  # noqa: PLC0415
+
+                subprocess.Popen(["xdg-open", str(target)])
+            self._send_json({"ok": True, "path": str(target)})
+        except Exception as e:
+            self._send_json({"error": str(e), "path": str(target)}, 500)
 
     # ---------- 목소리 미리듣기 (지시서 PATCH 6) ----------
 
@@ -343,6 +496,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "id": r["id"], "title": r["title"], "mode": r["mode"],
                     "status": r["status"], "created_at": r["created_at"],
                     "has_mp4": bool(r["out_mp4"] and Path(r["out_mp4"]).exists()),
+                    "has_spec": bool(r["spec_json"]),
+                    "tts_provider": r["tts_provider"] or "",
                     "draft": r["out_draft"] or "",
                 }
                 for r in store.list(limit=30)
@@ -361,6 +516,7 @@ class _Handler(BaseHTTPRequestHandler):
             },
             "platform": sys.platform,
             "env": _env_check(),
+            "settings": config.load_settings(),
             "bgm_files": sorted(
                 p.name
                 for p in orchestrator.DEFAULT_BGM_DIR.glob("*")
@@ -434,7 +590,23 @@ def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
     return httpd
 
 
+def _setup_file_logging(workdir: str) -> None:
+    import logging  # noqa: PLC0415
+
+    log_dir = Path(workdir) / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(log_dir / "cutdaejang.log", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger = logging.getLogger("cutdaejang")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+
 def serve(workdir: str = "jobs", port: int = 7860, open_browser: bool = True) -> int:
+    loaded = config.load_api_keys_into_env()
+    if loaded:
+        print(f"저장된 API 키 로드: {', '.join(loaded)}")
+    _setup_file_logging(workdir)
     httpd = None
     for candidate in range(port, port + 10):  # 이전 서버가 켜져 있어도 다음 포트로
         try:
@@ -511,7 +683,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.3)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.4)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="card" id="formCard">
@@ -538,8 +710,15 @@ _HTML = """<!doctype html>
     </div>
 
     <div id="keyRow" class="hidden">
-      <label>Gemini API 키 <span class="hint">(이 PC의 메모리에만 유지, 저장 안 함 — <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">발급</a>)</span></label>
+      <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
       <input type="password" id="geminiKey" placeholder="AIza...">
+      <div class="chk" style="margin-top:8px">
+        <input type="checkbox" id="saveKeyChk" checked>
+        <span>이 PC에 저장 (다음부터 입력 생략 — 파일로 저장되니 공용 PC에서는 해제)</span>
+      </div>
+    </div>
+    <div id="keySaved" class="hidden hint" style="margin-top:8px">
+      🔑 저장된 Gemini 키 사용 중 — <a href="#" onclick="clearKeys(event)" style="color:#ff9aa6">키 삭제</a>
     </div>
 
     <div id="geminiOpts" class="hidden">
@@ -589,6 +768,10 @@ _HTML = """<!doctype html>
       <input type="text" id="rvTitle">
       <label>대본 (한 줄 = 자막 한 줄 = TTS 한 문장 · 강조 단어는 <code>문장 | 단어</code>)</label>
       <textarea id="rvSentences"></textarea>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+        <button class="ghost" onclick="pronounceLines(event)">한글 발음으로 변환 (숫자·영어)</button>
+        <span class="hint">예: 2026년→이천이십육년, AI→에이아이 — TTS 오독 방지</span>
+      </div>
       <button onclick="confirmScript()">이 대본으로 계속</button>
     </div>
 
@@ -596,6 +779,7 @@ _HTML = """<!doctype html>
       <div class="stage" id="providerBadge"></div>
       <video id="player" controls playsinline></video>
       <div class="stage" id="outPaths"></div>
+      <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
     </div>
     <div class="err hidden" id="errBox"></div>
     <details class="hidden" id="rawErr" style="margin-top:8px">
@@ -608,8 +792,40 @@ _HTML = """<!doctype html>
   <div class="card">
     <div style="font-weight:700">히스토리</div>
     <table id="histTable"><thead>
-      <tr><th>시각</th><th>제목</th><th>모드</th><th>상태</th><th></th></tr>
+      <tr><th>시각</th><th>제목</th><th>목소리</th><th>상태</th><th></th></tr>
     </thead><tbody></tbody></table>
+  </div>
+
+  <div class="card hidden" id="settingsCard">
+    <div style="font-weight:700">⚙ 설정 <span class="hint">(저장하면 다음 작업부터 적용)</span></div>
+    <div class="row">
+      <div><label>자막 크기(px)</label><input type="number" id="setFontSize" min="40" max="120"></div>
+      <div><label>외곽선 두께</label><input type="number" id="setOutline" min="0" max="8"></div>
+      <div><label>자막 세로 여백</label><input type="number" id="setMarginV" min="100" max="800" step="10"></div>
+    </div>
+    <div class="row">
+      <div><label>배경 모션</label>
+        <select id="setMotion">
+          <option value="zoom_in">줌인 (기본)</option>
+          <option value="zoom_out">줌아웃</option>
+          <option value="off">없음</option>
+        </select></div>
+      <div><label>줌 정도 (0.02~0.2)</label><input type="number" id="setMotionAmt" min="0.02" max="0.2" step="0.01"></div>
+      <div><label>강조 색</label><input type="color" id="setHlColor" style="height:40px;padding:4px"></div>
+    </div>
+    <div class="row">
+      <div><label>BGM 볼륨(dB)</label><input type="number" id="setBgmVol" min="-40" max="0"></div>
+      <div><label>문장 간격(ms)</label><input type="number" id="setGap" min="0" max="1000" step="10"></div>
+      <div><label>분당 TTS 호출 한도</label><input type="number" id="setRpm" min="1" max="60"></div>
+    </div>
+    <div class="chk"><input type="checkbox" id="setFade"><span>자막 등장 페이드</span></div>
+    <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠)</span></div>
+    <button onclick="saveSettings()">설정 저장</button>
+  </div>
+
+  <div style="text-align:center;margin-top:18px">
+    <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
+    <button class="ghost" onclick="diagnostic(event)">🩺 진단 리포트 저장</button>
   </div>
 </div>
 
@@ -639,6 +855,7 @@ async function generate(){
     tts_style: prov === 'gemini' ? $('styleSel').value : '',
     bgm: $('bgmSel').value,
     gemini_key: $('geminiKey').value,
+    save_key: $('saveKeyChk').checked,
     draft: $('draftChk').checked, drafts_dir: $('draftsDir').value,
   };
   const res = await fetch('/api/generate', {method:'POST', body: JSON.stringify(body)});
@@ -675,6 +892,78 @@ function showErrors(errs){
   $('rawErrText').textContent = raw.join('\\n');
 }
 
+async function clearKeys(ev){
+  ev.preventDefault();
+  if(!confirm('저장된 API 키를 삭제할까요?')) return;
+  await fetch('/api/keys', {method:'POST', body: JSON.stringify({action:'clear'})});
+  window._hasGeminiKey = false;
+  $('keySaved').classList.add('hidden');
+  poll();
+}
+
+async function pronounceLines(ev){
+  ev.preventDefault();
+  const res = await fetch('/api/pronounce', {method:'POST', body: JSON.stringify({
+    lines: $('rvSentences').value.split('\\n'),
+  })});
+  const data = await res.json();
+  if(data.lines) $('rvSentences').value = data.lines.join('\\n');
+}
+
+async function openFolder(ev){
+  ev.preventDefault();
+  const res = await fetch('/api/open_folder', {method:'POST', body: JSON.stringify({job_id: currentJob})});
+  const data = await res.json();
+  if(data.error) alert('폴더를 열 수 없습니다: ' + (data.path || data.error));
+}
+
+async function diagnostic(ev){
+  ev.preventDefault();
+  const data = await (await fetch('/api/diagnostic', {method:'POST', body:'{}'})).json();
+  alert('진단 리포트 저장됨:\\n' + data.path + '\\n\\n문의할 때 이 파일을 함께 올려주세요.');
+}
+
+function toggleSettings(){ $('settingsCard').classList.toggle('hidden'); }
+
+function fillSettings(s){
+  $('setFontSize').value = s.subtitle.font_size;
+  $('setOutline').value = s.subtitle.outline;
+  $('setMarginV').value = s.subtitle.margin_v;
+  $('setFade').checked = !!s.subtitle.fade;
+  $('setHlColor').value = s.subtitle.highlight_color;
+  $('setMotion').value = s.bg.motion;
+  $('setMotionAmt').value = s.bg.motion_amount;
+  $('setBgmVol').value = s.bgm.volume_db;
+  $('setDuck').checked = !!s.bgm.duck;
+  $('setGap').value = s.audio.gap_ms;
+  $('setRpm').value = s.tts.rpm_limit;
+}
+
+async function saveSettings(){
+  const body = {settings: {
+    subtitle: {font_size: +$('setFontSize').value, outline: +$('setOutline').value,
+               margin_v: +$('setMarginV').value, fade: $('setFade').checked,
+               highlight_color: $('setHlColor').value.toUpperCase()},
+    bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value},
+    bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
+    audio: {gap_ms: +$('setGap').value},
+    tts: {rpm_limit: +$('setRpm').value},
+  }};
+  const data = await (await fetch('/api/settings', {method:'POST', body: JSON.stringify(body)})).json();
+  alert(data.ok ? '저장했습니다. 다음 작업부터 적용됩니다.' : ('저장 실패: ' + data.error));
+}
+
+async function regen(id){
+  const res = await fetch('/api/regenerate', {method:'POST', body: JSON.stringify({job_id: id})});
+  const data = await res.json();
+  if(data.error){ alert(data.error); return; }
+  currentJob = data.job_id;
+  $('statusCard').classList.remove('hidden');
+  $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  $('reviewBox').classList.add('hidden');
+  if(!timer) timer = setInterval(poll, 900);
+}
+
 async function confirmScript(){
   await fetch('/api/confirm', {method:'POST', body: JSON.stringify({
     job_id: currentJob, title: $('rvTitle').value,
@@ -701,7 +990,9 @@ async function poll(){
       $('bgmSel').add(new Option('랜덤', 'random'));
       for(const f of state.bgm_files) $('bgmSel').add(new Option(f, f));
     }
+    if(state.settings) fillSettings(state.settings);
   }
+  $('keySaved').classList.toggle('hidden', !state.keys.gemini);
   const env = state.env || {};
   const problems = [];
   if(env.ffmpeg === false) problems.push('⚠ FFmpeg가 없습니다 — windows 폴더의 1_설치.bat 을 먼저 실행한 뒤 이 화면을 새로고침하세요.');
@@ -759,15 +1050,20 @@ async function poll(){
   }
 }
 
+const PROV_KO = {gemini:'Gemini', openai:'OpenAI', windows:'내장', stub:'톤'};
 function renderHistory(rows){
   const tb = $('histTable').querySelector('tbody');
   tb.innerHTML = '';
   for(const r of rows || []){
     const tr = document.createElement('tr');
+    const btns = [
+      r.has_mp4 ? `<button class="ghost" onclick="playHist('${r.id}')">▶ 재생</button>` : '',
+      r.has_spec ? `<button class="ghost" onclick="regen('${r.id}')" title="저장된 설계로 mp4 재렌더">♻ 재생성</button>` : '',
+    ].join(' ');
     tr.innerHTML = `<td>${(r.created_at||'').replace('T',' ').slice(5,16)}</td>
-      <td>${r.title||r.id}</td><td>${r.mode==='auto'?'자동':'검토'}</td>
+      <td>${r.title||r.id}</td><td>${PROV_KO[r.tts_provider]||'-'}</td>
       <td>${r.status==='ok'?'<span class="ok-badge">완료</span>':r.status}</td>
-      <td>${r.has_mp4?`<button class="ghost" onclick="playHist('${r.id}')">▶ 재생</button>`:''}</td>`;
+      <td style="white-space:nowrap">${btns}</td>`;
     tb.appendChild(tr);
   }
 }

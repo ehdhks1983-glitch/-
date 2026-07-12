@@ -61,14 +61,21 @@ def deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
-def load_settings(path: Optional[str] = None) -> dict:
-    candidates = [
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _settings_candidates(path: Optional[str] = None) -> list:
+    return [
         path,
         os.environ.get("CUTDAEJANG_SETTINGS"),
         "settings.json",
-        str(Path(__file__).resolve().parents[1] / "settings.json"),
+        str(project_root() / "settings.json"),
     ]
-    for candidate in candidates:
+
+
+def load_settings(path: Optional[str] = None) -> dict:
+    for candidate in _settings_candidates(path):
         if candidate and Path(candidate).is_file():
             try:
                 user = json.loads(Path(candidate).read_text(encoding="utf-8"))
@@ -76,3 +83,62 @@ def load_settings(path: Optional[str] = None) -> dict:
             except (OSError, json.JSONDecodeError):
                 continue  # 손상된 설정 파일은 무시하고 다음 후보/기본값
     return copy.deepcopy(DEFAULTS)
+
+
+def save_settings(overrides: dict, path: Optional[str] = None) -> str:
+    """현재 설정에 overrides를 병합해 파일로 저장 (설정 화면용). 저장 경로 반환."""
+    target = None
+    for candidate in _settings_candidates(path):
+        if candidate and Path(candidate).is_file():
+            target = Path(candidate)
+            break
+    target = target or (project_root() / "settings.json")
+    merged = deep_merge(load_settings(str(target) if target.is_file() else None), overrides)
+    target.write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return str(target)
+
+
+# ─────────── API 키 저장 (선택 기능 — 이 PC 파일에 평문 저장) ───────────
+
+_KEY_ENVS = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+
+
+def api_keys_path() -> Path:
+    return project_root() / "api_keys.json"
+
+
+def load_api_keys_into_env() -> list:
+    """저장된 키를 환경변수로 로드 (이미 설정돼 있으면 유지). 로드된 제공자 목록 반환."""
+    loaded = []
+    path = api_keys_path()
+    if not path.is_file():
+        return loaded
+    try:
+        keys = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return loaded
+    for name, env in _KEY_ENVS.items():
+        if keys.get(name) and not os.environ.get(env):
+            os.environ[env] = str(keys[name])
+            loaded.append(name)
+    return loaded
+
+
+def save_api_key(provider: str, key: str) -> None:
+    path = api_keys_path()
+    keys = {}
+    if path.is_file():
+        try:
+            keys = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            keys = {}
+    keys[provider] = key
+    path.write_text(json.dumps(keys, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def clear_api_keys() -> None:
+    api_keys_path().unlink(missing_ok=True)
+    for env in _KEY_ENVS.values():
+        os.environ.pop(env, None)

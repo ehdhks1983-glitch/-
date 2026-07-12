@@ -8,3 +8,5 @@ jobs/
 *.mp4
 *.m4a
 windows/ffmpeg/
+api_keys.json
+logs/
