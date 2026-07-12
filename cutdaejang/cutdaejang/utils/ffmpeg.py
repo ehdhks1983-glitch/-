@@ -1,0 +1,154 @@
+"""FFmpeg/ffprobe 헬퍼 — 실측(ffprobe)·진행률·GPU 자동 감지 (기획안 §5.5).
+
+바이너리 경로는 환경변수 ``CUTDAEJANG_FFMPEG``/``CUTDAEJANG_FFPROBE``로 재지정 가능
+(배포 시 동봉된 libass 포함 빌드를 가리키기 위함).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+from typing import Callable, Optional
+
+from .timefmt import seconds_to_us
+
+
+class FFmpegError(RuntimeError):
+    """FFmpeg/ffprobe 실행 실패."""
+
+
+def ffmpeg_bin() -> str:
+    return _resolve("CUTDAEJANG_FFMPEG", "ffmpeg")
+
+
+def ffprobe_bin() -> str:
+    return _resolve("CUTDAEJANG_FFPROBE", "ffprobe")
+
+
+def _resolve(env_key: str, default: str) -> str:
+    path = os.environ.get(env_key) or default
+    found = shutil.which(path)
+    if not found:
+        raise FFmpegError(
+            f"{default} 실행 파일을 찾을 수 없습니다 (환경변수 {env_key} 또는 PATH 확인). "
+            "배포본에는 libass 포함 FFmpeg가 동봉되어야 합니다 (기획안 §4)."
+        )
+    return found
+
+
+def run(cmd: list, timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+    """서브프로세스 실행. 비정상 종료 시 stderr 꼬리를 담아 FFmpegError."""
+    proc = subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout
+    )
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", "replace")[-2000:]
+        raise FFmpegError(f"명령 실패(rc={proc.returncode}): {' '.join(map(str, cmd[:8]))}…\n{tail}")
+    return proc
+
+
+def probe(path: str) -> dict:
+    """ffprobe JSON (format + streams)."""
+    proc = run(
+        [
+            ffprobe_bin(),
+            "-v", "error",
+            "-show_entries", "format=duration:stream=codec_type,width,height,sample_rate",
+            "-of", "json",
+            str(path),
+        ]
+    )
+    return json.loads(proc.stdout.decode("utf-8"))
+
+
+def probe_duration_us(path: str) -> int:
+    """컨테이너 길이 실측 → μs 정수. 타임라인 계산은 반드시 이 실측값만 사용한다."""
+    info = probe(path)
+    dur = info.get("format", {}).get("duration")
+    if dur is None:
+        raise FFmpegError(f"길이를 읽을 수 없음: {path}")
+    return seconds_to_us(float(dur))
+
+
+def probe_video_size(path: str) -> tuple:
+    for s in probe(path).get("streams", []):
+        if s.get("codec_type") == "video":
+            return int(s["width"]), int(s["height"])
+    raise FFmpegError(f"비디오 스트림 없음: {path}")
+
+
+def has_audio_stream(path: str) -> bool:
+    return any(s.get("codec_type") == "audio" for s in probe(path).get("streams", []))
+
+
+_NVENC_CACHE: Optional[bool] = None
+
+
+def nvenc_available() -> bool:
+    """h264_nvenc 사용 가능 여부 — 인코더 목록 확인 후 0.1초 테스트 인코딩까지 통과해야 True.
+
+    (드라이버 미설치 등으로 목록에는 있어도 실행이 실패하는 경우가 흔해 실인코딩으로 확정)
+    """
+    global _NVENC_CACHE
+    if _NVENC_CACHE is not None:
+        return _NVENC_CACHE
+    try:
+        listed = subprocess.run(
+            [ffmpeg_bin(), "-hide_banner", "-encoders"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15,
+        )
+        if b"h264_nvenc" not in listed.stdout:
+            _NVENC_CACHE = False
+            return False
+        test = subprocess.run(
+            [
+                ffmpeg_bin(), "-hide_banner", "-v", "error",
+                "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
+                "-c:v", "h264_nvenc", "-f", "null", "-",
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+        )
+        _NVENC_CACHE = test.returncode == 0
+    except Exception:
+        _NVENC_CACHE = False
+    return _NVENC_CACHE
+
+
+def run_with_progress(
+    args: list,
+    total_us: int,
+    progress_cb: Optional[Callable[[float], None]] = None,
+) -> None:
+    """``-progress pipe:1`` 파싱으로 진행률 콜백(0.0~1.0) 호출 (기획안 §5.5-3 GUI 진행바용).
+
+    args는 ffmpeg 바이너리를 제외한 인자 목록.
+    """
+    cmd = [ffmpeg_bin(), "-hide_banner", "-nostats", "-progress", "pipe:1", *map(str, args)]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        line = raw.decode("utf-8", "replace").strip()
+        if progress_cb and line.startswith("out_time_us=") and total_us > 0:
+            try:
+                progress_cb(min(1.0, int(line.split("=", 1)[1]) / total_us))
+            except ValueError:
+                pass
+        elif progress_cb and line == "progress=end":
+            progress_cb(1.0)
+    _, stderr = proc.communicate()
+    if proc.returncode != 0:
+        tail = stderr.decode("utf-8", "replace")[-2000:]
+        raise FFmpegError(f"렌더 실패(rc={proc.returncode}):\n{tail}")
+
+
+def escape_filter_value(value: str) -> str:
+    """필터 옵션 값(파일 경로 등)의 FFmpeg 필터그래프용 이스케이프.
+
+    Windows 경로 대응: 역슬래시는 슬래시로 통일(FFmpeg가 수용), 전체를 홑따옴표로
+    감싸 콜론·쉼표를 보호하고, 값 안의 홑따옴표는 '\\'' 로 탈출한다.
+    예) C:\\a b\\s.ass → 'C:/a b/s.ass'
+    """
+    v = value.replace("\\", "/")
+    return "'" + v.replace("'", r"'\''") + "'"

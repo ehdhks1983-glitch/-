@@ -1,0 +1,210 @@
+"""Timeline Spec (IR) — 두 출력 경로(draft_builder / render_engine)의 단일 진실 원천.
+
+기획안 §3.2의 JSON 형태를 그대로 직렬화/역직렬화한다. 모든 시간은 μs 정수.
+검증·직렬화 후 jobs 테이블에 저장되어 "재생성" 시 어느 출력으로든 재빌드 가능해야 한다.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import List, Optional
+
+
+class SpecError(ValueError):
+    """Timeline Spec 검증 실패."""
+
+
+def _require_int_us(name: str, value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SpecError(f"{name}은(는) μs 정수여야 합니다: {value!r}")
+    return value
+
+
+@dataclass
+class Canvas:
+    w: int = 1080
+    h: int = 1920
+    fps: int = 30
+
+
+@dataclass
+class Background:
+    type: str = "image"  # "image" | "color"
+    path: Optional[str] = None
+    color: Optional[str] = None  # 예: "#101020" (type=color일 때)
+
+
+@dataclass
+class MainVideo:
+    path: str = ""
+    layout: str = "top"        # "top" | "center" | "full"
+    scale: float = 0.9
+    fit: str = "trim"          # 영상이 spec보다 길 때: 잘라냄
+    short_policy: str = "freeze_last"  # 짧을 때: "freeze_last" | "loop"
+
+
+@dataclass
+class AudioClip:
+    path: str
+    start_us: int
+    end_us: int
+
+
+@dataclass
+class Subtitle:
+    text: str
+    start_us: int
+    end_us: int
+
+
+@dataclass
+class Style:
+    font: str = "Pretendard-ExtraBold"
+    size: int = 64
+    outline: int = 3
+    position: str = "bottom"   # "bottom" | "center" | "top"
+    gradient_overlay: bool = True
+    primary_color: str = "#FFFFFF"
+    outline_color: str = "#000000"
+    margin_v: Optional[int] = None  # 지정 시 position 프리셋의 세로 여백을 덮어씀
+
+
+@dataclass
+class TimelineSpec:
+    mode: str = "shorts"
+    canvas: Canvas = field(default_factory=Canvas)
+    duration_us: int = 0
+    background: Background = field(default_factory=Background)
+    main_video: Optional[MainVideo] = None
+    audio: List[AudioClip] = field(default_factory=list)
+    subtitles: List[Subtitle] = field(default_factory=list)
+    style: Style = field(default_factory=Style)
+
+    # ---------- 직렬화 ----------
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        if self.main_video is None:
+            d.pop("main_video")
+        return d
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+    def save(self, path) -> None:
+        Path(path).write_text(self.to_json(), encoding="utf-8")
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TimelineSpec":
+        def pick(dc, src):
+            fields = {f for f in dc.__dataclass_fields__}  # 알 수 없는 키는 무시 (전방 호환)
+            return dc(**{k: v for k, v in (src or {}).items() if k in fields})
+
+        return cls(
+            mode=d.get("mode", "shorts"),
+            canvas=pick(Canvas, d.get("canvas")),
+            duration_us=d.get("duration_us", 0),
+            background=pick(Background, d.get("background")),
+            main_video=pick(MainVideo, d["main_video"]) if d.get("main_video") else None,
+            audio=[pick(AudioClip, a) for a in d.get("audio", [])],
+            subtitles=[pick(Subtitle, s) for s in d.get("subtitles", [])],
+            style=pick(Style, d.get("style")),
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> "TimelineSpec":
+        return cls.from_dict(json.loads(text))
+
+    @classmethod
+    def load(cls, path) -> "TimelineSpec":
+        return cls.from_json(Path(path).read_text(encoding="utf-8"))
+
+    # ---------- 검증 ----------
+
+    def validate(self) -> "TimelineSpec":
+        if self.mode not in ("shorts", "landscape"):
+            raise SpecError(f"지원하지 않는 mode: {self.mode}")
+        if self.canvas.w <= 0 or self.canvas.h <= 0 or self.canvas.fps <= 0:
+            raise SpecError(f"canvas 값 오류: {self.canvas}")
+        _require_int_us("duration_us", self.duration_us)
+        if self.duration_us <= 0:
+            raise SpecError("duration_us는 0보다 커야 합니다")
+
+        if self.background.type == "image":
+            if not self.background.path:
+                raise SpecError("background.type=image에는 path가 필요합니다")
+        elif self.background.type == "color":
+            if not self.background.color:
+                raise SpecError("background.type=color에는 color가 필요합니다")
+        else:
+            raise SpecError(f"지원하지 않는 background.type: {self.background.type}")
+
+        if self.main_video is not None:
+            mv = self.main_video
+            if not mv.path:
+                raise SpecError("main_video.path가 비어 있습니다")
+            if mv.layout not in ("top", "center", "full"):
+                raise SpecError(f"지원하지 않는 layout: {mv.layout}")
+            if not (0.1 <= mv.scale <= 1.0):
+                raise SpecError(f"main_video.scale 범위(0.1~1.0) 밖: {mv.scale}")
+            if mv.short_policy not in ("freeze_last", "loop"):
+                raise SpecError(f"지원하지 않는 short_policy: {mv.short_policy}")
+
+        for name, clips in (("audio", self.audio), ("subtitles", self.subtitles)):
+            prev_end = None
+            for i, c in enumerate(clips):
+                start = _require_int_us(f"{name}[{i}].start_us", c.start_us)
+                end = _require_int_us(f"{name}[{i}].end_us", c.end_us)
+                if start < 0 or end <= start:
+                    raise SpecError(f"{name}[{i}] 구간 오류: {start}~{end}")
+                if end > self.duration_us:
+                    raise SpecError(
+                        f"{name}[{i}] 종료({end})가 duration_us({self.duration_us})를 초과"
+                    )
+                if prev_end is not None and start < prev_end:
+                    raise SpecError(f"{name}[{i}]가 이전 클립과 겹칩니다 ({start} < {prev_end})")
+                prev_end = end
+
+        if self.style.size <= 0 or self.style.outline < 0:
+            raise SpecError(f"style 값 오류: size={self.style.size}, outline={self.style.outline}")
+        if self.style.position not in ("bottom", "center", "top"):
+            raise SpecError(f"지원하지 않는 style.position: {self.style.position}")
+        return self
+
+    # ---------- 경로 ----------
+
+    def missing_files(self, base_dir: Optional[str] = None) -> List[str]:
+        """존재하지 않는 참조 파일 목록 (상대 경로는 base_dir 기준)."""
+        base = Path(base_dir) if base_dir else Path(".")
+
+        def ok(p: str) -> bool:
+            path = Path(p)
+            return (path if path.is_absolute() else base / path).exists()
+
+        missing = []
+        if self.background.type == "image" and self.background.path and not ok(self.background.path):
+            missing.append(self.background.path)
+        if self.main_video and not ok(self.main_video.path):
+            missing.append(self.main_video.path)
+        missing += [a.path for a in self.audio if not ok(a.path)]
+        return missing
+
+    def resolve_paths(self, base_dir: str) -> "TimelineSpec":
+        """상대 경로를 base_dir 기준 절대 경로로 치환한 새 spec 반환."""
+        base = Path(base_dir)
+
+        def absolutize(p: Optional[str]) -> Optional[str]:
+            if not p:
+                return p
+            path = Path(p)
+            return str(path if path.is_absolute() else (base / path).resolve())
+
+        spec = TimelineSpec.from_dict(self.to_dict())
+        spec.background.path = absolutize(spec.background.path)
+        if spec.main_video:
+            spec.main_video.path = absolutize(spec.main_video.path)
+        for a in spec.audio:
+            a.path = absolutize(a.path)
+        return spec

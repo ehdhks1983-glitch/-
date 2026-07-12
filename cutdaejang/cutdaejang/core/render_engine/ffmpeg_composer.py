@@ -1,0 +1,197 @@
+"""FFmpeg 필터그래프 조립·실행 (기획안 §5.5-3).
+
+개념 구조:
+    [배경]scale→setsar → [메인영상]scale → overlay → (그라데이션 overlay) → subtitles(ASS+fontsdir)
+    비디오 libx264 crf19 / GPU 감지 시 h264_nvenc(cq 매핑), 오디오 AAC 192k, +faststart
+
+- 메인 영상 없음(정보형 쇼츠): overlay 단계 생략, 배경+자막만
+- 영상이 spec보다 김: trim / 짧음: short_policy에 따라 마지막 프레임 정지(tpad) 또는 루프
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+from ... import presets
+from ...spec import TimelineSpec
+from ...utils import ffmpeg as ff
+from ...utils.timefmt import us_to_seconds_str
+
+
+@dataclass
+class RenderOptions:
+    crf: int = 19               # 품질 (낮을수록 고품질·대용량)
+    preset: str = "medium"
+    use_gpu: str = "auto"       # "auto" | "on" | "off"
+    audio_bitrate: str = "192k"
+
+
+# libx264 preset → nvenc preset 근사 매핑
+_NVENC_PRESETS = {
+    "ultrafast": "p1", "superfast": "p2", "veryfast": "p3", "faster": "p4",
+    "fast": "p4", "medium": "p5", "slow": "p6", "slower": "p7", "veryslow": "p7",
+}
+
+
+def build_command(
+    spec: TimelineSpec,
+    voice_path: str,
+    ass_path: str,
+    out_path: str,
+    fonts_dir: str,
+    gradient_path: Optional[str] = None,
+    main_video_duration_us: Optional[int] = None,
+    encoder: str = "libx264",
+    opts: Optional[RenderOptions] = None,
+) -> list:
+    """ffmpeg 인자 목록(바이너리 제외) 생성 — 순수 함수 (실행은 compose가 담당).
+
+    main_video_duration_us: 메인 영상의 ffprobe 실측 길이 (spec에 main_video가 있을 때 필수).
+    """
+    opts = opts or RenderOptions()
+    c = spec.canvas
+    dur_s = us_to_seconds_str(spec.duration_us)
+
+    args: list = ["-y"]
+    filters: list = []
+
+    # ── 입력 0: 배경 ──
+    if spec.background.type == "image":
+        args += ["-loop", "1", "-t", dur_s, "-i", spec.background.path]
+    else:
+        color = (spec.background.color or "#000000").replace("#", "0x")
+        args += ["-f", "lavfi", "-i", f"color=c={color}:s={c.w}x{c.h}:r={c.fps}:d={dur_s}"]
+    filters.append(
+        f"[0:v]scale={c.w}:{c.h}:force_original_aspect_ratio=increase,"
+        f"crop={c.w}:{c.h},setsar=1[bg]"
+    )
+    next_input = 1
+    last_label = "bg"
+
+    # ── 입력 1(선택): 메인 영상 ──
+    if spec.main_video is not None:
+        mv = spec.main_video
+        if main_video_duration_us is None:
+            raise ValueError("main_video가 있는 spec에는 main_video_duration_us가 필요합니다")
+        loop_short = main_video_duration_us < spec.duration_us and mv.short_policy == "loop"
+        if loop_short:
+            args += ["-stream_loop", "-1", "-i", mv.path]
+        else:
+            args += ["-i", mv.path]
+        mv_idx = next_input
+        next_input += 1
+
+        chain = []
+        if main_video_duration_us > spec.duration_us or loop_short:
+            chain.append(f"trim=duration={dur_s},setpts=PTS-STARTPTS")
+        elif main_video_duration_us < spec.duration_us:  # freeze_last
+            delta = spec.duration_us - main_video_duration_us
+            chain.append(
+                f"tpad=stop_mode=clone:stop_duration={us_to_seconds_str(delta)}"
+            )
+        if mv.layout == "full":
+            chain.append(
+                f"scale={c.w}:{c.h}:force_original_aspect_ratio=increase,crop={c.w}:{c.h}"
+            )
+        else:
+            chain.append(f"scale={presets.main_video_target_width(c.w, mv.layout, mv.scale)}:-2")
+        filters.append(f"[{mv_idx}:v]" + ",".join(chain) + "[mv]")
+
+        y = "0" if mv.layout == "full" else presets.main_video_y_expr(mv.layout, c.h)
+        filters.append(f"[{last_label}][mv]overlay=x=(W-w)/2:y={y}[comp]")
+        last_label = "comp"
+
+    # ── 입력: 병합 보이스 ──
+    args += ["-i", str(voice_path)]
+    voice_idx = next_input
+    next_input += 1
+
+    # ── 입력(선택): 하단 그라데이션 오버레이 ──
+    if gradient_path:
+        args += ["-loop", "1", "-t", dur_s, "-i", str(gradient_path)]
+        filters.append(f"[{last_label}][{next_input}:v]overlay=x=0:y=0[grad]")
+        last_label = "grad"
+        next_input += 1
+
+    # ── 자막 번인 (libass) ──
+    filters.append(
+        f"[{last_label}]subtitles=filename={ff.escape_filter_value(str(ass_path))}"
+        f":fontsdir={ff.escape_filter_value(str(fonts_dir))}[v]"
+    )
+
+    # ── 인코딩 ──
+    if encoder == "h264_nvenc":
+        video_args = [
+            "-c:v", "h264_nvenc",
+            "-preset", _NVENC_PRESETS.get(opts.preset, "p5"),
+            "-rc", "vbr", "-cq", str(opts.crf), "-b:v", "0",
+        ]
+    else:
+        video_args = ["-c:v", "libx264", "-crf", str(opts.crf), "-preset", opts.preset]
+
+    args += [
+        "-filter_complex", ";".join(filters),
+        "-map", "[v]", "-map", f"{voice_idx}:a",
+        *video_args,
+        "-pix_fmt", "yuv420p", "-r", str(c.fps),
+        "-c:a", "aac", "-b:a", opts.audio_bitrate,
+        "-movflags", "+faststart",
+        "-t", dur_s,
+        str(out_path),
+    ]
+    return args
+
+
+def pick_encoder(opts: RenderOptions) -> str:
+    """GPU 자동 감지 — h264_nvenc 사용 가능 시 전환, 아니면 libx264 (기획안 §5.5-3)."""
+    if opts.use_gpu == "off":
+        return "libx264"
+    if opts.use_gpu == "on":
+        return "h264_nvenc"
+    return "h264_nvenc" if ff.nvenc_available() else "libx264"
+
+
+def compose(
+    spec: TimelineSpec,
+    voice_path: str,
+    ass_path: str,
+    out_path: str,
+    fonts_dir: str,
+    gradient_path: Optional[str] = None,
+    opts: Optional[RenderOptions] = None,
+    progress_cb: Optional[Callable[[float], None]] = None,
+) -> str:
+    """합성 실행. nvenc 경로 실패 시 libx264로 1회 폴백. 사용한 인코더를 반환."""
+    opts = opts or RenderOptions()
+    mv_dur = (
+        ff.probe_duration_us(spec.main_video.path) if spec.main_video is not None else None
+    )
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+
+    encoder = pick_encoder(opts)
+    try:
+        ff.run_with_progress(
+            build_command(
+                spec, voice_path, ass_path, out_path, fonts_dir,
+                gradient_path=gradient_path, main_video_duration_us=mv_dur,
+                encoder=encoder, opts=opts,
+            ),
+            total_us=spec.duration_us,
+            progress_cb=progress_cb,
+        )
+    except ff.FFmpegError:
+        if encoder != "h264_nvenc":
+            raise
+        encoder = "libx264"  # GPU 경로 실패 → CPU 폴백
+        ff.run_with_progress(
+            build_command(
+                spec, voice_path, ass_path, out_path, fonts_dir,
+                gradient_path=gradient_path, main_video_duration_us=mv_dur,
+                encoder=encoder, opts=opts,
+            ),
+            total_us=spec.duration_us,
+            progress_cb=progress_cb,
+        )
+    return encoder
