@@ -85,5 +85,11 @@ def test_color_background_uses_lavfi():
 
 
 def test_escape_filter_value_windows_path():
-    assert escape_filter_value(r"C:\작업 폴더\subs.ass") == "'C:/작업 폴더/subs.ass'"
+    # 드라이브 콜론은 따옴표 안이라도 \: 로 이스케이프해야 한다 (Windows 실기 확인)
+    assert escape_filter_value(r"C:\작업 폴더\subs.ass") == r"'C\:/작업 폴더/subs.ass'"
+    assert (
+        escape_filter_value(r"C:\Users\김예준\Downloads\컷대장_v0.1\cutdaejang\resources\fonts")
+        == r"'C\:/Users/김예준/Downloads/컷대장_v0.1/cutdaejang/resources/fonts'"
+    )
     assert escape_filter_value("it's.ass") == r"'it'\''s.ass'"
+    assert escape_filter_value("render/subs.ass") == "'render/subs.ass'"

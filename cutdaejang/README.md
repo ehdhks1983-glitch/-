@@ -4,7 +4,7 @@
 
 기획 문서: [docs/개발기획안_v1.2.md](docs/개발기획안_v1.2.md) · PoC 결과: [docs/POC_REPORT.md](docs/POC_REPORT.md) · 캡컷 수동 검증: [docs/CAPCUT_CHECKLIST.md](docs/CAPCUT_CHECKLIST.md)
 
-**👉 처음이라면: [실행가이드.md](실행가이드.md) — Windows에서 더블클릭 2번으로 데모 확인 (`windows/1_설치.bat` → `windows/2_데모실행.bat`)**
+**👉 처음이라면: [실행가이드.md](실행가이드.md) — Windows에서 더블클릭 2번이면 브라우저 UI가 뜹니다 (`windows/1_설치.bat` → `windows/2_UI실행.bat`)**
 
 ## 현재 상태 (v0.1)
 
@@ -18,7 +18,7 @@
 | 배경 생성 (§5.3) | ⚙️ Gemini 이미지(키 필요) + 로컬 그라데이션 폴백 검증됨 |
 | 자동 모드 오케스트레이터 (§5.6 실패 정책) | ✅ 구현 |
 | 히스토리 (SQLite, spec 보존 → 재생성) | ✅ 구현 |
-| GUI (CustomTkinter, §6) | ⏳ Phase 2 — 현재는 CLI |
+| GUI (§6) | ✅ 로컬 웹 UI (`python -m cutdaejang ui`) — 새 작업·대본 검토·진행률·재생·히스토리. 데스크톱 창(CustomTkinter/pywebview) 전환은 Phase 2에서 결정 |
 | 배치 모드 / 일반(16:9) 모드 | ⏳ v1.5 |
 
 런타임 의존성은 **표준 라이브러리 + FFmpeg 바이너리**뿐이다 (PyInstaller 패키징 단순화).

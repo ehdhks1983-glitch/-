@@ -144,11 +144,14 @@ def run_with_progress(
 
 
 def escape_filter_value(value: str) -> str:
-    """필터 옵션 값(파일 경로 등)의 FFmpeg 필터그래프용 이스케이프.
+    """필터 옵션 값(파일 경로 등)의 FFmpeg 필터그래프용 2단계 이스케이프.
 
-    Windows 경로 대응: 역슬래시는 슬래시로 통일(FFmpeg가 수용), 전체를 홑따옴표로
-    감싸 콜론·쉼표를 보호하고, 값 안의 홑따옴표는 '\\'' 로 탈출한다.
-    예) C:\\a b\\s.ass → 'C:/a b/s.ass'
+    FFmpeg는 필터 인자를 두 번 파싱한다: ①그래프 파서가 홑따옴표를 벗겨내고
+    ②옵션 파서가 콜론에서 key=value를 쪼갠다. 따라서 따옴표만으로는 Windows
+    드라이브 콜론(C:)이 보호되지 않아 ``\\:`` 로 별도 이스케이프해야 한다
+    (실기 검증: 미이스케이프 시 "No option name near ..." 오류).
+    예) C:\\a b\\s.ass → 'C\\:/a b/s.ass'
     """
     v = value.replace("\\", "/")
-    return "'" + v.replace("'", r"'\''") + "'"
+    v = v.replace(":", "\\:")  # ② 옵션 파서용 — 따옴표가 벗겨진 뒤에도 콜론 보호
+    return "'" + v.replace("'", r"'\''") + "'"  # ① 그래프 파서용

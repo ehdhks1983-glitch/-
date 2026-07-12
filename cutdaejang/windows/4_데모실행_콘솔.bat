@@ -6,7 +6,7 @@ if exist "windows\ffmpeg\bin\ffmpeg.exe" (
     set "CUTDAEJANG_FFMPEG=%CD%\windows\ffmpeg\bin\ffmpeg.exe"
     set "CUTDAEJANG_FFPROBE=%CD%\windows\ffmpeg\bin\ffprobe.exe"
 )
-echo 데모 쇼츠 생성 중... API 키 불필요 — 목소리는 테스트용 톤입니다.
+echo 콘솔 데모: API 키 없이 쇼츠 1편을 생성합니다. 목소리는 테스트용 톤.
 echo.
 python -m cutdaejang demo --workdir windows\jobs
 if errorlevel 1 (

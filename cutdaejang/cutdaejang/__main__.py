@@ -172,6 +172,12 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return cmd_run(args)
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    from .gui.webui import serve  # noqa: PLC0415
+
+    return serve(workdir=args.workdir, port=args.port, open_browser=not args.no_open)
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     spec = TimelineSpec.load(args.spec).resolve_paths(str(Path(args.spec).parent))
     out = args.out or str(Path(args.spec).with_name("output.mp4"))
@@ -230,6 +236,12 @@ def main(argv=None) -> int:
     demo_p.add_argument("--main-video", default=None)
     demo_p.add_argument("--drafts-dir", default=None)
     demo_p.set_defaults(func=cmd_demo)
+
+    ui_p = sub.add_parser("ui", help="브라우저 UI 실행 (로컬 웹 화면)")
+    ui_p.add_argument("--workdir", default="jobs")
+    ui_p.add_argument("--port", type=int, default=7860)
+    ui_p.add_argument("--no-open", action="store_true", help="브라우저 자동 열기 끄기")
+    ui_p.set_defaults(func=cmd_ui)
 
     render_p = sub.add_parser("render", help="저장된 spec 재렌더 (히스토리 재생성)")
     render_p.add_argument("--spec", required=True, help="spec.json 경로")
