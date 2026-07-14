@@ -201,9 +201,12 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         from ..core.stt_engine import STTEngine, make_provider  # noqa: PLC0415
         from ..core.video_editor import SilenceOptions  # noqa: PLC0415
 
-        video = (params.get("video_path") or "").strip().strip('"')
-        if not video or not Path(video).is_file():
-            _set_job(job_id, status="failed", errors=[f"영상 파일을 찾을 수 없습니다: {video}"])
+        from ..core.video_editor import resolve_input_video  # noqa: PLC0415
+
+        try:  # 폴더를 넣으면 안의 최신 영상 자동 선택 + 친절한 오류
+            video = resolve_input_video(params.get("video_path") or "")
+        except ValueError as ve:
+            _set_job(job_id, status="failed", errors=[str(ve)])
             return
 
         stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
@@ -772,7 +775,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5.1)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">

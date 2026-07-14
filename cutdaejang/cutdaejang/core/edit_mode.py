@@ -153,6 +153,7 @@ def edit_video(
     work.mkdir(parents=True, exist_ok=True)
     style = style or presets.SUBTITLE_STYLE_PRESETS["shorts_basic"]
     out = str(out_path or work / "edited.mp4")
+    video_path = video_editor.resolve_input_video(video_path)  # 폴더→최신영상, 검증
 
     def report(stage: str, frac: float) -> None:
         if progress_cb:

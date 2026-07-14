@@ -21,6 +21,37 @@ from ..utils import ffmpeg as ff
 from ..utils.timefmt import US_PER_SECOND, seconds_to_us, us_to_seconds_str
 
 
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv", ".flv",
+              ".mpg", ".mpeg", ".ts", ".m2ts"}
+
+
+def resolve_input_video(path: str) -> str:
+    """입력 경로를 실제 영상 파일로 해석.
+
+    - 파일이면 그대로.
+    - 폴더면 안의 영상 파일을 찾아: 1개면 사용, 여러 개면 최신 파일 사용(안내는 호출측).
+    - 없으면 친절한 오류(ValueError).
+    """
+    p = Path((path or "").strip().strip('"'))
+    if p.is_file():
+        return str(p)
+    if p.is_dir():
+        vids = sorted(
+            (f for f in p.iterdir() if f.is_file() and f.suffix.lower() in VIDEO_EXTS),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+        if not vids:
+            raise ValueError(
+                f"'{p}'는 폴더인데 안에 영상 파일이 없습니다. 영상 파일(.mp4 등)을 직접 지정하세요."
+            )
+        return str(vids[0])  # 가장 최근 영상 (Bandicam 등 녹화 폴더 대응)
+    raise ValueError(
+        f"영상을 찾을 수 없습니다: {path}\n"
+        "파일 탐색기에서 영상 파일 우클릭 → '경로로 복사' 후 붙여넣으세요 (…\\영상이름.mp4)."
+    )
+
+
 @dataclass
 class SilenceOptions:
     noise_db: int = -30          # 이보다 조용하면 무음으로 간주
