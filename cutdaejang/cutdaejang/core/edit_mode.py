@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -139,6 +140,165 @@ def render_edited(
     return str(out_path)
 
 
+@dataclass
+class EditAnalysis:
+    """1단계(분석) 결과 — 자막 검토·수정 후 2단계(렌더)로 넘긴다 (Phase 1)."""
+    video_path: str
+    cut_video: str
+    subtitles: List[Subtitle]
+    original_us: int
+    cut_us: int
+    removed_ratio: float
+    segments: int
+    stt_calls: int = 0
+    hallucinations: int = 0
+    notes: List[str] = field(default_factory=list)
+
+
+def subtitles_to_dicts(subs: List[Subtitle]) -> List[dict]:
+    return [{"text": s.text, "start_us": s.start_us, "end_us": s.end_us} for s in subs]
+
+
+def dicts_to_subtitles(dicts: List[dict]) -> List[Subtitle]:
+    out = []
+    for d in dicts:
+        text = (d.get("text") or "").strip()
+        if text:  # 빈 자막은 제외
+            out.append(Subtitle(text=text, start_us=int(d["start_us"]), end_us=int(d["end_us"])))
+    return out
+
+
+def save_srt(subs: List[Subtitle], path) -> str:
+    """자막을 .srt로 저장 (다른 편집기에서도 열 수 있게)."""
+    def ts(us: int) -> str:
+        ms = us // 1000
+        h, ms = divmod(ms, 3_600_000)
+        m, ms = divmod(ms, 60_000)
+        s, ms = divmod(ms, 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    lines = []
+    for i, s in enumerate(subs, 1):
+        lines.append(str(i))
+        lines.append(f"{ts(s.start_us)} --> {ts(s.end_us)}")
+        lines.append(s.text)
+        lines.append("")
+    Path(path).write_text("\n".join(lines), encoding="utf-8")
+    return str(path)
+
+
+def analyze_video(
+    video_path: str,
+    workdir,
+    stt: Optional[STTEngine],
+    auto_subtitle: bool = True,
+    cut_silence: bool = True,
+    silence_opts: Optional[SilenceOptions] = None,
+    progress_cb: Optional[Callable[[str, float], None]] = None,
+    status_cb: Optional[Callable[[str], None]] = None,
+) -> EditAnalysis:
+    """1단계: 무음컷 + 자동자막 → 검토용 자막 목록 반환 (렌더는 아직 안 함)."""
+    work = Path(workdir)
+    work.mkdir(parents=True, exist_ok=True)
+    video_path = video_editor.resolve_input_video(video_path)
+    notes: List[str] = []
+
+    def report(stage: str, frac: float) -> None:
+        if progress_cb:
+            progress_cb(stage, frac)
+
+    def note(msg: str) -> None:
+        log.info("%s", msg)
+        notes.append(msg)
+        if status_cb:
+            status_cb(msg)
+
+    report("analyze", 0.0)
+    if cut_silence:
+        segments, original_us = video_editor.detect_speech_segments(video_path, silence_opts)
+    else:
+        original_us = ff.probe_duration_us(video_path)
+        segments = [(0, original_us)]
+    removed = video_editor.silence_ratio(segments, original_us)
+    note(
+        f"발화 구간 {len(segments)}개 — 무음 약 {removed * 100:.0f}% 컷" if cut_silence
+        else "무음컷 없이 원본 길이 유지"
+    )
+
+    report("cut", 0.0)
+    if not cut_silence:
+        cut_path = str(video_path)
+    else:
+        cut_path = video_editor.cut_and_concat(video_path, segments, str(work / "cut.mp4"))
+    cut_us = ff.probe_duration_us(cut_path)
+
+    cut_segments = video_editor.remap_to_cut_timeline(segments)
+    subtitles: List[Subtitle] = []
+    stt_calls = halluc = 0
+    if auto_subtitle and stt is not None:
+        report("stt", 0.0)
+        texts = transcribe_segments(
+            video_path, segments, stt, work,
+            on_progress=lambda i, n: report("stt", i / n),
+        )
+        subtitles = build_subtitles(cut_segments, texts)
+        stt_calls = stt.stats["calls"]
+        halluc = stt.stats.get("hallucinations", 0)
+        if not subtitles:
+            note("말소리가 감지되지 않아 자막이 없습니다"
+                 + (f" (음악/잡음 오인 {halluc}건 제거)" if halluc else ""))
+        elif halluc:
+            note(f"음악/잡음 오인 자막 {halluc}건 제거")
+
+    # 검토·재편집용 저장
+    (work / "subtitles.json").write_text(
+        json.dumps(subtitles_to_dicts(subtitles), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    if subtitles:
+        save_srt(subtitles, work / "subtitles.srt")
+
+    return EditAnalysis(
+        video_path=str(video_path), cut_video=cut_path, subtitles=subtitles,
+        original_us=original_us, cut_us=cut_us, removed_ratio=removed,
+        segments=len(segments), stt_calls=stt_calls, hallucinations=halluc, notes=notes,
+    )
+
+
+def render_from_analysis(
+    cut_video: str,
+    subtitles: List[Subtitle],
+    out_path: str,
+    style: Optional[Style] = None,
+    layout: str = "shorts",
+    hook: str = "",
+    opts: Optional[RenderOptions] = None,
+    progress_cb: Optional[Callable[[float], None]] = None,
+) -> EditResult:
+    """2단계: (수정된) 자막으로 최종 렌더."""
+    style = style or presets.SUBTITLE_STYLE_PRESETS["shorts_basic"]
+    result = EditResult(ok=False, out_path=out_path)
+    result.cut_us = ff.probe_duration_us(cut_video)
+    result.subtitles = [s.text for s in subtitles]
+    try:
+        # 저장된 .srt 갱신 (사용자 수정 반영)
+        if subtitles:
+            save_srt(subtitles, Path(out_path).parent / "subtitles.srt")
+        render_edited(
+            cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
+            progress_cb=progress_cb,
+        )
+        if not _fits_us(ff.probe_duration_us(out_path), result.cut_us):
+            result.errors.append("출력 길이가 컷 영상과 다릅니다")
+        if not ff.has_audio_stream(out_path):
+            result.errors.append("출력에 오디오가 없습니다")
+        result.ok = not result.errors
+    except Exception as e:
+        log.exception("편집 렌더 실패")
+        result.errors.append(str(e))
+    return result
+
+
 def edit_video(
     video_path: str,
     workdir,
@@ -154,84 +314,28 @@ def edit_video(
     progress_cb: Optional[Callable[[str, float], None]] = None,
     status_cb: Optional[Callable[[str], None]] = None,
 ) -> EditResult:
+    """분석+렌더 한 번에 (CLI·자동용). 검토 없이 자동 자막 그대로 렌더."""
     work = Path(workdir)
-    work.mkdir(parents=True, exist_ok=True)
-    style = style or presets.SUBTITLE_STYLE_PRESETS["shorts_basic"]
     out = str(out_path or work / "edited.mp4")
-    video_path = video_editor.resolve_input_video(video_path)  # 폴더→최신영상, 검증
-
-    def report(stage: str, frac: float) -> None:
-        if progress_cb:
-            progress_cb(stage, frac)
-
-    def note(msg: str) -> None:
-        log.info("%s", msg)
-        if status_cb:
-            status_cb(msg)
-
-    result = EditResult(ok=False, out_path=out)
     try:
-        # ① 무음 감지 → 발화 구간 (무음컷 끄기면 통째로 한 구간)
-        report("analyze", 0.0)
-        if cut_silence:
-            segments, original_us = video_editor.detect_speech_segments(video_path, silence_opts)
-        else:
-            original_us = ff.probe_duration_us(video_path)
-            segments = [(0, original_us)]
-        result.original_us = original_us
-        result.segments = len(segments)
-        result.removed_ratio = video_editor.silence_ratio(segments, original_us)
-        if cut_silence:
-            note(f"발화 구간 {len(segments)}개 감지 — 무음 약 {result.removed_ratio * 100:.0f}% 컷 예정")
-        else:
-            note("무음컷 없이 원본 길이 유지")
-
-        # ② 컷 영상 (무음컷 끄기 + 단일 구간이면 원본을 그대로 사용)
-        report("cut", 0.0)
-        if not cut_silence:
-            cut_path = video_path
-        else:
-            cut_path = video_editor.cut_and_concat(video_path, segments, str(work / "cut.mp4"))
-        result.cut_us = ff.probe_duration_us(cut_path)
-
-        # ③ 구간별 STT (타이밍은 컷 타임라인으로 remap). 자막 끄기면 생략.
-        cut_segments = video_editor.remap_to_cut_timeline(segments)
-        if auto_subtitle and stt is not None:
-            report("stt", 0.0)
-            texts = transcribe_segments(
-                video_path, segments, stt, work,
-                on_progress=lambda i, n: report("stt", i / n),
-            )
-            subtitles = build_subtitles(cut_segments, texts)
-            result.stt_calls = stt.stats["calls"]
-            halluc = stt.stats.get("hallucinations", 0)
-            if not subtitles:
-                note(
-                    "말소리가 감지되지 않아 자막 없이 만들었습니다"
-                    + (f" (음악/잡음을 말로 오인한 {halluc}건 제거)" if halluc else "")
-                )
-            elif halluc:
-                note(f"음악/잡음을 말로 오인한 자막 {halluc}건을 걸러냈습니다")
-        else:
-            subtitles = []
-            note("자막 없이 영상만 편집합니다")
-        result.subtitles = [s.text for s in subtitles]
-
-        # ④ 렌더 (자막 번인 + 상단 제목)
-        report("render", 0.0)
-        render_edited(
-            cut_path, subtitles, out, style, layout=layout, hook=hook, opts=opts,
-            progress_cb=lambda f: report("render", f),
+        analysis = analyze_video(
+            video_path, work, stt, auto_subtitle=auto_subtitle, cut_silence=cut_silence,
+            silence_opts=silence_opts, progress_cb=progress_cb, status_cb=status_cb,
         )
-
-        # 자가검증: 길이·오디오
-        if not _fits_us(ff.probe_duration_us(out), result.cut_us):
-            result.errors.append("출력 길이가 컷 영상과 다릅니다")
-        if not ff.has_audio_stream(out):
-            result.errors.append("출력에 오디오가 없습니다")
-        result.ok = not result.errors
-        note("편집 완료" if result.ok else "완료(경고 있음)")
     except Exception as e:
-        log.exception("편집 실패")
-        result.errors.append(str(e))
+        log.exception("편집 분석 실패")
+        r = EditResult(ok=False, out_path=out)
+        r.errors.append(str(e))
+        return r
+    if progress_cb:
+        progress_cb("render", 0.0)
+    result = render_from_analysis(
+        analysis.cut_video, analysis.subtitles, out, style=style, layout=layout,
+        hook=hook, opts=opts,
+        progress_cb=lambda f: progress_cb("render", f) if progress_cb else None,
+    )
+    result.original_us = analysis.original_us
+    result.removed_ratio = analysis.removed_ratio
+    result.segments = analysis.segments
+    result.stt_calls = analysis.stt_calls
     return result

@@ -1,5 +1,7 @@
 """편집 모드 E2E — 무음컷 + 자동자막 렌더 (stub STT)."""
 
+from pathlib import Path
+
 import pytest
 
 from cutdaejang.core import edit_mode
@@ -81,6 +83,48 @@ def test_build_subtitles_skips_empty():
     )
     assert [s.text for s in subs] == ["안녕하세요", "반갑습니다"]
     assert subs[1].start_us == 2_000_000  # 빈 구간 건너뜀
+
+
+# ─────────── Phase 1: 분석→수정→렌더 2단계 ───────────
+
+
+@requires_ffmpeg
+def test_analyze_then_render_two_phase(talk_video, tmp_path):
+    from cutdaejang.core.edit_mode import (
+        analyze_video, dicts_to_subtitles, render_from_analysis, subtitles_to_dicts,
+    )
+
+    analysis = analyze_video(talk_video, tmp_path / "w", _engine(tmp_path))
+    assert len(analysis.subtitles) == 3
+    assert Path(analysis.cut_video).exists()
+    # 자막 저장(json+srt) 확인
+    assert (tmp_path / "w" / "subtitles.json").exists()
+    assert (tmp_path / "w" / "subtitles.srt").exists()
+
+    # 사용자가 자막 수정 (dict로 오감) → 렌더
+    dicts = subtitles_to_dicts(analysis.subtitles)
+    dicts[0]["text"] = "고친 자막"
+    dicts[1]["text"] = ""  # 빈 자막은 제외돼야
+    subs = dicts_to_subtitles(dicts)
+    assert [s.text for s in subs] == ["고친 자막", subs[1].text]  # 2개(빈 것 제외)
+    assert len(subs) == 2
+
+    result = render_from_analysis(
+        analysis.cut_video, subs, str(tmp_path / "w" / "out.mp4"), layout="shorts",
+    )
+    assert result.ok, result.errors
+    # srt가 수정본으로 갱신됐는지
+    srt = (tmp_path / "w" / "subtitles.srt").read_text(encoding="utf-8")
+    assert "고친 자막" in srt
+
+
+def test_save_srt_format(tmp_path):
+    from cutdaejang.core.edit_mode import save_srt
+    from cutdaejang.spec import Subtitle
+
+    save_srt([Subtitle("첫 줄", 500_000, 2_100_000)], tmp_path / "s.srt")
+    text = (tmp_path / "s.srt").read_text(encoding="utf-8")
+    assert "1\n00:00:00,500 --> 00:00:02,100\n첫 줄" in text
 
 
 def test_make_provider_stub_default():

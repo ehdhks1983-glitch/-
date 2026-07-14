@@ -229,20 +229,25 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
         _set_job(job_id, status="failed", errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
+def _edit_summary(analysis) -> str:
+    return (
+        f"원본 {analysis.original_us/1e6:.1f}초 → {analysis.cut_us/1e6:.1f}초 "
+        f"(무음 {analysis.removed_ratio*100:.0f}% 컷, 자막 {len(analysis.subtitles)}줄, "
+        f"음성인식 {analysis.stt_calls}회)"
+    )
+
+
 def _run_edit(job_id: str, params: dict, workdir: str) -> None:
-    """내 영상 편집: 무음컷 + 자동자막 (기획안 v1.5)."""
+    """1단계: 무음컷 + 자동자막 분석 → 자막 검토 대기 (Phase 1). 자막 없으면 바로 렌더."""
     try:
         _apply_keys(params)
         settings = config.load_settings()
         edit_cfg = settings["edit"]
         from ..core import edit_mode  # noqa: PLC0415
-        from ..core.orchestrator import build_style  # noqa: PLC0415
         from ..core.stt_engine import STTEngine, make_provider  # noqa: PLC0415
-        from ..core.video_editor import SilenceOptions  # noqa: PLC0415
+        from ..core.video_editor import SilenceOptions, resolve_input_video  # noqa: PLC0415
 
-        from ..core.video_editor import resolve_input_video  # noqa: PLC0415
-
-        try:  # 폴더를 넣으면 안의 최신 영상 자동 선택 + 친절한 오류
+        try:  # 폴더를 넣으면 안의 최신 영상 자동 선택
             video = resolve_input_video(params.get("video_path") or "")
         except ValueError as ve:
             _set_job(job_id, status="failed", errors=[str(ve)])
@@ -258,44 +263,76 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 Path(workdir) / "cache" / "stt",
                 language=params.get("language", "ko"),
             )
-        _set_job(job_id, status="running", stage="analyze", frac=0.0,
-                 title=Path(video).stem)
-        result = edit_mode.edit_video(
-            video,
-            Path(workdir) / job_id,
-            stt,
-            style=build_style(settings),
-            layout=params.get("layout") or edit_cfg["layout"],
-            hook=(params.get("hook") or "").strip(),
-            auto_subtitle=auto_subtitle,
-            cut_silence=cut_silence,
+        _set_job(job_id, status="running", stage="analyze", frac=0.0, title=Path(video).stem)
+        analysis = edit_mode.analyze_video(
+            video, Path(workdir) / job_id, stt,
+            auto_subtitle=auto_subtitle, cut_silence=cut_silence,
             silence_opts=SilenceOptions(
-                noise_db=edit_cfg["noise_db"],
-                min_silence_s=edit_cfg["min_silence_s"],
+                noise_db=edit_cfg["noise_db"], min_silence_s=edit_cfg["min_silence_s"],
                 pad_s=edit_cfg["pad_s"],
             ),
-            out_path=str(Path(workdir) / job_id / "edited.mp4"),
             progress_cb=lambda stage, frac: _set_job(job_id, stage=stage, frac=frac),
             status_cb=lambda msg: _set_job(job_id, note=msg),
         )
+        # 분석 결과를 job에 저장 (2단계 렌더에서 사용)
+        _set_job(
+            job_id, cut_video=analysis.cut_video,
+            edit_params={"layout": params.get("layout") or edit_cfg["layout"],
+                         "hook": (params.get("hook") or "").strip()},
+            edit_summary=_edit_summary(analysis),
+        )
+        if auto_subtitle and analysis.subtitles:
+            # 자막 검토 화면으로
+            _set_job(
+                job_id, status="review_subtitle", stage="review", note="",
+                subtitles=edit_mode.subtitles_to_dicts(analysis.subtitles),
+                cut_seconds=round(analysis.cut_us / 1e6, 1),
+            )
+        else:
+            # 자막 없음(b-roll 등) → 바로 렌더
+            _do_edit_render(job_id, [], params.get("hook", ""),
+                            params.get("layout") or edit_cfg["layout"],
+                            analysis.cut_video, workdir)
+    except Exception as e:
+        import logging  # noqa: PLC0415
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error("편집 분석 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed",
+                 errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+
+
+def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
+                    cut_video: str, workdir: str) -> None:
+    """2단계: (수정된) 자막으로 최종 렌더."""
+    try:
+        from ..core import edit_mode  # noqa: PLC0415
+        from ..core.orchestrator import build_style  # noqa: PLC0415
+
+        settings = config.load_settings()
+        _set_job(job_id, status="running", stage="render", frac=0.0, note="")
+        subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
+        out = str(Path(workdir) / job_id / "edited.mp4")
+        result = edit_mode.render_from_analysis(
+            cut_video, subs, out, style=build_style(settings),
+            layout=layout, hook=hook,
+            progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
+        )
         _set_job(
             job_id,
-            status="ok" if result.ok else "partial" if Path(result.out_path).exists() else "failed",
+            status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
             stage="done", frac=1.0, note="",
             job_dir=str(Path(workdir) / job_id),
-            mp4=result.out_path if Path(result.out_path).exists() else None,
-            edit_summary=(
-                f"원본 {result.original_us/1e6:.1f}초 → {result.cut_us/1e6:.1f}초 "
-                f"(무음 {result.removed_ratio*100:.0f}% 컷, 자막 {len(result.subtitles)}줄, 음성인식 {result.stt_calls}회)"
-            ),
+            mp4=out if Path(out).exists() else None,
             errors=result.errors,
         )
     except Exception as e:
         import logging  # noqa: PLC0415
         import traceback  # noqa: PLC0415
 
-        logging.getLogger("cutdaejang").error("작업 실패 %s\n%s", job_id, traceback.format_exc())
-        _set_job(job_id, status="failed", errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+        logging.getLogger("cutdaejang").error("편집 렌더 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed",
+                 errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
 def _run_generate(job_id: str, params: dict, workdir: str) -> None:
@@ -367,6 +404,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(self._state())
         elif path.startswith("/video/"):
             self._serve_video(path.split("/", 2)[2])
+        elif path.startswith("/cutvideo/"):
+            self._serve_cutvideo(path.split("/", 2)[2])
         elif path.startswith("/preview/"):
             self._serve_preview(path.split("/", 2)[2])
         else:
@@ -435,6 +474,20 @@ class _Handler(BaseHTTPRequestHandler):
                 target=_run_edit, args=(job_id, params, workdir), daemon=True
             ).start()
             self._send_json({"job_id": job_id})
+        elif path == "/api/edit_render":
+            job = _get_job(params.get("job_id", ""))
+            if not job or job.get("status") != "review_subtitle":
+                self._send_json({"error": "자막 검토 중인 작업이 아닙니다"}, 400)
+                return
+            ep = job.get("edit_params") or {}
+            hook = params.get("hook", ep.get("hook", ""))
+            threading.Thread(
+                target=_do_edit_render,
+                args=(job["id"], params.get("subtitles") or [], hook,
+                      ep.get("layout", "shorts"), job.get("cut_video"), workdir),
+                daemon=True,
+            ).start()
+            self._send_json({"ok": True})
         elif path == "/api/pick_file":
             try:
                 picked = pick_video_file()
@@ -724,11 +777,23 @@ class _Handler(BaseHTTPRequestHandler):
             pass
         return None
 
+    def _serve_cutvideo(self, job_id: str) -> None:
+        """자막 검토 중 참고 재생용 컷 영상(자막 없는 상태)."""
+        job = _get_job(job_id)
+        path = job.get("cut_video") if job else None
+        if not path or not Path(path).is_file():
+            self._send_json({"error": "컷 영상 없음"}, 404)
+            return
+        self._serve_file(path)
+
     def _serve_video(self, job_id: str) -> None:
         path = self._video_path(job_id)
         if not path:
             self._send_json({"error": "영상 없음"}, 404)
             return
+        self._serve_file(path)
+
+    def _serve_file(self, path: str) -> None:
         size = os.path.getsize(path)
         start, end = 0, size - 1
         range_header = self.headers.get("Range")
@@ -863,7 +928,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.6)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.7)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -999,6 +1064,18 @@ _HTML = """<!doctype html>
         <span class="hint">예: 2026년→이천이십육년, AI→에이아이 — TTS 오독 방지</span>
       </div>
       <button onclick="confirmScript()">이 대본으로 계속</button>
+    </div>
+
+    <div id="subEditBox" class="hidden">
+      <div style="font-weight:700;margin-bottom:4px">✏️ 자막 검토·수정</div>
+      <div class="hint">틀린 자막을 고치세요. 아래 영상으로 실제 소리를 확인할 수 있어요. (자막 없이 완성하려면 전부 비우고 완성)</div>
+      <video id="cutPlayer" controls playsinline style="max-width:240px;margin-top:8px"></video>
+      <div id="subList" style="margin-top:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="ghost" onclick="addSubRow(event)">+ 자막 줄 추가</button>
+        <button class="ghost" onclick="pronounceSubs(event)">숫자·영어 → 한글</button>
+      </div>
+      <button onclick="renderEdited()">✅ 이 자막으로 완성</button>
     </div>
 
     <div id="doneBox" class="hidden">
@@ -1137,12 +1214,59 @@ async function startEdit(){
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
   currentJob = data.job_id;
+  window._subLoaded = false;
   $('editBtn').disabled = true;
   $('statusCard').classList.remove('hidden');
   $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  $('subEditBox').classList.add('hidden');
   $('rawErr').classList.add('hidden'); $('noteText').textContent='';
   poll();
   timer = setInterval(poll, 900);
+}
+
+// ── 자막 검토·수정 (Phase 1) ──
+function fmtTime(us){ const s=us/1e6; const m=Math.floor(s/60); return m+':'+(s%60).toFixed(1).padStart(4,'0'); }
+function renderSubRows(){
+  const box = $('subList'); box.innerHTML='';
+  (window._subs||[]).forEach((sub, i) => {
+    const row = document.createElement('div');
+    row.style.cssText='display:flex;gap:6px;align-items:flex-start;margin-bottom:6px';
+    row.innerHTML =
+      `<span class="hint" style="min-width:74px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
+      `<input type="text" style="flex:1" value="${(sub.text||'').replace(/"/g,'&quot;')}" oninput="window._subs[${i}].text=this.value">`+
+      `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆합치기</button>`+
+      `<button class="ghost" title="삭제" onclick="delSub(${i})">✕</button>`;
+    box.appendChild(row);
+  });
+}
+function seekCut(us){ const p=$('cutPlayer'); p.currentTime=us/1e6; p.play(); }
+function mergeSub(i){
+  if(i<=0) return;
+  const s=window._subs;
+  s[i-1].text=(s[i-1].text+' '+s[i].text).trim();
+  s[i-1].end_us=s[i].end_us;
+  s.splice(i,1); renderSubRows();
+}
+function delSub(i){ window._subs.splice(i,1); renderSubRows(); }
+function addSubRow(ev){
+  ev.preventDefault();
+  const s=window._subs, last=s.length?s[s.length-1].end_us:0;
+  s.push({text:'', start_us:last, end_us:last+1500000}); renderSubRows();
+}
+async function pronounceSubs(ev){
+  ev.preventDefault();
+  const res=await fetch('/api/pronounce',{method:'POST',body:JSON.stringify({lines:window._subs.map(s=>s.text)})});
+  const data=await res.json();
+  if(data.lines){ data.lines.forEach((t,i)=>{ if(window._subs[i]) window._subs[i].text=t; }); renderSubRows(); }
+}
+async function renderEdited(){
+  const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value})});
+  const data=await res.json();
+  if(data.error){ alert(data.error); return; }
+  $('subEditBox').classList.add('hidden');
+  if(!timer) timer=setInterval(poll,900);
+  poll();
 }
 
 async function generate(){
@@ -1328,6 +1452,15 @@ async function poll(){
         .map((t, i) => hls[i] ? `${t} | ${hls[i]}` : t).join('\\n');
     }
   }
+  if(job.status === 'review_subtitle' && !window._subLoaded){
+    clearInterval(timer); timer = null;
+    window._subLoaded = true;
+    window._subs = (job.subtitles || []).map(s => ({...s}));
+    $('subEditBox').classList.remove('hidden');
+    $('cutPlayer').src = '/cutvideo/' + job.id + '?t=' + Date.now();
+    renderSubRows();
+    $('noteText').textContent = job.edit_summary || '';
+  }
   const provKo = {gemini:'Gemini', openai:'OpenAI', windows:'Windows 내장 음성', stub:'테스트 톤'};
   if(job.status === 'ok' || job.status === 'partial'){
     clearInterval(timer); timer = null;
@@ -1385,12 +1518,14 @@ function playHist(id){
 
 function resetForm(){
   currentJob = null; if(timer){clearInterval(timer); timer=null;}
+  window._subLoaded = false; window._subs = [];
   $('statusCard').classList.add('hidden');
   $('reviewBox').classList.add('hidden');
+  $('subEditBox').classList.add('hidden');
   $('rvTitle').value = ''; $('rvSentences').value = '';
   $('noteText').textContent = ''; $('providerBadge').textContent = '';
   $('errBox').classList.add('hidden'); $('rawErr').classList.add('hidden');
-  $('goBtn').disabled = false;
+  $('goBtn').disabled = false; $('editBtn').disabled = false;
 }
 
 poll(); setInterval(()=>{ if(!currentJob) poll(); }, 5000);

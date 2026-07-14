@@ -208,6 +208,46 @@ def test_pick_file_unavailable_returns_error(server):
         webui.pick_video_file = orig
 
 
+def _make_talk_video(path):
+    from cutdaejang.utils import ffmpeg as ff
+
+    audio = str(path) + ".wav"
+    ff.run([
+        ff.ffmpeg_bin(), "-y", "-v", "error",
+        "-f", "lavfi", "-i", "sine=frequency=300:duration=2:sample_rate=44100",
+        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:d=1.5",
+        "-f", "lavfi", "-i", "sine=frequency=500:duration=2:sample_rate=44100",
+        "-filter_complex", "[0][1][2]concat=n=3:v=0:a=1[a]", "-map", "[a]", audio,
+    ])
+    ff.run([
+        ff.ffmpeg_bin(), "-y", "-v", "error",
+        "-f", "lavfi", "-i", "color=c=navy:s=720x1280:r=30:d=5.5",
+        "-i", audio, "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", str(path),
+    ])
+    return str(path)
+
+
+def test_edit_two_phase_review_and_render(server, tmp_path):
+    video = _make_talk_video(tmp_path / "talk.mp4")
+    # 1단계: 분석 → 자막 검토 대기
+    res = _post(server, "/api/edit", {
+        "video_path": video, "layout": "shorts",
+        "stt_provider": "stub", "auto_subtitle": True,
+    })
+    job = _wait_status(server, res["job_id"], {"review_subtitle", "failed"})
+    assert job["status"] == "review_subtitle", job.get("errors")
+    subs = job["subtitles"]
+    assert len(subs) >= 1
+
+    # 자막 수정 후 렌더
+    subs[0]["text"] = "웹 검토에서 고친 자막"
+    _post(server, "/api/edit_render", {"job_id": job["id"], "subtitles": subs, "hook": "훅"})
+    done = _wait_status(server, job["id"], {"ok", "partial", "failed"})
+    assert done["status"] == "ok", done.get("errors")
+    assert done["mp4"]
+
+
 def test_diagnostic_report(server):
     from pathlib import Path
 
