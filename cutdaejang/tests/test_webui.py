@@ -163,6 +163,51 @@ def test_regenerate_from_history(server):
     assert done["mp4"] and done["mp4"].endswith(".mp4")
 
 
+def test_pick_file_returns_selected_path(server):
+    from cutdaejang.gui import webui
+
+    orig = webui.pick_video_file
+    webui.pick_video_file = lambda timeout=600.0: "C:\\Users\\나\\Videos\\clip.mp4"
+    try:
+        data = _post(server, "/api/pick_file", {})
+        assert data["path"] == "C:\\Users\\나\\Videos\\clip.mp4"
+        assert data["cancelled"] is False
+    finally:
+        webui.pick_video_file = orig
+
+
+def test_pick_file_cancelled(server):
+    from cutdaejang.gui import webui
+
+    orig = webui.pick_video_file
+    webui.pick_video_file = lambda timeout=600.0: None  # 사용자가 취소
+    try:
+        data = _post(server, "/api/pick_file", {})
+        assert data["path"] == "" and data["cancelled"] is True
+    finally:
+        webui.pick_video_file = orig
+
+
+def test_pick_file_unavailable_returns_error(server):
+    from cutdaejang.gui import webui
+
+    orig = webui.pick_video_file
+
+    def _raise(timeout=600.0):
+        raise RuntimeError("파일 선택 창을 열 수 없습니다")
+
+    webui.pick_video_file = _raise
+    try:
+        req = urllib.request.Request(
+            server + "/api/pick_file", data=b"{}", method="POST"
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=10)
+        assert exc.value.code == 500
+    finally:
+        webui.pick_video_file = orig
+
+
 def test_diagnostic_report(server):
     from pathlib import Path
 

@@ -45,6 +45,40 @@ def _dt_stamp() -> str:
     return datetime.datetime.now().strftime("%H%M%S")
 
 
+# 네이티브 파일 선택 창 — 서버(사용자 PC)에서 tkinter 대화상자를 별도 프로세스로 띄워
+# 전체 경로를 돌려받는다. 서버 스레드와 GUI 스레드 충돌을 피하려 subprocess로 분리.
+_PICK_FILE_CODE = r"""
+import tkinter as tk
+from tkinter import filedialog
+r = tk.Tk(); r.withdraw(); r.attributes("-topmost", True)
+p = filedialog.askopenfilename(
+    title="편집할 영상 선택",
+    filetypes=[("영상 파일", "*.mp4 *.mov *.avi *.mkv *.webm *.m4v *.wmv *.flv"),
+               ("모든 파일", "*.*")],
+)
+r.destroy()
+import sys
+sys.stdout.write(p or "")
+"""
+
+
+def pick_video_file(timeout: float = 600.0) -> Optional[str]:
+    """네이티브 파일 선택 창을 띄우고 선택된 경로 반환. 취소=None, 사용불가=예외."""
+    import subprocess  # noqa: PLC0415
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _PICK_FILE_CODE],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "파일 선택 창을 열 수 없습니다. 경로를 직접 붙여넣어 주세요. "
+            f"({proc.stderr.strip()[-200:]})"
+        )
+    path = proc.stdout.strip()
+    return path or None
+
+
 def _stt_available() -> dict:
     """편집 모드에서 쓸 수 있는 음성인식 제공자."""
     try:
@@ -381,6 +415,12 @@ class _Handler(BaseHTTPRequestHandler):
                 target=_run_edit, args=(job_id, params, workdir), daemon=True
             ).start()
             self._send_json({"job_id": job_id})
+        elif path == "/api/pick_file":
+            try:
+                picked = pick_video_file()
+                self._send_json({"path": picked or "", "cancelled": picked is None})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
         elif path == "/api/preview":
             self._preview(params)
         elif path == "/api/pronounce":
@@ -775,7 +815,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5.1)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5.2)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -784,8 +824,12 @@ _HTML = """<!doctype html>
   </div>
 
   <div class="card hidden" id="editCard">
-    <label>영상 파일 경로 <span class="hint">(파일 탐색기에서 영상 우클릭 → "경로로 복사" 후 붙여넣기)</span></label>
-    <input type="text" id="editVideo" placeholder="예) C:\\Users\\이름\\Videos\\내영상.mp4">
+    <label>영상 파일</label>
+    <div style="display:flex; gap:8px">
+      <input type="text" id="editVideo" style="flex:1" placeholder="[📁 영상 선택] 을 누르거나 경로를 붙여넣기">
+      <button class="ghost" style="white-space:nowrap" onclick="pickFile(event)">📁 영상 선택</button>
+    </div>
+    <div class="hint">버튼을 누르면 파일 탐색기가 열립니다. (폴더 경로만 넣으면 그 안의 최신 영상을 씁니다)</div>
     <div class="row">
       <div>
         <label>출력 형태</label>
@@ -1001,9 +1045,22 @@ function updateSttHint(){
     : '내 OpenAI 키 사용.';
 }
 
+async function pickFile(ev){
+  ev.preventDefault();
+  const btn = ev.target;
+  btn.disabled = true; btn.textContent = '창 여는 중…';
+  try{
+    const data = await (await fetch('/api/pick_file', {method:'POST', body:'{}'})).json();
+    if(data.error){ alert(data.error); }
+    else if(data.path){ $('editVideo').value = data.path; }
+    // 취소면 그대로 둠
+  } catch(e){ alert('파일 선택 창을 열 수 없습니다: ' + e); }
+  finally { btn.disabled = false; btn.textContent = '📁 영상 선택'; }
+}
+
 async function startEdit(){
   const video = $('editVideo').value.trim();
-  if(!video){ alert('영상 파일 경로를 입력하세요'); return; }
+  if(!video){ alert('영상 파일을 선택하거나 경로를 입력하세요'); return; }
   const body = {
     video_path: video, layout: pick('editLayout'),
     stt_provider: $('sttSel').value, gemini_key: $('editGeminiKey').value, save_key: true,
