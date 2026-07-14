@@ -223,7 +223,7 @@ def test_zoompan_used_when_motion_on():
     spec.background.motion = "zoom_in"
     cmd = _cmd(spec)
     assert "zoompan=z='min(1+0.08*on/150,1+0.08)'" in cmd  # 5초*30fps=150프레임
-    assert "scale=2160:3840" in cmd
+    assert "scale=1620:2880" in cmd  # 1.5배 업스케일 (저사양 최적화)
     assert "-loop 1" not in cmd
 
 

@@ -24,7 +24,7 @@ def test_image_background_no_main_video():
     assert "scale=1080:1920:force_original_aspect_ratio=increase" in cmd
     assert "overlay" not in cmd  # 정보형 쇼츠: 배경+자막만
     assert "subtitles=filename='subs.ass':fontsdir='/fonts'" in cmd
-    assert "-c:v libx264 -crf 19 -preset medium" in cmd
+    assert "-c:v libx264 -crf 20 -preset fast" in cmd
     assert "-map [v] -map 1:a" in cmd
     assert "-movflags +faststart" in cmd
     assert "-t 5.000000 out.mp4" in cmd
