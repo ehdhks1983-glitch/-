@@ -86,3 +86,64 @@ def test_build_subtitles_skips_empty():
 def test_make_provider_stub_default():
     assert make_provider("stub").name == "stub"
     assert make_provider("whisper", {"whisper_model": "tiny"}).model_size == "tiny"
+
+
+# ─────────── STT 환각 방지 (사용자 리포트: 내레이션 없는데 자막 생성됨) ───────────
+
+
+def test_is_hallucination_detects_common_phrases():
+    from cutdaejang.core.stt_engine import is_hallucination
+
+    assert is_hallucination("시청해주셔서 감사합니다")
+    assert is_hallucination("시청해주셔서 감사합니다.")
+    assert is_hallucination("구독과 좋아요 부탁드립니다")
+    assert is_hallucination("")  # 빈 텍스트
+    assert is_hallucination("   ")
+    # 진짜 발화는 통과
+    assert not is_hallucination("오늘은 라멘 맛집에 왔습니다")
+    assert not is_hallucination("이 가게는 6900원입니다")
+
+
+def test_engine_filters_hallucination(tmp_path):
+    from cutdaejang.core.stt_engine import STTEngine
+
+    class HallucinateSTT:
+        name = "fake"
+
+        def transcribe(self, audio_path, language="ko"):
+            return "시청해주셔서 감사합니다"
+
+    e = STTEngine(HallucinateSTT(), tmp_path / "c")
+    # 오디오 파일 필요 (캐시 키 계산) — 더미
+    dummy = tmp_path / "a.wav"
+    dummy.write_bytes(b"RIFFxxxx")
+    assert e.transcribe(str(dummy)) == ""  # 환각 → 빈 자막
+    assert e.stats["hallucinations"] == 1
+
+
+@requires_ffmpeg
+def test_edit_no_subtitle_mode(talk_video, tmp_path):
+    # 자막 끄기 → STT 없이 컷+포맷만
+    result = edit_mode.edit_video(
+        talk_video, tmp_path / "w", None, layout="shorts", auto_subtitle=False,
+    )
+    assert result.ok, result.errors
+    assert result.subtitles == []
+    assert result.stt_calls == 0
+    from cutdaejang.utils import ffmpeg as ff
+
+    assert ff.probe_video_size(result.out_path) == (1080, 1920)
+
+
+@requires_ffmpeg
+def test_edit_no_cut_keeps_full_length(talk_video, tmp_path):
+    from cutdaejang.utils import ffmpeg as ff
+
+    orig = ff.probe_duration_us(talk_video)
+    result = edit_mode.edit_video(
+        talk_video, tmp_path / "w2", None, layout="keep",
+        auto_subtitle=False, cut_silence=False,
+    )
+    assert result.ok, result.errors
+    assert result.removed_ratio == 0.0
+    assert abs(result.cut_us - orig) < 200_000  # 원본 길이 유지
