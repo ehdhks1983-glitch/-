@@ -127,6 +127,29 @@ def test_save_srt_format(tmp_path):
     assert "1\n00:00:00,500 --> 00:00:02,100\n첫 줄" in text
 
 
+def test_suggest_hooks_stub():
+    from cutdaejang.core.script_generator import suggest_hooks_stub
+
+    hooks = suggest_hooks_stub("블로그 자동화", n=5)
+    assert len(hooks) == 5
+    assert all("블로그 자동화" in h for h in hooks)
+    assert all(len(h) <= 40 for h in hooks)
+
+
+def test_suggest_hooks_no_key_raises():
+    import os
+
+    from cutdaejang.core.script_generator import ScriptError, suggest_hooks
+
+    old = os.environ.pop("GEMINI_API_KEY", None)
+    try:
+        with pytest.raises(ScriptError):
+            suggest_hooks("주제", api_key="")
+    finally:
+        if old:
+            os.environ["GEMINI_API_KEY"] = old
+
+
 def test_make_provider_stub_default():
     assert make_provider("stub").name == "stub"
     assert make_provider("whisper", {"whisper_model": "tiny"}).model_size == "tiny"
