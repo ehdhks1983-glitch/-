@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+from collections import deque
 from typing import Callable, Optional
 
 from .timefmt import seconds_to_us
@@ -124,10 +125,30 @@ def run_with_progress(
     """``-progress pipe:1`` 파싱으로 진행률 콜백(0.0~1.0) 호출 (기획안 §5.5-3 GUI 진행바용).
 
     args는 ffmpeg 바이너리를 제외한 인자 목록.
+
+    ⚠ stderr를 반드시 별도 스레드로 동시에 비워야 한다. stdout만 읽으면서 stderr를
+    방치하면, ffmpeg가 경고(libass 폰트 로딩 등)로 OS 파이프 버퍼를 채웠을 때 write에서
+    블록되고 → stdout 진행률도 멈춰 → 렌더가 0%에서 영구 정지한다(Windows 버퍼가 작아
+    특히 취약). `-loglevel error`로 stderr 양도 최소화한다.
     """
-    cmd = [ffmpeg_bin(), "-hide_banner", "-nostats", "-progress", "pipe:1", *map(str, args)]
+    import threading  # noqa: PLC0415
+
+    cmd = [
+        ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-nostats",
+        "-progress", "pipe:1", *map(str, args),
+    ]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    assert proc.stdout is not None
+    assert proc.stdout is not None and proc.stderr is not None
+
+    stderr_tail: deque = deque(maxlen=64)  # 마지막 64줄만 유지 (오류 리포트용)
+
+    def drain_stderr() -> None:
+        for line in proc.stderr:  # type: ignore[union-attr]
+            stderr_tail.append(line)
+
+    err_thread = threading.Thread(target=drain_stderr, daemon=True)
+    err_thread.start()
+
     for raw in proc.stdout:
         line = raw.decode("utf-8", "replace").strip()
         if progress_cb and line.startswith("out_time_us=") and total_us > 0:
@@ -137,9 +158,11 @@ def run_with_progress(
                 pass
         elif progress_cb and line == "progress=end":
             progress_cb(1.0)
-    _, stderr = proc.communicate()
+
+    proc.wait()
+    err_thread.join(timeout=5)
     if proc.returncode != 0:
-        tail = stderr.decode("utf-8", "replace")[-2000:]
+        tail = b"".join(stderr_tail).decode("utf-8", "replace")[-2000:]
         raise FFmpegError(f"렌더 실패(rc={proc.returncode}):\n{tail}")
 
 
