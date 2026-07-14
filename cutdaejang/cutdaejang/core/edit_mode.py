@@ -140,9 +140,11 @@ def render_edited(
 def edit_video(
     video_path: str,
     workdir,
-    stt: STTEngine,
+    stt: Optional[STTEngine],
     style: Optional[Style] = None,
     layout: str = "shorts",
+    auto_subtitle: bool = True,
+    cut_silence: bool = True,
     silence_opts: Optional[SilenceOptions] = None,
     opts: Optional[RenderOptions] = None,
     out_path: Optional[str] = None,
@@ -166,31 +168,51 @@ def edit_video(
 
     result = EditResult(ok=False, out_path=out)
     try:
-        # ① 무음 감지 → 발화 구간
+        # ① 무음 감지 → 발화 구간 (무음컷 끄기면 통째로 한 구간)
         report("analyze", 0.0)
-        segments, original_us = video_editor.detect_speech_segments(video_path, silence_opts)
+        if cut_silence:
+            segments, original_us = video_editor.detect_speech_segments(video_path, silence_opts)
+        else:
+            original_us = ff.probe_duration_us(video_path)
+            segments = [(0, original_us)]
         result.original_us = original_us
         result.segments = len(segments)
         result.removed_ratio = video_editor.silence_ratio(segments, original_us)
-        note(
-            f"발화 구간 {len(segments)}개 감지 — 무음 약 {result.removed_ratio * 100:.0f}% 컷 예정"
-        )
+        if cut_silence:
+            note(f"발화 구간 {len(segments)}개 감지 — 무음 약 {result.removed_ratio * 100:.0f}% 컷 예정")
+        else:
+            note("무음컷 없이 원본 길이 유지")
 
-        # ② 컷 영상
+        # ② 컷 영상 (무음컷 끄기 + 단일 구간이면 원본을 그대로 사용)
         report("cut", 0.0)
-        cut_path = video_editor.cut_and_concat(video_path, segments, str(work / "cut.mp4"))
+        if not cut_silence:
+            cut_path = video_path
+        else:
+            cut_path = video_editor.cut_and_concat(video_path, segments, str(work / "cut.mp4"))
         result.cut_us = ff.probe_duration_us(cut_path)
 
-        # ③ 구간별 STT (타이밍은 컷 타임라인으로 remap)
-        report("stt", 0.0)
-        texts = transcribe_segments(
-            video_path, segments, stt, work,
-            on_progress=lambda i, n: report("stt", i / n),
-        )
+        # ③ 구간별 STT (타이밍은 컷 타임라인으로 remap). 자막 끄기면 생략.
         cut_segments = video_editor.remap_to_cut_timeline(segments)
-        subtitles = build_subtitles(cut_segments, texts)
+        if auto_subtitle and stt is not None:
+            report("stt", 0.0)
+            texts = transcribe_segments(
+                video_path, segments, stt, work,
+                on_progress=lambda i, n: report("stt", i / n),
+            )
+            subtitles = build_subtitles(cut_segments, texts)
+            result.stt_calls = stt.stats["calls"]
+            halluc = stt.stats.get("hallucinations", 0)
+            if not subtitles:
+                note(
+                    "말소리가 감지되지 않아 자막 없이 만들었습니다"
+                    + (f" (음악/잡음을 말로 오인한 {halluc}건 제거)" if halluc else "")
+                )
+            elif halluc:
+                note(f"음악/잡음을 말로 오인한 자막 {halluc}건을 걸러냈습니다")
+        else:
+            subtitles = []
+            note("자막 없이 영상만 편집합니다")
         result.subtitles = [s.text for s in subtitles]
-        result.stt_calls = stt.stats["calls"]
 
         # ④ 렌더 (자막 번인)
         report("render", 0.0)

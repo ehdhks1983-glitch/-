@@ -197,8 +197,10 @@ def cmd_edit(args: argparse.Namespace) -> int:
     result = edit_mode.edit_video(
         args.video,
         Path(args.workdir) / "edit",
-        stt,
+        None if args.no_subtitle else stt,
         layout=args.layout or edit_cfg["layout"],
+        auto_subtitle=not args.no_subtitle,
+        cut_silence=not args.no_cut,
         silence_opts=SilenceOptions(
             noise_db=edit_cfg["noise_db"],
             min_silence_s=edit_cfg["min_silence_s"],
@@ -290,6 +292,8 @@ def main(argv=None) -> int:
     edit_p.add_argument("--out", help="출력 mp4 경로")
     edit_p.add_argument("--stt", choices=("whisper", "gemini", "openai", "stub"), default=None)
     edit_p.add_argument("--layout", choices=("shorts", "keep"), default=None)
+    edit_p.add_argument("--no-subtitle", action="store_true", help="자동 자막 끄기 (내레이션 없는 영상)")
+    edit_p.add_argument("--no-cut", action="store_true", help="무음컷 끄기 (원본 길이 유지)")
     edit_p.add_argument("--language", default="ko")
     edit_p.set_defaults(func=cmd_edit)
 

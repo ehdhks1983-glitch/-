@@ -17,6 +17,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -63,8 +64,14 @@ class FasterWhisperSTT:
 
     def transcribe(self, audio_path: str, language: str = "ko") -> str:
         model = self._get_model()
-        segments, _ = model.transcribe(str(audio_path), language=language, vad_filter=False)
-        return " ".join(s.text.strip() for s in segments).strip()
+        # VAD로 비발화(음악·잡음) 구간을 먼저 걸러 환각 방지. no_speech_prob 높은 세그먼트도 제외.
+        segments, _ = model.transcribe(
+            str(audio_path), language=language,
+            vad_filter=True, vad_parameters={"min_silence_duration_ms": 400},
+            no_speech_threshold=0.6, condition_on_previous_text=False,
+        )
+        kept = [s.text.strip() for s in segments if getattr(s, "no_speech_prob", 0.0) < 0.6]
+        return " ".join(t for t in kept if t).strip()
 
 
 class GeminiSTT:
@@ -180,6 +187,37 @@ PROVIDERS = {
     "stub": StubSTT,
 }
 
+# 음성인식이 무음·음악 구간에서 흔히 지어내는 환각 문구(유튜브 자막 학습 흔적).
+# 정규화(공백·문장부호 제거) 후 이 목록과 일치하면 자막에서 제외한다.
+_HALLUCINATION_PHRASES = {
+    "시청해주셔서감사합니다",
+    "시청해주셔서감사합니다다음영상에서만나요",
+    "지금까지시청해주셔서감사합니다",
+    "구독과좋아요부탁드립니다",
+    "구독과좋아요알림설정까지부탁드립니다",
+    "좋아요와구독부탁드립니다",
+    "다음영상에서만나요",
+    "다음시간에만나요",
+    "한글자막",
+    "엠비씨뉴스",
+    "감사합니다시청해주셔서감사합니다",
+}
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"[\s.,!?~…·\-\"'()\[\]]+", "", text)
+
+
+def is_hallucination(text: str) -> bool:
+    """무음/음악에서 지어낸 환각 문구인지 (정규화 후 denylist 대조)."""
+    norm = _normalize(text)
+    if not norm:
+        return True
+    if norm in _HALLUCINATION_PHRASES:
+        return True
+    # "시청해주셔서 감사합니다"류가 포함되며 짧으면 환각으로 간주
+    return "시청해주셔서감사" in norm and len(norm) <= 20
+
 
 class STTEngine:
     def __init__(self, provider: STTProvider, cache_dir, language: str = "ko"):
@@ -187,7 +225,7 @@ class STTEngine:
         self.language = language
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.stats = {"calls": 0, "cache_hits": 0}
+        self.stats = {"calls": 0, "cache_hits": 0, "hallucinations": 0}
 
     def _cache_path(self, audio_path: str) -> Path:
         h = hashlib.sha256()
@@ -204,6 +242,10 @@ class STTEngine:
             return cache.read_text(encoding="utf-8")
         self.stats["calls"] += 1
         text = self.provider.transcribe(str(audio_path), language=self.language)
+        # 환각 문구(무음/음악에서 지어낸 말)는 빈 자막으로 처리 → 없는 자막 방지
+        if is_hallucination(text):
+            self.stats["hallucinations"] = self.stats.get("hallucinations", 0) + 1
+            text = ""
         cache.write_text(text, encoding="utf-8")
         return text
 

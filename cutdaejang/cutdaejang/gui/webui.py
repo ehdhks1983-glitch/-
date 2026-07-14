@@ -247,12 +247,16 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             _set_job(job_id, status="failed", errors=[str(ve)])
             return
 
-        stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
-        stt = STTEngine(
-            make_provider(stt_name, edit_cfg),
-            Path(workdir) / "cache" / "stt",
-            language=params.get("language", "ko"),
-        )
+        auto_subtitle = params.get("auto_subtitle", True)
+        cut_silence = params.get("cut_silence", True)
+        stt = None
+        if auto_subtitle:
+            stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
+            stt = STTEngine(
+                make_provider(stt_name, edit_cfg),
+                Path(workdir) / "cache" / "stt",
+                language=params.get("language", "ko"),
+            )
         _set_job(job_id, status="running", stage="analyze", frac=0.0,
                  title=Path(video).stem)
         result = edit_mode.edit_video(
@@ -261,6 +265,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             stt,
             style=build_style(settings),
             layout=params.get("layout") or edit_cfg["layout"],
+            auto_subtitle=auto_subtitle,
+            cut_silence=cut_silence,
             silence_opts=SilenceOptions(
                 noise_db=edit_cfg["noise_db"],
                 min_silence_s=edit_cfg["min_silence_s"],
@@ -855,7 +861,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5.3)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5.4)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -883,6 +889,14 @@ _HTML = """<!doctype html>
         <select id="sttSel"></select>
         <div class="hint" id="sttHint"></div>
       </div>
+    </div>
+    <div class="chk" style="margin-top:10px">
+      <input type="checkbox" id="autoSubChk" checked onchange="toggleAutoSub()">
+      <span>자동 자막 만들기 (말한 내용을 자막으로) — <b>내레이션 없는 영상은 체크 해제</b></span>
+    </div>
+    <div class="chk">
+      <input type="checkbox" id="cutSilenceChk" checked>
+      <span>무음(빈) 구간 자동 컷 — 끄면 원본 길이 그대로</span>
     </div>
     <div id="editKeyRow" class="hidden">
       <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
@@ -1098,11 +1112,19 @@ async function pickFile(ev){
   finally { btn.disabled = false; btn.textContent = '📁 영상 선택'; }
 }
 
+function toggleAutoSub(){
+  // 자막 끄면 음성인식 관련 항목 숨김
+  const on = $('autoSubChk').checked;
+  $('sttSel').closest('div').style.opacity = on ? '1' : '0.4';
+  $('sttSel').disabled = !on;
+}
+
 async function startEdit(){
   const video = $('editVideo').value.trim();
   if(!video){ alert('영상 파일을 선택하거나 경로를 입력하세요'); return; }
   const body = {
     video_path: video, layout: pick('editLayout'),
+    auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
     stt_provider: $('sttSel').value, gemini_key: $('editGeminiKey').value, save_key: true,
   };
   const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
