@@ -192,17 +192,25 @@ def cmd_edit(args: argparse.Namespace) -> int:
 
     settings = config.load_settings()
     edit_cfg = settings["edit"]
-    provider = make_provider(args.stt or edit_cfg["stt_provider"], edit_cfg)
-    stt = STTEngine(provider, Path(args.workdir) / "cache" / "stt", language=args.language)
+    # 대본 파일이 있으면 STT 대신 그 대본을 씀 (오인식·비용 0)
+    script_lines = None
+    if getattr(args, "script_file", None):
+        script_lines = Path(args.script_file).read_text(encoding="utf-8").splitlines()
+    use_stt = not args.no_subtitle and not script_lines
+    stt = None
+    if use_stt:
+        provider = make_provider(args.stt or edit_cfg["stt_provider"], edit_cfg)
+        stt = STTEngine(provider, Path(args.workdir) / "cache" / "stt", language=args.language)
 
     result = edit_mode.edit_video(
         args.video,
         Path(args.workdir) / "edit",
-        None if args.no_subtitle else stt,
+        stt,
         layout=args.layout or edit_cfg["layout"],
         hook=(args.hook or "").replace("\\n", "\n"),
         auto_subtitle=not args.no_subtitle,
         cut_silence=not args.no_cut,
+        script_lines=script_lines,
         silence_opts=SilenceOptions(
             noise_db=edit_cfg["noise_db"],
             min_silence_s=edit_cfg["min_silence_s"],
@@ -296,6 +304,8 @@ def main(argv=None) -> int:
     edit_p.add_argument("--stt", choices=("whisper", "gemini", "openai", "stub"), default=None)
     edit_p.add_argument("--layout", choices=("shorts", "keep"), default=None)
     edit_p.add_argument("--hook", default="", help="상단 제목(훅). 줄바꿈은 \\n")
+    edit_p.add_argument("--script-file", default=None,
+                        help="미리 가진 대본 txt (한 줄=자막 한 줄). 있으면 STT 대신 사용")
     edit_p.add_argument("--no-subtitle", action="store_true", help="자동 자막 끄기 (내레이션 없는 영상)")
     edit_p.add_argument("--no-cut", action="store_true", help="무음컷 끄기 (원본 길이 유지)")
     edit_p.add_argument("--language", default="ko")

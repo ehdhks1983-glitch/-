@@ -85,6 +85,61 @@ def test_build_subtitles_skips_empty():
     assert subs[1].start_us == 2_000_000  # 빈 구간 건너뜀
 
 
+# ─────────── 대본 직접 입력 (STT 대신) — 사용자 요청 ───────────
+
+
+def test_align_script_1to1_when_counts_match():
+    from cutdaejang.core.edit_mode import align_script_to_segments
+
+    segs = [(0, 1_000_000), (1_000_000, 2_500_000), (2_500_000, 4_000_000)]
+    subs = align_script_to_segments(["첫 줄", "둘째 줄", "셋째 줄"], segs)
+    # 줄 수 == 구간 수 → 실제 발화 타이밍에 1:1로 얹힌다
+    assert [s.text for s in subs] == ["첫 줄", "둘째 줄", "셋째 줄"]
+    assert [(s.start_us, s.end_us) for s in subs] == segs
+
+
+def test_align_script_proportional_when_mismatch():
+    from cutdaejang.core.edit_mode import align_script_to_segments
+
+    # 무내레이션 b-roll: 구간 1개(전체) 인데 대본 3줄 → 길이 비례 분배
+    subs = align_script_to_segments(
+        ["짧다", "이건 조금 더 긴 문장이다", "끝"], [(0, 6_000_000)]
+    )
+    assert [s.text for s in subs] == ["짧다", "이건 조금 더 긴 문장이다", "끝"]
+    assert subs[0].start_us == 0
+    assert subs[-1].end_us == 6_000_000            # 마지막은 끝에 딱 맞춤
+    for a, b in zip(subs, subs[1:]):               # 겹치지 않고 이어짐
+        assert a.end_us == b.start_us
+        assert b.start_us > a.start_us
+    # 긴 문장이 더 오래 표시된다 (글자 수 비례)
+    assert (subs[1].end_us - subs[1].start_us) > (subs[0].end_us - subs[0].start_us)
+
+
+def test_align_script_ignores_blank_lines():
+    from cutdaejang.core.edit_mode import align_script_to_segments
+
+    subs = align_script_to_segments(["A", "", "  ", "B"], [(0, 1_000_000), (1_000_000, 2_000_000)])
+    assert [s.text for s in subs] == ["A", "B"]
+
+
+@requires_ffmpeg
+def test_analyze_with_script_skips_stt(talk_video, tmp_path):
+    from cutdaejang.core.edit_mode import analyze_video
+
+    eng = _engine(tmp_path)  # STT 엔진을 넘겨도 대본이 있으면 호출되면 안 됨
+    analysis = analyze_video(
+        talk_video, tmp_path / "w", eng,
+        script_lines=["직접 넣은 첫 자막", "직접 넣은 둘째 자막", "직접 넣은 셋째 자막"],
+    )
+    assert [s.text for s in analysis.subtitles] == [
+        "직접 넣은 첫 자막", "직접 넣은 둘째 자막", "직접 넣은 셋째 자막",
+    ]
+    assert analysis.stt_calls == 0
+    assert eng.stats["calls"] == 0          # 음성 인식은 실제로 건너뜀
+    # 자막이 컷 길이 안에 배치됐는지
+    assert analysis.subtitles[-1].end_us <= analysis.cut_us + 200_000
+
+
 # ─────────── Phase 1: 분석→수정→렌더 2단계 ───────────
 
 

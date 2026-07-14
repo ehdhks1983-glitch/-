@@ -77,6 +77,35 @@ def build_subtitles(cut_segments: List[tuple], texts: List[str]) -> List[Subtitl
     return subs
 
 
+def align_script_to_segments(
+    lines: List[str], cut_segments: List[tuple], total_us: Optional[int] = None
+) -> List[Subtitle]:
+    """사용자가 미리 가진 대본 줄들을 컷 타임라인에 배치 (STT 대신).
+
+    - 줄 수 == 발화 구간 수: 1:1 매핑 → 사용자 텍스트가 실제 발화 타이밍에 정확히 얹힘
+    - 그 외(무내레이션 b-roll·구간 수 불일치): 컷 전체 길이를 글자 수에 비례해 분배
+    STT 오인식·비용 없이 정확한 자막을 얻는 경로. 이후 검토 화면에서 타이밍 미세조정 가능.
+    """
+    clean = [ln.strip() for ln in lines if ln.strip()]
+    if not clean:
+        return []
+    if cut_segments and len(clean) == len(cut_segments):
+        return [Subtitle(text=t, start_us=int(s), end_us=int(e))
+                for t, (s, e) in zip(clean, cut_segments)]
+    start = int(cut_segments[0][0]) if cut_segments else 0
+    end = int(cut_segments[-1][1]) if cut_segments else int(total_us or 0)
+    span = max(end - start, len(clean) * 900_000)  # 최소 줄당 0.9초 확보
+    weights = [max(len(t), 1) for t in clean]
+    total_w = sum(weights)
+    subs, cursor = [], start
+    for i, (t, w) in enumerate(zip(clean, weights)):
+        dur = int(span * w / total_w)
+        e = end if i == len(clean) - 1 else cursor + dur
+        subs.append(Subtitle(text=t, start_us=cursor, end_us=max(e, cursor + 300_000)))
+        cursor += dur
+    return subs
+
+
 def render_edited(
     cut_video: str,
     subtitles: List[Subtitle],
@@ -194,10 +223,15 @@ def analyze_video(
     auto_subtitle: bool = True,
     cut_silence: bool = True,
     silence_opts: Optional[SilenceOptions] = None,
+    script_lines: Optional[List[str]] = None,
     progress_cb: Optional[Callable[[str, float], None]] = None,
     status_cb: Optional[Callable[[str], None]] = None,
 ) -> EditAnalysis:
-    """1단계: 무음컷 + 자동자막 → 검토용 자막 목록 반환 (렌더는 아직 안 함)."""
+    """1단계: 무음컷 + 자동자막 → 검토용 자막 목록 반환 (렌더는 아직 안 함).
+
+    script_lines가 있으면 STT 대신 사용자 대본을 컷 타임라인에 배치한다
+    (오인식·비용 없음). 없으면 기존대로 STT로 자동 자막을 만든다.
+    """
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
     video_path = video_editor.resolve_input_video(video_path)
@@ -235,7 +269,12 @@ def analyze_video(
     cut_segments = video_editor.remap_to_cut_timeline(segments)
     subtitles: List[Subtitle] = []
     stt_calls = halluc = 0
-    if auto_subtitle and stt is not None:
+    clean_script = [ln.strip() for ln in (script_lines or []) if ln.strip()]
+    if clean_script:
+        # 사용자 대본 우선 — STT 건너뛰고 대본을 컷 타임라인에 배치
+        subtitles = align_script_to_segments(clean_script, cut_segments, total_us=cut_us)
+        note(f"입력한 대본 {len(subtitles)}줄을 영상 타이밍에 배치했습니다 (음성 인식 생략)")
+    elif auto_subtitle and stt is not None:
         report("stt", 0.0)
         texts = transcribe_segments(
             video_path, segments, stt, work,
@@ -309,6 +348,7 @@ def edit_video(
     auto_subtitle: bool = True,
     cut_silence: bool = True,
     silence_opts: Optional[SilenceOptions] = None,
+    script_lines: Optional[List[str]] = None,
     opts: Optional[RenderOptions] = None,
     out_path: Optional[str] = None,
     progress_cb: Optional[Callable[[str, float], None]] = None,
@@ -320,6 +360,7 @@ def edit_video(
     try:
         analysis = analyze_video(
             video_path, work, stt, auto_subtitle=auto_subtitle, cut_silence=cut_silence,
+            script_lines=script_lines,
             silence_opts=silence_opts, progress_cb=progress_cb, status_cb=status_cb,
         )
     except Exception as e:

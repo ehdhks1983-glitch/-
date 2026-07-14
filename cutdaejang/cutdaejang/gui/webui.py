@@ -255,8 +255,10 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
 
         auto_subtitle = params.get("auto_subtitle", True)
         cut_silence = params.get("cut_silence", True)
+        script_lines = (params.get("script") or "").splitlines()
+        has_script = any(ln.strip() for ln in script_lines)
         stt = None
-        if auto_subtitle:
+        if auto_subtitle and not has_script:  # 대본 있으면 STT 생략 (오인식·비용 없음)
             stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
             stt = STTEngine(
                 make_provider(stt_name, edit_cfg),
@@ -267,6 +269,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         analysis = edit_mode.analyze_video(
             video, Path(workdir) / job_id, stt,
             auto_subtitle=auto_subtitle, cut_silence=cut_silence,
+            script_lines=script_lines if has_script else None,
             silence_opts=SilenceOptions(
                 noise_db=edit_cfg["noise_db"], min_silence_s=edit_cfg["min_silence_s"],
                 pad_s=edit_cfg["pad_s"],
@@ -281,8 +284,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "hook": (params.get("hook") or "").strip()},
             edit_summary=_edit_summary(analysis),
         )
-        if auto_subtitle and analysis.subtitles:
-            # 자막 검토 화면으로
+        if analysis.subtitles:  # STT 또는 입력 대본으로 자막이 있으면 검토 화면으로
             _set_job(
                 job_id, status="review_subtitle", stage="review", note="",
                 subtitles=edit_mode.subtitles_to_dicts(analysis.subtitles),
@@ -941,13 +943,23 @@ _HTML = """<!doctype html>
   .hookcands button:hover { background:#183c72; }
   .subrow-active { background:#243052; box-shadow:0 0 0 1px #4266d5 inset; }
   .subrow-active input { border-color:#4266d5; }
+  /* 자막 검토: 영상 플레이어를 위에 고정(sticky) — 스크롤해도 항상 보임 */
+  .playbar { position:sticky; top:0; z-index:6; background:#171a23; padding:8px 0 10px;
+             border-bottom:1px solid #262b3a; margin-bottom:8px; }
+  .playbar video { max-width:200px; margin:0; }
+  .playrow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .playrow button { margin:0; }
+  .pbtn { width:auto; padding:8px 14px; font-size:14px; }
+  .playrow select { width:auto; padding:6px 8px; }
+  .subrowbtns button { padding:6px 9px; font-size:12px; }
+  .subList-scroll { max-height:46vh; overflow-y:auto; padding-right:4px; }
   .hidden { display:none !important; }
   code { background:#0f1117; padding:2px 6px; border-radius:4px; font-size:12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.8.1)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.9.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -982,6 +994,12 @@ _HTML = """<!doctype html>
         <select id="sttSel"></select>
         <div class="hint" id="sttHint"></div>
       </div>
+    </div>
+    <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
+      <label style="margin-top:0">📝 대본 직접 입력 <span class="hint">(선택 — 이미 대본이 있을 때)</span></label>
+      <textarea id="editScript" oninput="onScriptInput()" style="min-height:64px"
+        placeholder="대본이 있으면 여기 붙여넣기 (한 줄 = 자막 한 줄)&#10;예)&#10;오늘은 라멘 맛집을 소개합니다&#10;가격은 육천구백원이에요&#10;&#10;비우면 영상 소리에서 자동으로 자막을 인식합니다"></textarea>
+      <div class="hint" id="scriptHint">붙여넣으면 <b>음성 인식을 건너뛰고</b> 이 대본을 영상 타이밍에 맞춰 자막으로 넣어요 (오인식·비용 없음). 내레이션 없는 영상에도 쓸 수 있어요.</div>
     </div>
     <div class="chk" style="margin-top:10px">
       <input type="checkbox" id="autoSubChk" checked onchange="toggleAutoSub()">
@@ -1094,12 +1112,32 @@ _HTML = """<!doctype html>
 
     <div id="subEditBox" class="hidden">
       <div style="font-weight:700;margin-bottom:4px">✏️ 자막 검토·수정</div>
-      <div class="hint">틀린 자막을 고치세요. 아래 영상으로 실제 소리를 확인할 수 있어요. (자막 없이 완성하려면 전부 비우고 완성)</div>
-      <video id="cutPlayer" controls playsinline style="max-width:240px;margin-top:8px"></video>
-      <div id="subList" style="margin-top:10px"></div>
+      <div class="hint">틀린 자막을 고치세요. <b>스페이스바</b>=재생/정지, 각 줄 <b>▶</b>=그 지점부터 듣기, <b>✂</b>=줄 나누기. (자막 없이 완성하려면 전부 비우고 완성)</div>
+      <div class="playbar">
+        <video id="cutPlayer" controls playsinline></video>
+        <div class="playrow">
+          <button class="ghost pbtn" id="playToggle" onclick="togglePlay(event)">▶ 재생</button>
+          <span class="hint" id="playClock" style="min-width:64px">0:00</span>
+          <span class="hint">배속</span>
+          <select id="playRate" onchange="setPlayRate()">
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+          </select>
+          <span class="hint">← 스페이스바로 정지</span>
+        </div>
+      </div>
+      <div id="subList" class="subList-scroll" style="margin-top:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         <button class="ghost" onclick="addSubRow(event)">+ 자막 줄 추가</button>
         <button class="ghost" onclick="pronounceSubs(event)">숫자·영어 → 한글</button>
+        <button class="ghost" onclick="toggleBulk(event)">📋 대본 일괄 붙여넣기</button>
+      </div>
+      <div id="bulkBox" class="hidden" style="margin-top:8px">
+        <textarea id="bulkText" style="min-height:90px" placeholder="대본을 한 줄에 한 자막씩 붙여넣고 아래 버튼을 누르면, 위 자막들의 텍스트가 순서대로 교체됩니다 (타이밍은 유지). 줄이 더 많으면 뒤에 추가돼요."></textarea>
+        <button class="ghost" onclick="applyBulk(event)">이 대본으로 자막 텍스트 교체</button>
       </div>
       <button onclick="renderEdited()">✅ 이 자막으로 완성</button>
     </div>
@@ -1227,6 +1265,15 @@ function toggleAutoSub(){
   $('sttSel').closest('div').style.opacity = on ? '1' : '0.4';
   $('sttSel').disabled = !on;
 }
+function onScriptInput(){
+  // 대본을 붙여넣으면 음성 인식은 생략됨을 표시
+  const has = ($('editScript').value || '').trim().length > 0;
+  $('sttSel').closest('div').style.opacity = has ? '0.4' : ($('autoSubChk').checked ? '1' : '0.4');
+  $('sttSel').disabled = has || !$('autoSubChk').checked;
+  $('scriptHint').innerHTML = has
+    ? '✅ <b>이 대본을 사용</b>합니다 — 음성 인식은 건너뜁니다. (다음 화면에서 타이밍·줄을 다듬을 수 있어요)'
+    : '붙여넣으면 <b>음성 인식을 건너뛰고</b> 이 대본을 영상 타이밍에 맞춰 자막으로 넣어요 (오인식·비용 없음). 내레이션 없는 영상에도 쓸 수 있어요.';
+}
 
 async function startEdit(){
   const video = $('editVideo').value.trim();
@@ -1234,6 +1281,7 @@ async function startEdit(){
   const body = {
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
+    script: $('editScript').value,
     stt_provider: $('sttSel').value, gemini_key: $('editGeminiKey').value, save_key: true,
   };
   const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
@@ -1278,29 +1326,58 @@ function renderSubRows(){
   const box = $('subList'); box.innerHTML='';
   (window._subs||[]).forEach((sub, i) => {
     const row = document.createElement('div');
-    row.className='subrow'; row.id='subrow'+i;
-    row.style.cssText='display:flex;gap:6px;align-items:flex-start;margin-bottom:6px;padding:3px;border-radius:8px';
+    row.className='subrow subrowbtns'; row.id='subrow'+i;
+    row.style.cssText='display:flex;gap:5px;align-items:flex-start;margin-bottom:6px;padding:3px;border-radius:8px';
     row.innerHTML =
-      `<span class="hint" style="min-width:74px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
+      `<button class="ghost" title="이 줄부터 재생" onclick="seekCut(${sub.start_us})">▶</button>`+
+      `<span class="hint" style="min-width:50px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
       `<input type="text" style="flex:1" value="${(sub.text||'').replace(/"/g,'&quot;')}" oninput="window._subs[${i}].text=this.value">`+
-      `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆합치기</button>`+
+      `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆</button>`+
+      `<button class="ghost" title="이 줄을 둘로 나누기" onclick="splitSub(${i})">✂</button>`+
       `<button class="ghost" title="삭제" onclick="delSub(${i})">✕</button>`;
     box.appendChild(row);
   });
 }
 function seekCut(us){ const p=$('cutPlayer'); p.currentTime=us/1e6; p.play(); }
-// 재생 위치 따라 현재 말하는 자막 줄 하이라이트 (+ 화면 밖이면 스크롤)
+function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return m+':'+String(s).padStart(2,'0'); }
+function togglePlay(ev){ if(ev&&ev.preventDefault)ev.preventDefault(); const p=$('cutPlayer'); if(!p||!p.src) return; if(p.paused) p.play(); else p.pause(); }
+function setPlayRate(){ const p=$('cutPlayer'); if(p) p.playbackRate=parseFloat($('playRate').value||'1'); }
+function splitSub(i){
+  const s=window._subs, cur=s[i]; if(!cur) return;
+  const mid=Math.round((cur.start_us+cur.end_us)/2);
+  const words=(cur.text||'').trim().split(/\\s+/).filter(Boolean);
+  const half=Math.ceil(words.length/2);
+  s.splice(i,1,
+    {text:words.slice(0,half).join(' '), start_us:cur.start_us, end_us:mid},
+    {text:words.slice(half).join(' '), start_us:mid, end_us:cur.end_us});
+  renderSubRows();
+}
+function toggleBulk(ev){ if(ev)ev.preventDefault(); $('bulkBox').classList.toggle('hidden'); }
+function applyBulk(ev){
+  if(ev)ev.preventDefault();
+  const lines=($('bulkText').value||'').split('\\n').map(l=>l.trim()).filter(Boolean);
+  if(!lines.length){ alert('붙여넣을 대본을 입력하세요'); return; }
+  const s=window._subs;
+  lines.forEach((t,i)=>{
+    if(s[i]) s[i].text=t;
+    else { const last=s.length?s[s.length-1].end_us:0; s.push({text:t, start_us:last, end_us:last+1800000}); }
+  });
+  renderSubRows(); $('bulkBox').classList.add('hidden');
+}
+// 재생 위치 따라 현재 말하는 자막 줄 하이라이트 (+ 화면 밖이면 스크롤) + 시계 갱신
 function hlActiveSub(){
   const p=$('cutPlayer'); if(!p) return;
+  const clk=$('playClock'); if(clk) clk.textContent=fmtClock(p.currentTime);
   const us=p.currentTime*1e6;
   let active=-1;
   (window._subs||[]).forEach((s,i)=>{ if(us>=s.start_us && us<s.end_us) active=i; });
+  const box=$('subList');
   document.querySelectorAll('.subrow').forEach((r,i)=>{
     const on=(i===active);
     r.classList.toggle('subrow-active', on);
-    if(on){
-      const rect=r.getBoundingClientRect();
-      if(rect.top<80 || rect.bottom>window.innerHeight-40) r.scrollIntoView({block:'center', behavior:'smooth'});
+    if(on && box){  // 목록 스크롤 영역 안에서만 가운데로 (전체 페이지는 안 움직임)
+      const rb=box.getBoundingClientRect(), rr=r.getBoundingClientRect();
+      if(rr.top<rb.top+6 || rr.bottom>rb.bottom-6) r.scrollIntoView({block:'center', behavior:'smooth'});
     }
   });
 }
@@ -1521,8 +1598,13 @@ async function poll(){
     window._subLoaded = true;
     window._subs = (job.subtitles || []).map(s => ({...s}));
     $('subEditBox').classList.remove('hidden');
-    $('cutPlayer').src = '/cutvideo/' + job.id + '?t=' + Date.now();
-    $('cutPlayer').ontimeupdate = hlActiveSub;  // 재생 위치 따라 자막 하이라이트
+    $('bulkBox').classList.add('hidden'); $('bulkText').value='';
+    const cp=$('cutPlayer');
+    cp.src = '/cutvideo/' + job.id + '?t=' + Date.now();
+    cp.ontimeupdate = hlActiveSub;  // 재생 위치 따라 자막 하이라이트 + 시계
+    cp.onplay = () => { $('playToggle').textContent='⏸ 정지'; };
+    cp.onpause = () => { $('playToggle').textContent='▶ 재생'; };
+    cp.playbackRate = parseFloat(($('playRate')||{}).value || '1');
     renderSubRows();
     $('noteText').textContent = job.edit_summary || '';
   }
@@ -1592,6 +1674,16 @@ function resetForm(){
   $('errBox').classList.add('hidden'); $('rawErr').classList.add('hidden');
   $('goBtn').disabled = false; $('editBtn').disabled = false;
 }
+
+// 스페이스바 = 재생/정지 (자막 검토 화면에서만, 입력창 포커스 땐 제외 — 브루식 단축키)
+document.addEventListener('keydown', (e) => {
+  if(e.code !== 'Space' && e.key !== ' ') return;
+  const t = e.target, tag = (t.tagName || '').toLowerCase();
+  if(tag==='input' || tag==='textarea' || tag==='select' || t.isContentEditable) return;
+  const box = $('subEditBox');
+  if(!box || box.classList.contains('hidden')) return;
+  e.preventDefault(); togglePlay();
+});
 
 poll(); setInterval(()=>{ if(!currentJob) poll(); }, 5000);
 </script>
