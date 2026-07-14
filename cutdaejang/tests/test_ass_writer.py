@@ -33,6 +33,29 @@ def test_write_ass_structure(tmp_path):
     assert "Dialogue: 0,0:00:02.25,0:00:04.40,Default,,0,0,0,,둘째 문장" in text
 
 
+def test_write_ass_hook_title(tmp_path):
+    spec = make_valid_spec()
+    spec.hook = "AI가 대신 써준다?\n블로그 자동화 꿀팁!"
+    out = tmp_path / "subs.ass"
+    write_ass(spec, out)
+    text = out.read_text(encoding="utf-8")
+    # Title 스타일 정의 존재 + 상단(Alignment 8)
+    title_style = next(l for l in text.splitlines() if l.startswith("Style: Title,"))
+    assert title_style.split(",")[18] == "8"
+    # 영상 전체 구간 고정 표시 + 줄바꿈 \N
+    title_ev = next(l for l in text.splitlines() if "Title,," in l)
+    assert "0:00:00.00,0:00:05.00" in title_ev
+    assert r"블로그 자동화 꿀팁!" in title_ev and r"\N" in title_ev
+
+
+def test_write_ass_no_hook_no_title_event(tmp_path):
+    spec = make_valid_spec()  # hook 없음
+    out = tmp_path / "subs.ass"
+    write_ass(spec, out)
+    text = out.read_text(encoding="utf-8")
+    assert "Title,," not in text  # 훅 없으면 타이틀 이벤트 없음 (스타일 정의는 있어도 무방)
+
+
 def test_write_ass_margin_override(tmp_path):
     spec = make_valid_spec()
     spec.style.margin_v = 500

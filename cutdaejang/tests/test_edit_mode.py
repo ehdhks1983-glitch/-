@@ -136,6 +136,18 @@ def test_edit_no_subtitle_mode(talk_video, tmp_path):
 
 
 @requires_ffmpeg
+def test_edit_with_hook_renders(talk_video, tmp_path):
+    result = edit_mode.edit_video(
+        talk_video, tmp_path / "w", None, layout="shorts",
+        hook="테스트 제목\n둘째 줄", auto_subtitle=False,
+    )
+    assert result.ok, result.errors
+    # 훅 .ass에 Title 이벤트가 들어갔는지
+    ass = (tmp_path / "w" / "subs.ass").read_text(encoding="utf-8")
+    assert "Title,," in ass and "테스트 제목" in ass
+
+
+@requires_ffmpeg
 def test_edit_no_cut_keeps_full_length(talk_video, tmp_path):
     from cutdaejang.utils import ffmpeg as ff
 
