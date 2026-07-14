@@ -38,6 +38,7 @@ def build_spec(
     main_video: Optional[MainVideo] = None,
     bgm=None,
     highlights: Optional[List[str]] = None,
+    hook: str = "",
     mode: str = "shorts",
     opts: Optional[TimelineOptions] = None,
 ) -> TimelineSpec:
@@ -69,6 +70,7 @@ def build_spec(
         mode=mode,
         canvas=canvas,
         duration_us=duration_us,
+        hook=hook,
         background=background,
         main_video=main_video,
         bgm=bgm,

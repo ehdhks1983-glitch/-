@@ -151,6 +151,7 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
         voice=params.get("voice", ""),
         tts_style=params.get("tts_style", ""),
         bgm=params.get("bgm", ""),
+        hook=(params.get("hook") or "").strip(),
         target_sec=int(params.get("target_sec") or 60),
         drafts_dir=(params.get("drafts_dir") or "").strip() or None,
         render=RenderOptions(use_gpu=params.get("gpu", "auto")),
@@ -265,6 +266,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             stt,
             style=build_style(settings),
             layout=params.get("layout") or edit_cfg["layout"],
+            hook=(params.get("hook") or "").strip(),
             auto_subtitle=auto_subtitle,
             cut_silence=cut_silence,
             silence_opts=SilenceOptions(
@@ -861,7 +863,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5.4)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.6)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -876,6 +878,8 @@ _HTML = """<!doctype html>
       <button class="ghost" style="white-space:nowrap" onclick="pickFile(event)">📁 영상 선택</button>
     </div>
     <div class="hint">버튼을 누르면 파일 탐색기가 열립니다. (폴더 경로만 넣으면 그 안의 최신 영상을 씁니다)</div>
+    <label>상단 제목(훅) <span class="hint">— 화면 위에 크게 계속 표시. 줄바꿈은 Enter. 비우면 없음</span></label>
+    <textarea id="editHook" style="min-height:56px" placeholder="예) AI가 대신 써준다?&#10;블로그 자동화 꿀팁!"></textarea>
     <div class="row">
       <div>
         <label>출력 형태</label>
@@ -909,6 +913,8 @@ _HTML = """<!doctype html>
   <div class="card" id="formCard">
     <label>쇼츠 주제</label>
     <input type="text" id="topic" placeholder="예) 하루 10분 정리 습관" value="하루 10분 정리 습관">
+    <label>상단 제목(훅) <span class="hint">— 비우면 대본 제목이 자동으로 위에 크게 표시됩니다</span></label>
+    <textarea id="genHook" style="min-height:52px" placeholder="비워두면 AI가 만든 제목을 사용 / 직접 쓰려면 여기에 (줄바꿈 Enter)"></textarea>
 
     <div class="row">
       <div>
@@ -1123,7 +1129,7 @@ async function startEdit(){
   const video = $('editVideo').value.trim();
   if(!video){ alert('영상 파일을 선택하거나 경로를 입력하세요'); return; }
   const body = {
-    video_path: video, layout: pick('editLayout'),
+    video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
     stt_provider: $('sttSel').value, gemini_key: $('editGeminiKey').value, save_key: true,
   };
@@ -1147,7 +1153,7 @@ async function generate(){
     tts_provider: prov,
     voice: prov === 'gemini' ? $('voiceSel').value : '',
     tts_style: prov === 'gemini' ? $('styleSel').value : '',
-    bgm: $('bgmSel').value,
+    bgm: $('bgmSel').value, hook: $('genHook').value,
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
     draft: $('draftChk').checked, drafts_dir: $('draftsDir').value,

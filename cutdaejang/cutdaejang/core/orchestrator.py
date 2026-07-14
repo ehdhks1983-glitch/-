@@ -40,6 +40,7 @@ class JobOptions:
     tone: str = "정보형"
     target_sec: int = 60
     bgm: str = ""                        # ""(없음) | "random" | 파일명/경로
+    hook: str = ""                       # 상단 제목(훅). 비면 대본 제목 사용
     user_background: Optional[str] = None
     main_video_path: Optional[str] = None
     drafts_dir: Optional[str] = None
@@ -201,6 +202,7 @@ def run_job(
             ),
             bgm=resolve_bgm(opts.bgm, settings),
             highlights=script.highlights,
+            hook=opts.hook or script.title,  # 훅 미지정 시 대본 제목을 상단 제목으로
             opts=timeline_calculator.TimelineOptions(
                 gap_us=settings["audio"]["gap_ms"] * 1000
             ),

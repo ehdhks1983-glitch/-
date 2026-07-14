@@ -98,6 +98,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         tts_style=args.tts_style,
         target_sec=args.target_sec,
         bgm=args.bgm,
+        hook=(getattr(args, "hook", "") or "").replace("\\n", "\n"),
         user_background=args.background,
         main_video_path=args.main_video,
         drafts_dir=args.drafts_dir,
@@ -199,6 +200,7 @@ def cmd_edit(args: argparse.Namespace) -> int:
         Path(args.workdir) / "edit",
         None if args.no_subtitle else stt,
         layout=args.layout or edit_cfg["layout"],
+        hook=(args.hook or "").replace("\\n", "\n"),
         auto_subtitle=not args.no_subtitle,
         cut_silence=not args.no_cut,
         silence_opts=SilenceOptions(
@@ -268,6 +270,7 @@ def main(argv=None) -> int:
     run_p.add_argument("--tts-style", choices=tuple(STYLE_INSTRUCTIONS), default="",
                        help="보이스 스타일 프리셋 (기본: settings.json)")
     run_p.add_argument("--bgm", default="", help="BGM: 파일명(resources/bgm) 또는 'random'")
+    run_p.add_argument("--hook", default="", help="상단 제목(훅). 비우면 대본 제목 사용. 줄바꿈 \\n")
     run_p.add_argument("--target-sec", type=int, default=60)
     run_p.add_argument("--background", help="사용자 배경 이미지 경로")
     run_p.add_argument("--main-video", help="메인 영상 파일 경로")
@@ -292,6 +295,7 @@ def main(argv=None) -> int:
     edit_p.add_argument("--out", help="출력 mp4 경로")
     edit_p.add_argument("--stt", choices=("whisper", "gemini", "openai", "stub"), default=None)
     edit_p.add_argument("--layout", choices=("shorts", "keep"), default=None)
+    edit_p.add_argument("--hook", default="", help="상단 제목(훅). 줄바꿈은 \\n")
     edit_p.add_argument("--no-subtitle", action="store_true", help="자동 자막 끄기 (내레이션 없는 영상)")
     edit_p.add_argument("--no-cut", action="store_true", help="무음컷 끄기 (원본 길이 유지)")
     edit_p.add_argument("--language", default="ko")

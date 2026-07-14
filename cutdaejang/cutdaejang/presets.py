@@ -62,6 +62,21 @@ def main_video_target_width(canvas_w: int, layout: str, scale: float) -> int:
     return w - (w % 2)
 
 
+# 상단 제목(훅) 스타일 — 참고 영상처럼 크게·볼드·상단 고정 (기획안 완성도 향상)
+TITLE_SIZE_RATIO = 0.058      # 캔버스 높이 대비 글자 크기 (1920→약 111px)
+TITLE_MARGIN_RATIO = 0.055    # 상단 여백
+TITLE_OUTLINE = 5
+TITLE_SHADOW = 1
+
+
+def title_size(canvas_h: int) -> int:
+    return round(canvas_h * TITLE_SIZE_RATIO)
+
+
+def title_margin_v(canvas_h: int) -> int:
+    return round(canvas_h * TITLE_MARGIN_RATIO)
+
+
 def main_video_y_expr(layout: str, canvas_h: int) -> str:
     """overlay 필터의 y 좌표 식. top은 화면 위 8% 지점, center/full은 세로 중앙."""
     if layout == "top":

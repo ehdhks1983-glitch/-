@@ -82,6 +82,7 @@ def render_edited(
     out_path: str,
     style: Style,
     layout: str = "shorts",            # "shorts"(세로 1080x1920) | "keep"(원본 비율)
+    hook: str = "",                    # 상단 제목(훅)
     fonts_dir: str = DEFAULT_FONTS_DIR,
     opts: Optional[RenderOptions] = None,
     progress_cb: Optional[Callable[[float], None]] = None,
@@ -96,10 +97,11 @@ def render_edited(
     else:  # keep: 원본 해상도(짝수 보정)
         canvas = Canvas(w=src_w - (src_w % 2), h=src_h - (src_h % 2), fps=30)
 
-    # 자막 .ass — ass_writer는 spec.canvas/style/subtitles만 사용
+    # 자막 .ass — ass_writer는 spec.canvas/style/subtitles/hook만 사용
     ass_spec = TimelineSpec(
         canvas=canvas,
         duration_us=dur_us,
+        hook=hook,
         background=Background(type="color", color="#000000"),
         subtitles=subtitles,
         style=style,
@@ -143,6 +145,7 @@ def edit_video(
     stt: Optional[STTEngine],
     style: Optional[Style] = None,
     layout: str = "shorts",
+    hook: str = "",
     auto_subtitle: bool = True,
     cut_silence: bool = True,
     silence_opts: Optional[SilenceOptions] = None,
@@ -214,10 +217,10 @@ def edit_video(
             note("자막 없이 영상만 편집합니다")
         result.subtitles = [s.text for s in subtitles]
 
-        # ④ 렌더 (자막 번인)
+        # ④ 렌더 (자막 번인 + 상단 제목)
         report("render", 0.0)
         render_edited(
-            cut_path, subtitles, out, style, layout=layout, opts=opts,
+            cut_path, subtitles, out, style, layout=layout, hook=hook, opts=opts,
             progress_cb=lambda f: report("render", f),
         )
 

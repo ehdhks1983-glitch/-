@@ -89,6 +89,7 @@ class TimelineSpec:
     mode: str = "shorts"
     canvas: Canvas = field(default_factory=Canvas)
     duration_us: int = 0
+    hook: str = ""  # 상단에 계속 표시되는 큰 제목(훅). 줄바꿈은 \n
     background: Background = field(default_factory=Background)
     main_video: Optional[MainVideo] = None
     bgm: Optional[Bgm] = None
@@ -122,6 +123,7 @@ class TimelineSpec:
             mode=d.get("mode", "shorts"),
             canvas=pick(Canvas, d.get("canvas")),
             duration_us=d.get("duration_us", 0),
+            hook=d.get("hook", ""),
             background=pick(Background, d.get("background")),
             main_video=pick(MainVideo, d["main_video"]) if d.get("main_video") else None,
             bgm=pick(Bgm, d["bgm"]) if d.get("bgm") else None,

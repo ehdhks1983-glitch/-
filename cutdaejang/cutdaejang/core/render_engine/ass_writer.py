@@ -24,6 +24,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font},{size},{primary},&H000000FF,{outline_color},&H80000000,0,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},60,60,{margin_v},1
+Style: Title,{font},{title_size},&H00FFFFFF,&H000000FF,&H00101010,&H90000000,0,0,0,0,100,100,0,0,1,{title_outline},{title_shadow},8,50,50,{title_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -81,7 +82,7 @@ def dialogue_text(sub, style) -> str:
 
 
 def write_ass(spec: TimelineSpec, out_path) -> str:
-    """spec.subtitles → .ass 파일 생성. 생성된 경로를 반환."""
+    """spec.subtitles(+spec.hook) → .ass 파일 생성. 생성된 경로를 반환."""
     style = spec.style
     header = _HEADER.format(
         w=spec.canvas.w,
@@ -98,8 +99,22 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             if style.margin_v is not None
             else presets.subtitle_margin_v(style.position, spec.canvas.h)
         ),
+        title_size=presets.title_size(spec.canvas.h),
+        title_outline=presets.TITLE_OUTLINE,
+        title_shadow=presets.TITLE_SHADOW,
+        title_margin_v=presets.title_margin_v(spec.canvas.h),
     )
-    lines = [
+    lines = []
+    # 상단 제목(훅) — 영상 내내 고정 표시
+    if spec.hook.strip():
+        lines.append(
+            "Dialogue: 0,{start},{end},Title,,0,0,0,,{text}".format(
+                start=us_to_ass(0),
+                end=us_to_ass(spec.duration_us),
+                text=escape_ass_text(spec.hook.strip()),
+            )
+        )
+    lines += [
         "Dialogue: 0,{start},{end},Default,,0,0,0,,{text}".format(
             start=us_to_ass(s.start_us), end=us_to_ass(s.end_us), text=dialogue_text(s, style)
         )
