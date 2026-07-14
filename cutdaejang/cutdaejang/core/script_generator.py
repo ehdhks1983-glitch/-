@@ -220,6 +220,60 @@ def suggest_highlights(subs: list, target_sec: int = 30,
     return {"keep": sorted(set(keep)), "reason": str(obj.get("reason", ""))}
 
 
+REFINE_PROMPT = """\
+역할: 유튜브 자막 교정 편집자
+아래는 음성 인식(STT)으로 받아쓴 자막이라, 발음·잡음 때문에 잘못 적힌 부분이 있을 수 있어.
+각 줄을 자연스럽고 말이 되는 한국어로 고쳐줘.{ctx}
+규칙:
+- 줄 수와 순서는 절대 그대로 (입력 {n}줄 → 출력 정확히 {n}줄, 1:1 대응)
+- 명백한 오인식만 문맥에 맞게 자연스럽게 교정. 없는 내용을 지어내지 마.
+- 구어체 유지, 자막용이라 한 줄은 짧고 간결하게
+- 도무지 못 고치겠는 줄은 원문 그대로 둬
+입력 자막:
+{lines}
+출력(JSON만): {{"lines":["교정된 1줄","교정된 2줄", ...]}}
+"""
+
+
+def refine_subtitles(texts: list, context: str = "",
+                     model: str = "gemini-2.5-flash", api_key=None) -> list:
+    """STT 자막을 문맥 기반으로 자연스럽게 교정 (발음 오인식 자동 수정). 키 없으면 ScriptError.
+
+    줄 수·순서는 보존한다. 응답이 어긋나면 해당 줄은 원문을 유지.
+    """
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 AI 대본 다듬기를 쓸 수 없습니다")
+    src = [str(t or "") for t in texts]
+    numbered = "\n".join(f"{i + 1}) {t}" for i, t in enumerate(src))
+    ctx = f'\n영상 주제/맥락: "{context.strip()}" (교정에 참고)' if context.strip() else ""
+    prompt = REFINE_PROMPT.format(n=len(src), lines=numbered, ctx=ctx)
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as e:
+        raise ScriptError(f"대본 다듬기 응답 형식 예상 밖: {json.dumps(data)[:200]}") from e
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    obj = json.loads(cleaned)
+    lines = obj.get("lines") or []
+    # 줄 수가 어긋나면 있는 만큼만 교체, 나머지는 원문 유지
+    out = []
+    for i, orig in enumerate(src):
+        cand = str(lines[i]).strip() if i < len(lines) else ""
+        out.append(cand if cand else orig)
+    return out
+
+
 def suggest_highlights_heuristic(subs: list, target_sec: int = 30) -> dict:
     """키 없이 쓰는 대역 — 글자수(정보량)가 가장 촘촘한 연속 구간을 target초만큼 고른다."""
     n = len(subs)

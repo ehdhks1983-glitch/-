@@ -60,6 +60,28 @@ def _inline_color(hex_rgb: str) -> str:
     return f"&H{rgb[4:6]}{rgb[2:4]}{rgb[0:2]}&".upper()
 
 
+def hook_dialogue_text(hook: str, style) -> str:
+    """상단 제목(훅) 본문 — ``제목 | 강조단어``면 그 단어를 강조색으로 팝 (썸네일 임팩트).
+
+    Title 스타일 기본색은 흰색이므로 강조 뒤 흰색으로 복원한다.
+    """
+    text, hl = hook, ""
+    if "|" in hook:
+        head, _, tail = hook.rpartition("|")
+        if head.strip() and tail.strip():
+            text, hl = head.strip(), tail.strip()
+    if hl and hl in text:
+        pre, _, post = text.partition(hl)
+        return (
+            escape_ass_text(pre)
+            + "{\\1c" + _inline_color(style.highlight_color) + "}"
+            + escape_ass_text(hl)
+            + "{\\1c&HFFFFFF&}"
+            + escape_ass_text(post)
+        )
+    return escape_ass_text(text)
+
+
 def dialogue_text(sub, style) -> str:
     """자막 본문 조립 — 페이드 태그 + 강조 단어 인라인 컬러 (지시서 PATCH 5).
 
@@ -111,7 +133,7 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             "Dialogue: 0,{start},{end},Title,,0,0,0,,{text}".format(
                 start=us_to_ass(0),
                 end=us_to_ass(spec.duration_us),
-                text=escape_ass_text(spec.hook.strip()),
+                text=hook_dialogue_text(spec.hook.strip(), style),
             )
         )
     lines += [

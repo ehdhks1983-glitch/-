@@ -106,6 +106,17 @@ def align_script_to_segments(
     return subs
 
 
+def _atempo_chain(speed: float) -> str:
+    """atempo는 0.5~2.0만 지원 → 범위 밖이면 여러 개로 나눠 곱한다."""
+    parts, s = [], speed
+    while s > 2.0:
+        parts.append("atempo=2.0"); s /= 2.0
+    while s < 0.5:
+        parts.append("atempo=0.5"); s /= 0.5
+    parts.append(f"atempo={s:.6f}")
+    return ",".join(parts)
+
+
 def render_edited(
     cut_video: str,
     subtitles: List[Subtitle],
@@ -115,10 +126,15 @@ def render_edited(
     hook: str = "",                    # 상단 제목(훅)
     fonts_dir: str = DEFAULT_FONTS_DIR,
     opts: Optional[RenderOptions] = None,
+    speed: float = 1.0,                # 저장(렌더) 속도 배수 (1.25/1.5/2배 등)
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> str:
-    """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다."""
+    """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다.
+
+    speed>1이면 자막을 구운 뒤 영상·오디오를 통째로 배속 → 자막이 그대로 싱크 유지.
+    """
     opts = opts or RenderOptions()
+    speed = max(0.25, min(4.0, float(speed or 1.0)))
     src_w, src_h = ff.probe_video_size(cut_video)
     dur_us = ff.probe_duration_us(cut_video)
 
@@ -151,21 +167,30 @@ def render_edited(
             f"crop={canvas.w}:{canvas.h},boxblur=24:2,eq=brightness=-0.1[bgb];"
             f"[fg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=decrease[fgs];"
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2[comp];"
-            f"[comp]{subs_arg}[v]"
+            f"[comp]{subs_arg}[vc]"
         )
     else:
-        vf = f"[0:v]scale={canvas.w}:{canvas.h},{subs_arg}[v]"
+        vf = f"[0:v]scale={canvas.w}:{canvas.h},{subs_arg}[vc]"
+
+    slow = abs(speed - 1.0) > 1e-3
+    if slow:  # 자막 구운 뒤 통째로 배속 (영상·오디오 함께 → 싱크 유지)
+        vf += f";[vc]setpts=PTS/{speed:.6f}[v];[0:a]{_atempo_chain(speed)}[a]"
+        vmap, amap = "[v]", "[a]"
+        out_us = int(dur_us / speed)
+    else:
+        vmap, amap = "[vc]", "0:a"
+        out_us = dur_us
 
     args = [
         "-y", "-i", str(cut_video),
         "-filter_complex", vf,
-        "-map", "[v]", "-map", "0:a",
+        "-map", vmap, "-map", amap,
         "-c:v", "libx264", "-crf", str(opts.crf), "-preset", opts.preset,
         "-pix_fmt", "yuv420p", "-r", str(canvas.fps),
         "-c:a", "aac", "-b:a", opts.audio_bitrate, "-movflags", "+faststart",
         str(out_path),
     ]
-    ff.run_with_progress(args, total_us=dur_us, progress_cb=progress_cb)
+    ff.run_with_progress(args, total_us=out_us, progress_cb=progress_cb)
     return str(out_path)
 
 
@@ -372,10 +397,12 @@ def render_from_analysis(
     layout: str = "shorts",
     hook: str = "",
     opts: Optional[RenderOptions] = None,
+    speed: float = 1.0,
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
-    """2단계: (수정된) 자막으로 최종 렌더."""
+    """2단계: (수정된) 자막으로 최종 렌더. speed>1이면 저장 영상도 배속."""
     style = style or presets.SUBTITLE_STYLE_PRESETS["shorts_basic"]
+    speed = max(0.25, min(4.0, float(speed or 1.0)))
     result = EditResult(ok=False, out_path=out_path)
     result.cut_us = ff.probe_duration_us(cut_video)
     result.subtitles = [s.text for s in subtitles]
@@ -385,10 +412,10 @@ def render_from_analysis(
             save_srt(subtitles, Path(out_path).parent / "subtitles.srt")
         render_edited(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
-            progress_cb=progress_cb,
+            speed=speed, progress_cb=progress_cb,
         )
-        if not _fits_us(ff.probe_duration_us(out_path), result.cut_us):
-            result.errors.append("출력 길이가 컷 영상과 다릅니다")
+        if not _fits_us(ff.probe_duration_us(out_path), int(result.cut_us / speed), tol=200_000):
+            result.errors.append("출력 길이가 예상과 다릅니다")
         if not ff.has_audio_stream(out_path):
             result.errors.append("출력에 오디오가 없습니다")
         result.ok = not result.errors

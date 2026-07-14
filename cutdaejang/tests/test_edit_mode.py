@@ -223,6 +223,71 @@ def test_suggest_highlights_no_key_raises():
             os.environ["GEMINI_API_KEY"] = old
 
 
+# ─────────── 저장(렌더) 속도 + AI 대본 다듬기 + 훅 강조 ───────────
+
+
+def test_atempo_chain_single_and_multi():
+    from cutdaejang.core.edit_mode import _atempo_chain
+
+    assert _atempo_chain(1.5) == "atempo=1.500000"
+    # 2배 초과는 여러 개로 쪼갬 (atempo는 0.5~2.0만 지원)
+    assert _atempo_chain(3.0).startswith("atempo=2.0,atempo=")
+
+
+@requires_ffmpeg
+def test_render_speed_shortens_output(talk_video, tmp_path):
+    from cutdaejang.core.edit_mode import analyze_video, render_from_analysis
+    from cutdaejang.utils import ffmpeg as ff
+
+    analysis = analyze_video(talk_video, tmp_path / "w", None, auto_subtitle=False)
+    base = ff.probe_duration_us(analysis.cut_video)
+    out = str(tmp_path / "w" / "fast.mp4")
+    r = render_from_analysis(analysis.cut_video, [], out, layout="keep", speed=2.0)
+    assert r.ok, r.errors
+    sped = ff.probe_duration_us(out)
+    assert sped < base * 0.62  # 2배속이면 대략 절반
+    assert ff.has_audio_stream(out)
+
+
+def test_refine_subtitles_no_key_raises():
+    import os
+
+    from cutdaejang.core.script_generator import ScriptError, refine_subtitles
+
+    old = os.environ.pop("GEMINI_API_KEY", None)
+    try:
+        with pytest.raises(ScriptError):
+            refine_subtitles(["원본"], api_key="")
+    finally:
+        if old:
+            os.environ["GEMINI_API_KEY"] = old
+
+
+def test_refine_subtitles_preserves_count(monkeypatch):
+    from cutdaejang.core import script_generator as sg
+
+    def fake_post(url, payload, headers):
+        return {"candidates": [{"content": {"parts": [
+            {"text": '{"lines":["고친 하나","고친 둘"]}'}]}}]}
+
+    monkeypatch.setattr(sg, "_http_post_json", fake_post)
+    out = sg.refine_subtitles(["원본1", "원본2", "원본3"], api_key="x")
+    assert len(out) == 3                       # 줄 수 보존
+    assert out[0] == "고친 하나" and out[1] == "고친 둘"
+    assert out[2] == "원본3"                    # 응답에 없는 줄은 원문 유지
+
+
+def test_hook_dialogue_text_highlights_keyword():
+    from cutdaejang.core.render_engine.ass_writer import hook_dialogue_text
+    from cutdaejang.spec import Style
+
+    style = Style(highlight_color="#FFD400")
+    out = hook_dialogue_text("블로그 글도 AI가? 꿀팁 | AI가?", style)
+    assert "AI가?" in out
+    assert "\\1c" in out                       # 강조색 인라인 태그가 들어감
+    assert "|" not in out                      # 구분자는 최종 텍스트에서 사라짐
+
+
 @requires_ffmpeg
 def test_analyze_with_script_skips_stt(talk_video, tmp_path):
     from cutdaejang.core.edit_mode import analyze_video

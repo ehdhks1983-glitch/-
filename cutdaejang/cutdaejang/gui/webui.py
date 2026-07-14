@@ -305,7 +305,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
 
 
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
-                    cut_video: str, workdir: str, keep: Optional[list] = None) -> None:
+                    cut_video: str, workdir: str, keep: Optional[list] = None,
+                    speed: float = 1.0) -> None:
     """2단계: (수정된) 자막으로 최종 렌더. keep이 일부면 그 구간만 남겨 쇼츠로 재컷."""
     try:
         from ..core import edit_mode  # noqa: PLC0415
@@ -324,7 +325,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             )
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=build_style(settings),
-            layout=layout, hook=hook,
+            layout=layout, hook=hook, speed=speed,
             progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
         )
         _set_job(
@@ -493,13 +494,32 @@ class _Handler(BaseHTTPRequestHandler):
             keep = params.get("keep")  # 고른 구간(번호). None이면 전체 유지
             if keep is not None:
                 keep = [int(i) for i in keep]
+            try:
+                speed = float(params.get("speed") or 1.0)
+            except (TypeError, ValueError):
+                speed = 1.0
             threading.Thread(
                 target=_do_edit_render,
                 args=(job["id"], params.get("subtitles") or [], hook,
-                      ep.get("layout", "shorts"), job.get("cut_video"), workdir, keep),
+                      ep.get("layout", "shorts"), job.get("cut_video"), workdir, keep, speed),
                 daemon=True,
             ).start()
             self._send_json({"ok": True})
+        elif path == "/api/refine_subtitles":
+            _apply_keys(params)
+            from ..core import script_generator as sg  # noqa: PLC0415
+
+            texts = [str((s or {}).get("text", "")) for s in (params.get("subtitles") or [])]
+            if not any(t.strip() for t in texts):
+                self._send_json({"error": "다듬을 자막이 없습니다"}, 400)
+                return
+            try:
+                lines = sg.refine_subtitles(texts, context=params.get("context", ""))
+                self._send_json({"lines": lines})
+            except sg.ScriptError as e:
+                self._send_json({"error": str(e)}, 400)
+            except Exception as e:
+                self._send_json({"error": f"대본 다듬기 실패: {e}"}, 500)
         elif path == "/api/suggest_highlights":
             _apply_keys(params)
             from ..core import script_generator as sg  # noqa: PLC0415
@@ -995,7 +1015,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.10.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.11.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1010,8 +1030,8 @@ _HTML = """<!doctype html>
       <button class="ghost" style="white-space:nowrap" onclick="pickFile(event)">📁 영상 선택</button>
     </div>
     <div class="hint">버튼을 누르면 파일 탐색기가 열립니다. (폴더 경로만 넣으면 그 안의 최신 영상을 씁니다)</div>
-    <label>상단 제목(훅) <span class="hint">— 화면 위에 크게 계속 표시. 줄바꿈은 Enter. 비우면 없음</span></label>
-    <textarea id="editHook" style="min-height:56px" placeholder="예) AI가 대신 써준다?&#10;블로그 자동화 꿀팁!"></textarea>
+    <label>상단 제목(훅) <span class="hint">— 화면 위에 크게 계속 표시. 줄바꿈 Enter. 끝에 <b>| 단어</b>면 그 단어만 강조색으로 팝!</span></label>
+    <textarea id="editHook" style="min-height:56px" placeholder="예) 블로그 글도 AI가? 자동화 꿀팁 3가지 | AI가?"></textarea>
     <div style="display:flex;gap:6px;margin-top:6px">
       <input type="text" id="editHookTopic" style="flex:1" placeholder="영상 주제 키워드 (예: 블로그 자동화)">
       <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ 제목 추천</button>
@@ -1181,6 +1201,7 @@ _HTML = """<!doctype html>
       <div class="hint" id="hlReason" style="margin-top:4px"></div>
       <div id="subList" class="subList-scroll" style="margin-top:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="ghost" onclick="refineSubs(event)" title="발음 오인식을 문맥에 맞게 자연스럽게 자동 교정 (제미나이 키 필요)">🪄 AI로 대본 다듬기</button>
         <button class="ghost" onclick="addSubRow(event)">+ 자막 줄 추가</button>
         <button class="ghost" onclick="pronounceSubs(event)">숫자·영어 → 한글</button>
         <button class="ghost" onclick="toggleBulk(event)">📋 대본 일괄 붙여넣기</button>
@@ -1188,6 +1209,15 @@ _HTML = """<!doctype html>
       <div id="bulkBox" class="hidden" style="margin-top:8px">
         <textarea id="bulkText" style="min-height:90px" placeholder="대본을 한 줄에 한 자막씩 붙여넣고 아래 버튼을 누르면, 위 자막들의 텍스트가 순서대로 교체됩니다 (타이밍은 유지). 줄이 더 많으면 뒤에 추가돼요."></textarea>
         <button class="ghost" onclick="applyBulk(event)">이 대본으로 자막 텍스트 교체</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <span class="hint">⏩ 저장 속도 <span style="color:#8b93a7">(완성 영상에 적용 · 자막도 같이 빨라짐)</span></span>
+        <select id="outSpeed" style="width:auto;padding:6px 8px">
+          <option value="1">1배 (원본)</option>
+          <option value="1.25">1.25배</option>
+          <option value="1.5">1.5배</option>
+          <option value="2">2배</option>
+        </select>
       </div>
       <button id="renderBtn" onclick="renderEdited()">✅ 이 자막으로 완성</button>
     </div>
@@ -1426,6 +1456,24 @@ async function aiHighlights(ev){
     const r=$('hlReason'); if(r) r.textContent=(data.ai?'✨ AI 추천: ':'ℹ 대략 추천(제미나이 키 넣으면 더 똑똑해져요): ')+(data.reason||'');
   } finally { btn.disabled=false; btn.textContent=old; }
 }
+// AI로 자막(대본) 다듬기 — 발음 오인식을 문맥 기반으로 자연스럽게 교정
+async function refineSubs(ev){
+  if(ev)ev.preventDefault();
+  const idxs=[]; (window._subs||[]).forEach((s,i)=>{ if((s.text||'').trim()) idxs.push(i); });
+  if(!idxs.length){ alert('다듬을 자막이 없습니다'); return; }
+  if(!confirm(idxs.length+'줄을 AI가 문맥에 맞게 자연스럽게 고칩니다. 계속할까요?\\n(제미나이 키가 필요해요)')) return;
+  const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='다듬는 중…';
+  try{
+    const key=($('editGeminiKey')&&$('editGeminiKey').value)||'';
+    const subs=idxs.map(i=>({text:window._subs[i].text}));
+    const data=await (await fetch('/api/refine_subtitles',{method:'POST',
+      body:JSON.stringify({subtitles:subs, context:$('editHook').value||'', gemini_key:key})})).json();
+    if(data.error){ alert(data.error); return; }
+    (data.lines||[]).forEach((t,k)=>{ if(idxs[k]!=null && t) window._subs[idxs[k]].text=t; });
+    renderSubRows();
+    const r=$('hlReason'); if(r) r.textContent='🪄 AI가 대본을 다듬었어요. 어색한 부분은 직접 더 고치세요.';
+  } finally { btn.disabled=false; btn.textContent=old; }
+}
 function seekCut(us){ const p=$('cutPlayer'); p.currentTime=us/1e6; p.play(); }
 function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return m+':'+String(s).padStart(2,'0'); }
 function togglePlay(ev){ if(ev&&ev.preventDefault)ev.preventDefault(); const p=$('cutPlayer'); if(!p||!p.src) return; if(p.paused) p.play(); else p.pause(); }
@@ -1495,7 +1543,8 @@ async function renderEdited(){
   if(subs.length && !keepIdx.length){ alert('쇼츠에 넣을 구간을 하나 이상 ☑ 체크하세요'); return; }
   // 전체 선택(또는 자막 없음)이면 재컷 안 함(null), 일부만이면 그 구간만 남김
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep})});
+  const speed=parseFloat(($('outSpeed')||{}).value || '1');
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
