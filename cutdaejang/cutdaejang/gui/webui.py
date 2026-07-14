@@ -496,6 +496,19 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, 500)
         elif path == "/api/preview":
             self._preview(params)
+        elif path == "/api/suggest_hooks":
+            _apply_keys(params)
+            from ..core import script_generator as sg  # noqa: PLC0415
+
+            ctx = (params.get("context") or "").strip()
+            if not ctx:
+                self._send_json({"error": "주제/내용을 먼저 입력하세요"}, 400)
+                return
+            try:
+                hooks = sg.suggest_hooks(ctx)
+            except sg.ScriptError:
+                hooks = sg.suggest_hooks_stub(ctx)  # 키 없으면 템플릿
+            self._send_json({"hooks": hooks})
         elif path == "/api/pronounce":
             from ..utils.pronounce import pronounce_ko  # noqa: PLC0415
 
@@ -922,13 +935,17 @@ _HTML = """<!doctype html>
   .hint { font-size:12px; color:#6b7387; margin-top:4px; }
   .banner { background:#3a1520; border:1px solid #ff7b8a; color:#ffb3bd; border-radius:10px;
             padding:12px 14px; margin-top:14px; font-size:13px; }
+  .hookcands { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .hookcands button { width:100%; text-align:left; background:#12305a; border:1px solid #2c4a7a;
+    color:#dfe7f5; border-radius:8px; padding:9px 12px; font-size:14px; cursor:pointer; margin:0; }
+  .hookcands button:hover { background:#183c72; }
   .hidden { display:none !important; }
   code { background:#0f1117; padding:2px 6px; border-radius:4px; font-size:12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.7)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.8)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -945,6 +962,11 @@ _HTML = """<!doctype html>
     <div class="hint">버튼을 누르면 파일 탐색기가 열립니다. (폴더 경로만 넣으면 그 안의 최신 영상을 씁니다)</div>
     <label>상단 제목(훅) <span class="hint">— 화면 위에 크게 계속 표시. 줄바꿈은 Enter. 비우면 없음</span></label>
     <textarea id="editHook" style="min-height:56px" placeholder="예) AI가 대신 써준다?&#10;블로그 자동화 꿀팁!"></textarea>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <input type="text" id="editHookTopic" style="flex:1" placeholder="영상 주제 키워드 (예: 블로그 자동화)">
+      <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ 제목 추천</button>
+    </div>
+    <div id="editHookCands" class="hookcands"></div>
     <div class="row">
       <div>
         <label>출력 형태</label>
@@ -980,6 +1002,8 @@ _HTML = """<!doctype html>
     <input type="text" id="topic" placeholder="예) 하루 10분 정리 습관" value="하루 10분 정리 습관">
     <label>상단 제목(훅) <span class="hint">— 비우면 대본 제목이 자동으로 위에 크게 표시됩니다</span></label>
     <textarea id="genHook" style="min-height:52px" placeholder="비워두면 AI가 만든 제목을 사용 / 직접 쓰려면 여기에 (줄바꿈 Enter)"></textarea>
+    <button class="ghost" style="margin-top:6px" onclick="suggestHooks(event,'topic','genHook')">✨ AI 제목 추천받기</button>
+    <div id="genHookCands" class="hookcands"></div>
 
     <div class="row">
       <div>
@@ -1222,6 +1246,28 @@ async function startEdit(){
   $('rawErr').classList.add('hidden'); $('noteText').textContent='';
   poll();
   timer = setInterval(poll, 900);
+}
+
+// ── 훅 제목 AI 추천 (v0.8) ──
+async function suggestHooks(ev, topicId, targetId){
+  ev.preventDefault();
+  const ctx = ($(topicId).value || '').trim();
+  if(!ctx){ alert('주제/키워드를 먼저 입력하세요'); return; }
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent; btn.textContent = '추천 중…';
+  const cands = $(targetId + 'Cands'); cands.innerHTML = '';
+  try {
+    const key = ($('geminiKey') && $('geminiKey').value) || ($('editGeminiKey') && $('editGeminiKey').value) || '';
+    const data = await (await fetch('/api/suggest_hooks', {method:'POST',
+      body: JSON.stringify({context: ctx, gemini_key: key})})).json();
+    if(data.error){ alert(data.error); return; }
+    (data.hooks || []).forEach(h => {
+      const b = document.createElement('button');
+      b.textContent = h;
+      b.onclick = (e) => { e.preventDefault(); $(targetId).value = h; cands.innerHTML=''; };
+      cands.appendChild(b);
+    });
+    if(!(data.hooks||[]).length) cands.innerHTML = '<span class="hint">추천 결과가 없습니다. 키워드를 바꿔보세요.</span>';
+  } finally { btn.disabled = false; btn.textContent = old; }
 }
 
 // ── 자막 검토·수정 (Phase 1) ──

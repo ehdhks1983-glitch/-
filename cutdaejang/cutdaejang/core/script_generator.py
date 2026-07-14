@@ -135,6 +135,57 @@ class GeminiScript:
         return Script.from_json_text(text)
 
 
+HOOK_PROMPT = """\
+역할: 유튜브 쇼츠/영상 썸네일 카피라이터
+주제/내용: "{context}"
+위 내용으로 시선을 확 잡는 **후킹 제목** {n}개를 지어줘.
+규칙:
+- 각 제목은 1~2줄, 짧고 강하게 (궁금증·숫자·반전·이득 중 하나 활용)
+- 낚시성 과장 금지, 내용과 관련
+- 출력은 제목만, 한 줄에 하나씩 (번호·따옴표·설명 없이)
+"""
+
+
+def suggest_hooks(context: str, n: int = 5, model: str = "gemini-2.5-flash",
+                  api_key=None) -> list:
+    """Gemini로 후킹 제목 후보 n개 생성. 키 없으면 ScriptError."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 제목 추천을 쓸 수 없습니다")
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent"
+    )
+    payload = {"contents": [{"parts": [{"text": HOOK_PROMPT.format(context=context, n=n)}]}]}
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as e:
+        raise ScriptError(f"제목 추천 응답 형식 예상 밖: {json.dumps(data)[:200]}") from e
+    hooks = []
+    for line in text.splitlines():
+        line = re.sub(r'^\s*(?:\d+[.)]\s*|[-*•]\s*|["\'])|["\']\s*$', "", line).strip()
+        if line and len(line) <= 40:
+            hooks.append(line)
+    return hooks[:n]
+
+
+def suggest_hooks_stub(context: str, n: int = 5) -> list:
+    """오프라인 대역 — 템플릿 기반 후보 (키 없이 UI 확인용)."""
+    c = context.strip() or "이 영상"
+    templates = [
+        f"{c}, 이거 모르면 손해!",
+        f"{c} 3가지 핵심 정리",
+        f"아직도 {c} 몰라요?",
+        f"{c}, 딱 1분이면 끝",
+        f"{c} 이렇게 하면 됩니다",
+        f"{c}의 반전 결말",
+    ]
+    return templates[:n]
+
+
 class StubScript:
     """오프라인 대역 — 데모·테스트용 고정 대본."""
 
