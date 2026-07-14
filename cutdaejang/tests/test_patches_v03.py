@@ -330,3 +330,34 @@ def test_resolve_bgm(tmp_path):
     assert bgm and bgm.path.endswith("track.mp3") and bgm.volume_db == -20
     assert orchestrator.resolve_bgm("random", settings, tmp_path).path.endswith("track.mp3")
     assert orchestrator.resolve_bgm("없는파일.mp3", settings, tmp_path) is None
+
+
+# ─────────── 배경 이미지 실패가 작업을 죽이지 않아야 함 (사용자 404 리포트) ───────────
+
+
+@requires_ffmpeg
+def test_background_falls_back_on_any_provider_error(tmp_path):
+    """404 등 어떤 예외가 나도 로컬 그라데이션으로 폴백해 배경 PNG를 만든다."""
+    from cutdaejang.core import background_generator as bg
+    from cutdaejang.spec import Canvas
+
+    class Broken404Provider:
+        def generate(self, prompt, out_path, canvas):
+            # 사용자가 겪은 404를 그대로 재현 (TTSHTTPError 계열)
+            from cutdaejang.core.tts_engine import TTSHTTPError
+
+            raise TTSHTTPError(404, None, "model not found")
+
+    out = tmp_path / "bg.png"
+    notes = []
+    result = bg.prepare_background(
+        str(out), Canvas(), prompt="테스트", provider=Broken404Provider(),
+        on_note=notes.append,
+    )
+    assert Path(result).exists()  # 폴백 배경이 실제로 생성됨
+    assert notes and "기본 배경" in notes[0]
+
+
+def test_ai_image_off_by_default():
+    assert config.DEFAULTS["bg"]["ai_image"] is False
+    assert config.load_settings()["bg"]["image_model"]  # 모델명 설정 존재

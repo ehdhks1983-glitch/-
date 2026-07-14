@@ -139,8 +139,14 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
     opts = _job_options(params, settings)
     try:
         image_provider = None
-        if os.environ.get("GEMINI_API_KEY") and params.get("script_provider") == "gemini":
-            image_provider = background_generator.GeminiImage()
+        if (
+            settings["bg"].get("ai_image")
+            and os.environ.get("GEMINI_API_KEY")
+            and params.get("script_provider") == "gemini"
+        ):
+            image_provider = background_generator.GeminiImage(
+                model=settings["bg"].get("image_model")
+            )
 
         result = orchestrator.run_job(
             workdir, script, opts=opts, settings=settings,
@@ -683,7 +689,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.4.1)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.4.2)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="card" id="formCard">
@@ -820,6 +826,8 @@ _HTML = """<!doctype html>
     </div>
     <div class="chk"><input type="checkbox" id="setFade"><span>자막 등장 페이드</span></div>
     <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠)</span></div>
+    <div class="chk"><input type="checkbox" id="setAiImage"><span>AI 배경 이미지 생성 (실험적 · Gemini · 실패 시 기본 배경) </span></div>
+    <div class="hint" style="margin:2px 0 0 26px">끄면 항상 되는 그라데이션 배경을 씁니다. 모델 가용성에 따라 실패할 수 있어요.</div>
     <button onclick="saveSettings()">설정 저장</button>
   </div>
 
@@ -933,6 +941,7 @@ function fillSettings(s){
   $('setHlColor').value = s.subtitle.highlight_color;
   $('setMotion').value = s.bg.motion;
   $('setMotionAmt').value = s.bg.motion_amount;
+  $('setAiImage').checked = !!s.bg.ai_image;
   $('setBgmVol').value = s.bgm.volume_db;
   $('setDuck').checked = !!s.bgm.duck;
   $('setGap').value = s.audio.gap_ms;
@@ -944,7 +953,8 @@ async function saveSettings(){
     subtitle: {font_size: +$('setFontSize').value, outline: +$('setOutline').value,
                margin_v: +$('setMarginV').value, fade: $('setFade').checked,
                highlight_color: $('setHlColor').value.toUpperCase()},
-    bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value},
+    bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,
+         ai_image: $('setAiImage').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
     audio: {gap_ms: +$('setGap').value},
     tts: {rpm_limit: +$('setRpm').value},

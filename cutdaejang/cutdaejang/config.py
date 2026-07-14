@@ -39,6 +39,8 @@ DEFAULTS: dict = {
     "bg": {
         "motion": "zoom_in",          # zoom_in | zoom_out | off
         "motion_amount": 0.08,        # 총 줌 비율 (8%)
+        "ai_image": False,            # AI 배경 이미지 생성 (opt-in, 실패 시 그라데이션 폴백)
+        "image_model": "gemini-2.5-flash-image-preview",  # 모델 가용성 변동 대비 설정화
     },
     "subtitle": {
         "font_size": 76,

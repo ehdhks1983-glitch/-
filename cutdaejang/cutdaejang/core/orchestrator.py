@@ -179,6 +179,7 @@ def run_job(
             user_image=opts.user_background,
             prompt=script.background_prompt or script.title,
             provider=image_provider,
+            on_note=note,
         )
         bg_cfg = settings["bg"]
         background = Background(

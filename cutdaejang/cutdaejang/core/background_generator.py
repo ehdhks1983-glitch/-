@@ -51,6 +51,12 @@ def normalize_to_canvas(src_path: str, out_path: str, canvas: Canvas) -> str:
     return str(out_path)
 
 
+# AI 이미지 배경은 모델 가용성이 API 버전·계정·지역마다 달라 불안정하다.
+# 그래서 기본은 로컬 그라데이션(항상 동작)이고, AI 이미지는 opt-in + 실패 시 자동 폴백.
+# 모델명은 설정(bg.image_model)으로 교체 가능 — 새 모델이 나와도 재빌드 없이 대응.
+DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image-preview"
+
+
 class GeminiImage:
     """Gemini 이미지 생성 — 세로형 배경 (모델은 설정으로 교체 가능)."""
 
@@ -59,7 +65,7 @@ class GeminiImage:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.0-flash-preview-image-generation",
+        model: str = DEFAULT_IMAGE_MODEL,
     ):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
         self.model = model
@@ -86,7 +92,10 @@ class GeminiImage:
             ],
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
-        data = _http_post_json(url, payload, {"x-goog-api-key": self.api_key})
+        try:
+            data = _http_post_json(url, payload, {"x-goog-api-key": self.api_key})
+        except Exception as e:  # HTTP/네트워크 오류 유형에 무관하게 BackgroundError로 통일
+            raise BackgroundError(f"이미지 생성 API 오류: {str(e)[:200]}") from e
         try:
             parts = data["candidates"][0]["content"]["parts"]
             b64 = next(p["inlineData"]["data"] for p in parts if "inlineData" in p)
@@ -107,13 +116,22 @@ def prepare_background(
     user_image: Optional[str] = None,
     prompt: str = "",
     provider: Optional[GeminiImage] = None,
+    on_note: Optional[callable] = None,
 ) -> str:
-    """우선순위: 사용자 이미지 → 제공자(Gemini) → 로컬 그라데이션 폴백."""
+    """우선순위: 사용자 이미지 → 제공자(Gemini) → 로컬 그라데이션 폴백.
+
+    배경은 비필수라, 제공자에서 어떤 예외가 나도 로컬 폴백으로 넘어가 작업을 살린다.
+    """
     if user_image:
-        return normalize_to_canvas(user_image, out_path, canvas)
+        try:
+            return normalize_to_canvas(user_image, out_path, canvas)
+        except ff.FFmpegError:
+            if on_note:
+                on_note("배경 이미지를 읽지 못해 기본 배경으로 대체합니다")
     if provider is not None:
         try:
             return provider.generate(prompt, out_path, canvas)
-        except (BackgroundError, ff.FFmpegError):
-            pass  # 폴백으로 진행 — 배경 실패가 작업 전체를 죽이지 않게 (§5.6 정신)
+        except Exception as e:  # 배경 실패가 작업 전체를 죽이지 않게 (§5.6 정신)
+            if on_note:
+                on_note(f"AI 배경 생성 실패 → 기본 배경 사용 ({str(e)[:120]})")
     return generate_local(out_path, canvas, seed_text=prompt)
