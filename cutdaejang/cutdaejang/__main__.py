@@ -182,6 +182,40 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return cmd_run(args)
 
 
+def cmd_edit(args: argparse.Namespace) -> int:
+    """내 영상 → 무음컷 + 자동자막 (기획안 v1.5 육성 촬영 모드)."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    from .core import edit_mode  # noqa: PLC0415
+    from .core.stt_engine import STTEngine, make_provider  # noqa: PLC0415
+    from .core.video_editor import SilenceOptions  # noqa: PLC0415
+
+    settings = config.load_settings()
+    edit_cfg = settings["edit"]
+    provider = make_provider(args.stt or edit_cfg["stt_provider"], edit_cfg)
+    stt = STTEngine(provider, Path(args.workdir) / "cache" / "stt", language=args.language)
+
+    result = edit_mode.edit_video(
+        args.video,
+        Path(args.workdir) / "edit",
+        stt,
+        layout=args.layout or edit_cfg["layout"],
+        silence_opts=SilenceOptions(
+            noise_db=edit_cfg["noise_db"],
+            min_silence_s=edit_cfg["min_silence_s"],
+            pad_s=edit_cfg["pad_s"],
+        ),
+        out_path=args.out,
+        progress_cb=_progress_printer,
+        status_cb=lambda m: print(f"\n  ℹ {m}"),
+    )
+    print(f"\n편집 {'완료' if result.ok else '경고'}: {result.out_path}")
+    print(f"  원본 {result.original_us / 1e6:.1f}s → 컷 {result.cut_us / 1e6:.1f}s "
+          f"(무음 {result.removed_ratio * 100:.0f}% 제거, 구간 {result.segments}개, STT {result.stt_calls}회)")
+    for e in result.errors:
+        print(f"  ⚠ {e}")
+    return 0 if result.ok else 1
+
+
 def cmd_ui(args: argparse.Namespace) -> int:
     from .gui.webui import serve  # noqa: PLC0415
 
@@ -249,6 +283,15 @@ def main(argv=None) -> int:
     demo_p.add_argument("--main-video", default=None)
     demo_p.add_argument("--drafts-dir", default=None)
     demo_p.set_defaults(func=cmd_demo, tts_style="")
+
+    edit_p = sub.add_parser("edit", help="내 영상 → 무음컷 + 자동자막 (v1.5)")
+    edit_p.add_argument("--video", required=True, help="편집할 영상 파일")
+    edit_p.add_argument("--workdir", default="jobs")
+    edit_p.add_argument("--out", help="출력 mp4 경로")
+    edit_p.add_argument("--stt", choices=("whisper", "gemini", "openai", "stub"), default=None)
+    edit_p.add_argument("--layout", choices=("shorts", "keep"), default=None)
+    edit_p.add_argument("--language", default="ko")
+    edit_p.set_defaults(func=cmd_edit)
 
     ui_p = sub.add_parser("ui", help="브라우저 UI 실행 (로컬 웹 화면)")
     ui_p.add_argument("--workdir", default="jobs")

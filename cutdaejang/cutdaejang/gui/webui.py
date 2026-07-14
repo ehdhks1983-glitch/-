@@ -45,6 +45,21 @@ def _dt_stamp() -> str:
     return datetime.datetime.now().strftime("%H%M%S")
 
 
+def _stt_available() -> dict:
+    """편집 모드에서 쓸 수 있는 음성인식 제공자."""
+    try:
+        import faster_whisper  # noqa: F401, PLC0415
+
+        whisper = True
+    except ImportError:
+        whisper = False
+    return {
+        "whisper": whisper,
+        "gemini": bool(os.environ.get("GEMINI_API_KEY")),
+        "openai": bool(os.environ.get("OPENAI_API_KEY")),
+    }
+
+
 def _env_check() -> dict:
     """UI 첫 화면에서 환경 문제를 미리 알려주기 위한 점검 (실패해도 화면은 뜨게)."""
     from ..core import render_engine  # noqa: PLC0415
@@ -175,6 +190,61 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
         _set_job(job_id, status="failed", errors=[str(e)])
 
 
+def _run_edit(job_id: str, params: dict, workdir: str) -> None:
+    """내 영상 편집: 무음컷 + 자동자막 (기획안 v1.5)."""
+    try:
+        _apply_keys(params)
+        settings = config.load_settings()
+        edit_cfg = settings["edit"]
+        from ..core import edit_mode  # noqa: PLC0415
+        from ..core.orchestrator import build_style  # noqa: PLC0415
+        from ..core.stt_engine import STTEngine, make_provider  # noqa: PLC0415
+        from ..core.video_editor import SilenceOptions  # noqa: PLC0415
+
+        video = (params.get("video_path") or "").strip().strip('"')
+        if not video or not Path(video).is_file():
+            _set_job(job_id, status="failed", errors=[f"영상 파일을 찾을 수 없습니다: {video}"])
+            return
+
+        stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
+        stt = STTEngine(
+            make_provider(stt_name, edit_cfg),
+            Path(workdir) / "cache" / "stt",
+            language=params.get("language", "ko"),
+        )
+        _set_job(job_id, status="running", stage="analyze", frac=0.0,
+                 title=Path(video).stem)
+        result = edit_mode.edit_video(
+            video,
+            Path(workdir) / job_id,
+            stt,
+            style=build_style(settings),
+            layout=params.get("layout") or edit_cfg["layout"],
+            silence_opts=SilenceOptions(
+                noise_db=edit_cfg["noise_db"],
+                min_silence_s=edit_cfg["min_silence_s"],
+                pad_s=edit_cfg["pad_s"],
+            ),
+            out_path=str(Path(workdir) / job_id / "edited.mp4"),
+            progress_cb=lambda stage, frac: _set_job(job_id, stage=stage, frac=frac),
+            status_cb=lambda msg: _set_job(job_id, note=msg),
+        )
+        _set_job(
+            job_id,
+            status="ok" if result.ok else "partial" if Path(result.out_path).exists() else "failed",
+            stage="done", frac=1.0, note="",
+            job_dir=str(Path(workdir) / job_id),
+            mp4=result.out_path if Path(result.out_path).exists() else None,
+            edit_summary=(
+                f"원본 {result.original_us/1e6:.1f}초 → {result.cut_us/1e6:.1f}초 "
+                f"(무음 {result.removed_ratio*100:.0f}% 컷, 자막 {len(result.subtitles)}줄, 음성인식 {result.stt_calls}회)"
+            ),
+            errors=result.errors,
+        )
+    except Exception as e:
+        _set_job(job_id, status="failed", errors=[str(e)])
+
+
 def _run_generate(job_id: str, params: dict, workdir: str) -> None:
     """대본 생성 → 자동 모드면 즉시 파이프라인, 검토 모드면 대기 (기획안 §1.3)."""
     try:
@@ -296,6 +366,18 @@ class _Handler(BaseHTTPRequestHandler):
                 daemon=True,
             ).start()
             self._send_json({"ok": True})
+        elif path == "/api/edit":
+            video = (params.get("video_path") or "").strip().strip('"')
+            if not video:
+                self._send_json({"error": "영상 파일 경로를 입력하세요"}, 400)
+                return
+            job_id = orchestrator.new_job_id(Path(video).stem or "edit")
+            _set_job(job_id, status="running", stage="analyze", frac=0.0,
+                     title=Path(video).stem, params=params)
+            threading.Thread(
+                target=_run_edit, args=(job_id, params, workdir), daemon=True
+            ).start()
+            self._send_json({"job_id": job_id})
         elif path == "/api/preview":
             self._preview(params)
         elif path == "/api/pronounce":
@@ -530,6 +612,7 @@ class _Handler(BaseHTTPRequestHandler):
             ),
             "voices": GEMINI_VOICES,
             "styles": list(STYLE_INSTRUCTIONS),
+            "stt_available": _stt_available(),
         }
 
     # ---------- 영상 서빙 (Range 지원 — 브라우저 탐색바용) ----------
@@ -689,8 +772,38 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.4.3)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
+
+  <div class="toggle" style="margin-top:16px">
+    <label><input type="radio" name="appmode" value="ai" checked onchange="switchAppMode()"><span>🎬 주제로 AI 영상 만들기</span></label>
+    <label><input type="radio" name="appmode" value="edit" onchange="switchAppMode()"><span>✂️ 내 영상 편집 (무음컷+자동자막)</span></label>
+  </div>
+
+  <div class="card hidden" id="editCard">
+    <label>영상 파일 경로 <span class="hint">(파일 탐색기에서 영상 우클릭 → "경로로 복사" 후 붙여넣기)</span></label>
+    <input type="text" id="editVideo" placeholder="예) C:\\Users\\이름\\Videos\\내영상.mp4">
+    <div class="row">
+      <div>
+        <label>출력 형태</label>
+        <div class="toggle">
+          <label><input type="radio" name="editLayout" value="shorts" checked><span>쇼츠 (세로 9:16)</span></label>
+          <label><input type="radio" name="editLayout" value="keep"><span>원본 비율 유지</span></label>
+        </div>
+      </div>
+      <div>
+        <label>음성 인식</label>
+        <select id="sttSel"></select>
+        <div class="hint" id="sttHint"></div>
+      </div>
+    </div>
+    <div id="editKeyRow" class="hidden">
+      <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
+      <input type="password" id="editGeminiKey" placeholder="AIza...">
+    </div>
+    <div class="hint" style="margin-top:8px">말 안 하는 빈 구간을 잘라내고, 말한 내용을 자동으로 자막으로 붙입니다. 가로 영상은 세로 쇼츠로 자동 배치돼요.</div>
+    <button id="editBtn" onclick="startEdit()">✂️ 편집 시작</button>
+  </div>
 
   <div class="card" id="formCard">
     <label>쇼츠 주제</label>
@@ -842,7 +955,8 @@ let currentJob = null, timer = null;
 const $ = id => document.getElementById(id);
 const STAGE_KO = {script:'대본 생성', tts:'목소리 합성(TTS)', background:'배경 준비',
                   timeline:'타임라인 계산', render:'영상 렌더링', draft:'캡컷 draft 조립',
-                  review:'대본 검토 대기', done:'완료'};
+                  review:'대본 검토 대기', done:'완료',
+                  analyze:'무음 구간 분석', cut:'무음 잘라내기', stt:'음성 인식(자막 만들기)'};
 
 document.querySelectorAll('input[name=prov]').forEach(r => r.onchange = () => {
   const isGemini = pick('prov') === 'gemini';
@@ -852,6 +966,56 @@ document.querySelectorAll('input[name=prov]').forEach(r => r.onchange = () => {
 $('draftChk').onchange = () => $('draftRow').classList.toggle('hidden', !$('draftChk').checked);
 
 function pick(name){ return document.querySelector(`input[name=${name}]:checked`).value; }
+
+function switchAppMode(){
+  const edit = pick('appmode') === 'edit';
+  $('editCard').classList.toggle('hidden', !edit);
+  $('formCard').classList.toggle('hidden', edit);
+  if(edit && !window._sttFilled) loadStt();
+}
+
+const STT_KO = {whisper:'내장 Whisper (무료·오프라인)', gemini:'Gemini (내 키)', openai:'OpenAI (내 키)'};
+async function loadStt(){
+  const av = (await (await fetch('/api/state')).json()).stt_available || {};
+  const sel = $('sttSel'); sel.innerHTML = '';
+  // 사용 가능한 것 우선, 없으면 안내
+  const order = ['whisper','gemini','openai'];
+  let any = false;
+  for(const k of order){ if(av[k]){ sel.add(new Option(STT_KO[k], k)); any = true; } }
+  if(!any){
+    sel.add(new Option('Gemini (키 입력 필요)', 'gemini'));
+  }
+  window._sttFilled = true;
+  updateSttHint();
+  sel.onchange = updateSttHint;
+}
+function updateSttHint(){
+  const v = $('sttSel').value;
+  $('editKeyRow').classList.toggle('hidden', v !== 'gemini' || window._hasGeminiKey);
+  $('sttHint').textContent = v === 'whisper'
+    ? '최초 1회 모델 다운로드(수십 MB). 이후 무료·오프라인.'
+    : v === 'gemini' ? '내 Gemini 키 사용. 구간마다 호출돼 조금 걸릴 수 있어요.'
+    : '내 OpenAI 키 사용.';
+}
+
+async function startEdit(){
+  const video = $('editVideo').value.trim();
+  if(!video){ alert('영상 파일 경로를 입력하세요'); return; }
+  const body = {
+    video_path: video, layout: pick('editLayout'),
+    stt_provider: $('sttSel').value, gemini_key: $('editGeminiKey').value, save_key: true,
+  };
+  const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
+  const data = await res.json();
+  if(data.error){ alert(data.error); return; }
+  currentJob = data.job_id;
+  $('editBtn').disabled = true;
+  $('statusCard').classList.remove('hidden');
+  $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  $('rawErr').classList.add('hidden'); $('noteText').textContent='';
+  poll();
+  timer = setInterval(poll, 900);
+}
 
 async function generate(){
   const prov = pick('prov');
@@ -1045,6 +1209,7 @@ async function poll(){
     let badge = job.tts_provider ? '목소리: ' + (provKo[job.tts_provider] || job.tts_provider) : '';
     if(job.requested_tts && job.tts_provider && job.requested_tts !== job.tts_provider)
       badge = '⚠ ' + (provKo[job.tts_provider] || job.tts_provider) + '로 대체 생성됨 (원래 선택: ' + (provKo[job.requested_tts] || job.requested_tts) + ')';
+    if(job.edit_summary) badge = '✂️ ' + job.edit_summary;  // 편집 모드 요약
     $('providerBadge').textContent = badge;
     if(job.mp4){
       $('doneBox').classList.remove('hidden');
@@ -1052,7 +1217,7 @@ async function poll(){
       $('outPaths').textContent = 'mp4: ' + job.mp4 + (job.draft ? '  |  draft: ' + job.draft : '');
     }
     showErrors(job.errors);
-    $('goBtn').disabled = false;
+    $('goBtn').disabled = false; $('editBtn').disabled = false;
   }
   if(job.status === 'failed'){
     clearInterval(timer); timer = null;
@@ -1060,7 +1225,7 @@ async function poll(){
     if(!(job.errors || []).length) $('errBox').textContent = '알 수 없는 오류';
     showErrors(job.errors);
     $('errBox').classList.remove('hidden');
-    $('goBtn').disabled = false;
+    $('goBtn').disabled = false; $('editBtn').disabled = false;
   }
 }
 

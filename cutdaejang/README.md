@@ -2,9 +2,10 @@
 
 > 주제만 입력하면 대본·TTS·배경·자막을 자동 조립해 **①수정 가능한 CapCut 프로젝트(draft)** 또는 **②업로드 준비 완료된 mp4**로 뽑아주는 프로그램.
 
-**v0.3**: TTS 429 안정화(레이트리미터·retryDelay 재시도·영구 캐시·제공자 폴백), 무음 트림 pacing,
-BGM 트랙, 배경 Ken Burns 줌, 자막 강조 컬러·스타일 상향, 보이스 말투 프리셋+미리듣기.
-설정은 [settings.json](settings.json), 패치 상세는 [docs/PATCH_v0.3_보고서.md](docs/PATCH_v0.3_보고서.md).
+**v0.5**: **내 영상 편집 모드 추가** — 직접 찍은/기존 영상을 무음컷 + 자동자막(STT)으로 쇼츠/원본비율 출력
+(`core/video_editor.py`, `core/stt_engine.py`, `core/edit_mode.py`). 음성인식은 로컬 Whisper/Gemini/OpenAI 제공자 추상화.
+그 이전: TTS 429 안정화·캐시·폴백, 무음 트림, BGM, 배경 줌, 자막 강조, 키 저장·발음변환·설정화면·진단리포트.
+설정은 [settings.json](settings.json), 남은 작업은 [docs/로드맵_남은작업.md](docs/로드맵_남은작업.md).
 
 기획 문서: [docs/개발기획안_v1.2.md](docs/개발기획안_v1.2.md) · PoC 결과: [docs/POC_REPORT.md](docs/POC_REPORT.md) · 캡컷 수동 검증: [docs/CAPCUT_CHECKLIST.md](docs/CAPCUT_CHECKLIST.md)
 

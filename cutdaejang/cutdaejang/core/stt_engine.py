@@ -1,0 +1,220 @@
+"""음성 인식(STT) — 발화 구간 오디오 → 자막 텍스트 (기획안 v1.5 육성 촬영 모드).
+
+인터페이스: transcribe(audio_path, language) → str. 타이밍은 video_editor의 무음 감지에서
+오므로 STT는 "이 구간이 무슨 말인지"만 담당한다(타임스탬프 불필요) → 제공자 교체가 쉽다.
+
+제공자:
+  - FasterWhisperSTT: 로컬(무료·오프라인). 최초 1회 모델 다운로드 필요.
+  - GeminiSTT: 사용자 Gemini 키로 오디오 전사 (설치 불필요).
+  - OpenAISTT: whisper-1.
+  - StubSTT: 오프라인 테스트용 고정 텍스트.
+결과는 (제공자|모델|오디오해시) 기준 캐싱 → 재실행 시 재전사 안 함.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import List, Optional, Protocol
+
+from ..utils import ffmpeg as ff
+
+
+class STTError(RuntimeError):
+    pass
+
+
+class STTProvider(Protocol):
+    name: str
+
+    def transcribe(self, audio_path: str, language: str = "ko") -> str: ...
+
+
+class FasterWhisperSTT:
+    """로컬 Whisper (faster-whisper). 모델은 최초 1회 다운로드되어 캐시됨."""
+
+    name = "whisper"
+    _model = None
+    _model_size = None
+
+    def __init__(self, model_size: str = "small"):
+        self.model_size = model_size
+
+    def _get_model(self):
+        try:
+            from faster_whisper import WhisperModel  # noqa: PLC0415
+        except ImportError as e:
+            raise STTError(
+                "faster-whisper가 설치되어 있지 않습니다. `pip install faster-whisper` 하거나 "
+                "Gemini/OpenAI 음성인식을 사용하세요."
+            ) from e
+        # 클래스 레벨 캐시 (같은 모델 재사용)
+        if FasterWhisperSTT._model is None or FasterWhisperSTT._model_size != self.model_size:
+            FasterWhisperSTT._model = WhisperModel(
+                self.model_size, device="cpu", compute_type="int8"
+            )
+            FasterWhisperSTT._model_size = self.model_size
+        return FasterWhisperSTT._model
+
+    def transcribe(self, audio_path: str, language: str = "ko") -> str:
+        model = self._get_model()
+        segments, _ = model.transcribe(str(audio_path), language=language, vad_filter=False)
+        return " ".join(s.text.strip() for s in segments).strip()
+
+
+class GeminiSTT:
+    """Gemini 오디오 전사 — 사용자 키로 설치 없이. wav를 inlineData로 전송."""
+
+    name = "gemini"
+
+    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-2.5-flash"):
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
+        self.model = model
+        if not self.api_key:
+            raise STTError("GEMINI_API_KEY가 설정되어 있지 않습니다")
+
+    def transcribe(self, audio_path: str, language: str = "ko") -> str:
+        audio_b64 = base64.b64encode(Path(audio_path).read_bytes()).decode("ascii")
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{self.model}:generateContent"
+        )
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": (
+                                "이 오디오에서 사람이 말한 내용을 한국어로 정확히 받아써 주세요. "
+                                "설명·따옴표 없이 발화 텍스트만 출력하세요. 말이 없으면 빈 줄."
+                            )
+                        },
+                        {"inlineData": {"mimeType": "audio/wav", "data": audio_b64}},
+                    ]
+                }
+            ]
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:300]
+            raise STTError(f"Gemini STT 오류 {e.code}: {body}") from e
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except (KeyError, IndexError):
+            return ""  # 무음/인식 실패 → 빈 자막 (구간은 유지)
+
+
+class OpenAISTT:
+    """OpenAI whisper-1 전사 (multipart/form-data)."""
+
+    name = "openai"
+
+    def __init__(self, api_key: Optional[str] = None, model: str = "whisper-1"):
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self.model = model
+        if not self.api_key:
+            raise STTError("OPENAI_API_KEY가 설정되어 있지 않습니다")
+
+    def transcribe(self, audio_path: str, language: str = "ko") -> str:
+        boundary = "----cutdaejangSTTboundary"
+        audio = Path(audio_path).read_bytes()
+        parts = []
+        for name, value in (("model", self.model), ("language", language),
+                            ("response_format", "text")):
+            parts.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+        head = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+        )
+        body = (
+            "".join(parts).encode("utf-8")
+            + head.encode("utf-8") + audio + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/audio/transcriptions",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return resp.read().decode("utf-8").strip()
+        except urllib.error.HTTPError as e:
+            body_txt = e.read().decode("utf-8", "replace")[:300]
+            raise STTError(f"OpenAI STT 오류 {e.code}: {body_txt}") from e
+
+
+class StubSTT:
+    """오프라인 테스트용 — 오디오 길이에 비례한 자리표시 텍스트."""
+
+    name = "stub"
+
+    def transcribe(self, audio_path: str, language: str = "ko") -> str:
+        dur = ff.probe_duration_us(str(audio_path)) / 1_000_000
+        words = max(1, round(dur * 2))
+        return " ".join(["샘플자막"] * words)
+
+
+PROVIDERS = {
+    "whisper": FasterWhisperSTT,
+    "gemini": GeminiSTT,
+    "openai": OpenAISTT,
+    "stub": StubSTT,
+}
+
+
+class STTEngine:
+    def __init__(self, provider: STTProvider, cache_dir, language: str = "ko"):
+        self.provider = provider
+        self.language = language
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.stats = {"calls": 0, "cache_hits": 0}
+
+    def _cache_path(self, audio_path: str) -> Path:
+        h = hashlib.sha256()
+        h.update(f"{self.provider.name}|{getattr(self.provider, 'model', '')}|{self.language}|".encode())
+        with open(audio_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return self.cache_dir / f"{h.hexdigest()}.txt"
+
+    def transcribe(self, audio_path: str) -> str:
+        cache = self._cache_path(audio_path)
+        if cache.exists():
+            self.stats["cache_hits"] += 1
+            return cache.read_text(encoding="utf-8")
+        self.stats["calls"] += 1
+        text = self.provider.transcribe(str(audio_path), language=self.language)
+        cache.write_text(text, encoding="utf-8")
+        return text
+
+
+def make_provider(name: str, edit_cfg: Optional[dict] = None) -> STTProvider:
+    """edit_cfg = settings['edit'] (whisper_model, model_gemini 등)."""
+    edit_cfg = edit_cfg or {}
+    if name == "whisper":
+        return FasterWhisperSTT(model_size=edit_cfg.get("whisper_model", "small"))
+    if name == "gemini":
+        return GeminiSTT(model=edit_cfg.get("model_gemini", "gemini-2.5-flash"))
+    if name == "openai":
+        return OpenAISTT()
+    return StubSTT()

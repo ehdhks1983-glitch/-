@@ -50,6 +50,15 @@ DEFAULTS: dict = {
         "fade": True,
         "highlight_color": "#FFD400",
     },
+    "edit": {                         # 내 영상 편집 모드 (기획안 v1.5)
+        "stt_provider": "whisper",   # whisper(로컬) | gemini | openai | stub
+        "whisper_model": "small",
+        "model_gemini": "gemini-2.5-flash",
+        "noise_db": -30,             # 무음 판정 임계값
+        "min_silence_s": 0.5,        # 이 이상 지속된 무음만 컷
+        "pad_s": 0.10,               # 발화 앞뒤 여유
+        "layout": "shorts",          # shorts(세로) | keep(원본 비율)
+    },
 }
 
 
