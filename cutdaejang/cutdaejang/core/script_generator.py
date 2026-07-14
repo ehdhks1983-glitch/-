@@ -172,6 +172,76 @@ def suggest_hooks(context: str, n: int = 5, model: str = "gemini-2.5-flash",
     return hooks[:n]
 
 
+HIGHLIGHT_PROMPT = """\
+역할: 유튜브 쇼츠 편집자
+아래는 긴 영상의 자막 목록이야. 각 줄 앞의 번호와 (길이)를 참고해.
+목표: 이 중에서 **가장 임팩트 있고 그 자체로 말이 되는** 자막만 골라 합치면
+약 {target}초짜리 쇼츠가 되게 해. 핵심만 짧고 굵게. 지루한 설명·군더더기는 버려.
+가능하면 도입 훅 → 핵심 → 마무리 흐름이 되도록.
+자막들:
+{lines}
+출력(JSON만): {{"keep":[고른 번호들], "reason":"왜 이렇게 골랐는지 한 줄"}}
+"""
+
+
+def _fmt_sub_lines(subs: list) -> str:
+    out = []
+    for i, s in enumerate(subs):
+        sec = max(0.1, (s.get("end_us", 0) - s.get("start_us", 0)) / 1e6)
+        out.append(f"{i}) ({sec:.1f}초) {s.get('text','')}")
+    return "\n".join(out)
+
+
+def suggest_highlights(subs: list, target_sec: int = 30,
+                       model: str = "gemini-2.5-flash", api_key=None) -> dict:
+    """자막 목록 → 쇼츠용 핵심 자막 번호 골라주기 (Gemini). 키 없으면 ScriptError."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 AI 핵심 추천을 쓸 수 없습니다")
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent"
+    )
+    prompt = HIGHLIGHT_PROMPT.format(target=target_sec, lines=_fmt_sub_lines(subs))
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as e:
+        raise ScriptError(f"핵심 추천 응답 형식 예상 밖: {json.dumps(data)[:200]}") from e
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    obj = json.loads(cleaned)
+    keep = [int(i) for i in obj.get("keep", []) if 0 <= int(i) < len(subs)]
+    return {"keep": sorted(set(keep)), "reason": str(obj.get("reason", ""))}
+
+
+def suggest_highlights_heuristic(subs: list, target_sec: int = 30) -> dict:
+    """키 없이 쓰는 대역 — 글자수(정보량)가 가장 촘촘한 연속 구간을 target초만큼 고른다."""
+    n = len(subs)
+    if not n:
+        return {"keep": [], "reason": "자막이 없습니다"}
+    durs = [max(0.1, (s.get("end_us", 0) - s.get("start_us", 0)) / 1e6) for s in subs]
+    weights = [len((s.get("text") or "").strip()) for s in subs]
+    best_i, best_score = 0, -1.0
+    for i in range(n):  # i에서 시작하는 연속 구간
+        total, score = 0.0, 0.0
+        j = i
+        while j < n and total < target_sec:
+            total += durs[j]
+            score += weights[j]
+            j += 1
+        density = score / max(total, 1.0)
+        if density > best_score:
+            best_score, best_i, best_end = density, i, j
+    keep = list(range(best_i, best_end))
+    return {"keep": keep, "reason": f"정보가 가장 촘촘한 {len(keep)}개 구간을 골랐어요(대략치)"}
+
+
 def suggest_hooks_stub(context: str, n: int = 5) -> list:
     """오프라인 대역 — 템플릿 기반 후보 (키 없이 UI 확인용)."""
     c = context.strip() or "이 영상"

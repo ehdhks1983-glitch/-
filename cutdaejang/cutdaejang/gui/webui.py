@@ -305,8 +305,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
 
 
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
-                    cut_video: str, workdir: str) -> None:
-    """2단계: (수정된) 자막으로 최종 렌더."""
+                    cut_video: str, workdir: str, keep: Optional[list] = None) -> None:
+    """2단계: (수정된) 자막으로 최종 렌더. keep이 일부면 그 구간만 남겨 쇼츠로 재컷."""
     try:
         from ..core import edit_mode  # noqa: PLC0415
         from ..core.orchestrator import build_style  # noqa: PLC0415
@@ -315,6 +315,13 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         _set_job(job_id, status="running", stage="render", frac=0.0, note="")
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         out = str(Path(workdir) / job_id / "edited.mp4")
+        # 핵심 구간만 골랐으면(전체가 아니면) 영상을 그 구간만 다시 잘라 진짜 쇼츠 길이로
+        if keep is not None and 0 < len(keep) < len(subs):
+            _set_job(job_id, stage="cut", frac=0.0,
+                     note=f"고른 {len(keep)}개 구간만 남겨 쇼츠로 자르는 중…")
+            cut_video, subs = edit_mode.rebuild_from_keep(
+                cut_video, subs, keep, str(Path(workdir) / job_id / "short.mp4"),
+            )
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=build_style(settings),
             layout=layout, hook=hook,
@@ -483,13 +490,36 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             ep = job.get("edit_params") or {}
             hook = params.get("hook", ep.get("hook", ""))
+            keep = params.get("keep")  # 고른 구간(번호). None이면 전체 유지
+            if keep is not None:
+                keep = [int(i) for i in keep]
             threading.Thread(
                 target=_do_edit_render,
                 args=(job["id"], params.get("subtitles") or [], hook,
-                      ep.get("layout", "shorts"), job.get("cut_video"), workdir),
+                      ep.get("layout", "shorts"), job.get("cut_video"), workdir, keep),
                 daemon=True,
             ).start()
             self._send_json({"ok": True})
+        elif path == "/api/suggest_highlights":
+            _apply_keys(params)
+            from ..core import script_generator as sg  # noqa: PLC0415
+
+            subs = params.get("subtitles") or []
+            target = int(params.get("target_sec") or 30)
+            if not subs:
+                self._send_json({"error": "자막이 없습니다"}, 400)
+                return
+            try:
+                res = sg.suggest_highlights(subs, target_sec=target)
+                res["ai"] = True
+            except sg.ScriptError:
+                res = sg.suggest_highlights_heuristic(subs, target_sec=target)  # 키 없으면 대략치
+                res["ai"] = False
+            except Exception as e:  # 파싱 등 실패해도 대역으로
+                res = sg.suggest_highlights_heuristic(subs, target_sec=target)
+                res["ai"] = False
+                res["reason"] = res.get("reason", "") + f" (AI 실패: {e})"
+            self._send_json(res)
         elif path == "/api/pick_file":
             try:
                 picked = pick_video_file()
@@ -953,13 +983,19 @@ _HTML = """<!doctype html>
   .playrow select { width:auto; padding:6px 8px; }
   .subrowbtns button { padding:6px 9px; font-size:12px; }
   .subList-scroll { max-height:46vh; overflow-y:auto; padding-right:4px; }
+  .shortsbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:10px;
+               padding:8px 10px; border:1px dashed #3a4157; border-radius:10px; }
+  .shortsbar button { margin:0; }
+  .keepchk { width:18px; height:18px; margin-top:8px; flex:none; cursor:pointer; accent-color:#4266d5; }
+  .subrow.dropped { opacity:0.4; }
+  .subrow.dropped input[type=text] { text-decoration:line-through; }
   .hidden { display:none !important; }
   code { background:#0f1117; padding:2px 6px; border-radius:4px; font-size:12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.9.1)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.10.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1130,6 +1166,19 @@ _HTML = """<!doctype html>
           <span class="hint">← 스페이스바로 정지</span>
         </div>
       </div>
+      <div class="shortsbar">
+        <b style="font-size:13px">✂️ 쇼츠로 줄이기</b>
+        <span class="hint">넣을 핵심 구간만 <b>체크 ☑</b> (나머지는 잘려요)</span>
+        <span class="hint" id="keepInfo" style="color:#7a9bff;font-weight:700">전체</span>
+        <button class="ghost" onclick="selectAll(true,event)">전체 선택</button>
+        <button class="ghost" onclick="selectAll(false,event)">전체 해제</button>
+        <span style="flex:1;min-width:6px"></span>
+        <span class="hint">목표</span>
+        <input type="number" id="hlTarget" value="30" min="5" max="90" style="width:54px;padding:6px">
+        <span class="hint">초</span>
+        <button class="ghost" onclick="aiHighlights(event)" title="AI가 핵심 구간을 골라 체크해줍니다">✨ AI 핵심 추천</button>
+      </div>
+      <div class="hint" id="hlReason" style="margin-top:4px"></div>
       <div id="subList" class="subList-scroll" style="margin-top:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         <button class="ghost" onclick="addSubRow(event)">+ 자막 줄 추가</button>
@@ -1140,7 +1189,7 @@ _HTML = """<!doctype html>
         <textarea id="bulkText" style="min-height:90px" placeholder="대본을 한 줄에 한 자막씩 붙여넣고 아래 버튼을 누르면, 위 자막들의 텍스트가 순서대로 교체됩니다 (타이밍은 유지). 줄이 더 많으면 뒤에 추가돼요."></textarea>
         <button class="ghost" onclick="applyBulk(event)">이 대본으로 자막 텍스트 교체</button>
       </div>
-      <button onclick="renderEdited()">✅ 이 자막으로 완성</button>
+      <button id="renderBtn" onclick="renderEdited()">✅ 이 자막으로 완성</button>
     </div>
 
     <div id="doneBox" class="hidden">
@@ -1327,9 +1376,11 @@ function renderSubRows(){
   const box = $('subList'); box.innerHTML='';
   (window._subs||[]).forEach((sub, i) => {
     const row = document.createElement('div');
-    row.className='subrow subrowbtns'; row.id='subrow'+i;
+    const dropped = sub.keep===false;
+    row.className='subrow subrowbtns'+(dropped?' dropped':''); row.id='subrow'+i;
     row.style.cssText='display:flex;gap:5px;align-items:flex-start;margin-bottom:6px;padding:3px;border-radius:8px';
     row.innerHTML =
+      `<input type="checkbox" class="keepchk" ${dropped?'':'checked'} title="이 구간을 쇼츠에 넣기" onchange="window._subs[${i}].keep=this.checked; renderSubRows(); updateKeepInfo()">`+
       `<button class="ghost" title="이 줄부터 재생" onclick="seekCut(${sub.start_us})">▶</button>`+
       `<span class="hint" style="min-width:50px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
       `<input type="text" style="flex:1" value="${(sub.text||'').replace(/"/g,'&quot;')}" onfocus="pauseCut()" oninput="window._subs[${i}].text=this.value">`+
@@ -1338,6 +1389,42 @@ function renderSubRows(){
       `<button class="ghost" title="삭제" onclick="delSub(${i})">✕</button>`;
     box.appendChild(row);
   });
+  updateKeepInfo();
+}
+// ── 쇼츠 핵심 추출: 고른 구간만 남기기 (v0.10) ──
+function updateKeepInfo(){
+  const info=$('keepInfo'); if(!info) return;
+  const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
+  const kept=subs.filter(s=>s.keep!==false);
+  const dur=kept.reduce((a,s)=>a+(s.end_us-s.start_us),0)/1e6;
+  const btn=$('renderBtn');
+  if(!subs.length){ info.textContent='자막 없음'; if(btn) btn.textContent='✅ 자막 없이 완성'; return; }
+  if(kept.length===subs.length){
+    info.textContent='전체 '+dur.toFixed(1)+'초';
+    if(btn) btn.textContent='✅ 이 자막으로 완성 (전체)';
+  } else {
+    info.textContent='선택 '+kept.length+'/'+subs.length+'줄 · 약 '+dur.toFixed(1)+'초';
+    if(btn) btn.textContent='✂️ 선택 구간만 쇼츠로 완성 (약 '+Math.round(dur)+'초)';
+  }
+}
+function selectAll(on, ev){ if(ev)ev.preventDefault(); (window._subs||[]).forEach(s=>s.keep=on); renderSubRows(); }
+async function aiHighlights(ev){
+  if(ev)ev.preventDefault();
+  const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
+  if(!subs.length){ alert('먼저 자막이 있어야 핵심을 고를 수 있어요'); return; }
+  const target=parseInt($('hlTarget').value||'30');
+  const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='고르는 중…';
+  try{
+    const key=($('editGeminiKey')&&$('editGeminiKey').value)||'';
+    const data=await (await fetch('/api/suggest_highlights',{method:'POST',
+      body:JSON.stringify({subtitles:subs, target_sec:target, gemini_key:key})})).json();
+    if(data.error){ alert(data.error); return; }
+    const keep=new Set(data.keep||[]);
+    let fi=0;
+    (window._subs||[]).forEach(s=>{ if(!(s.text||'').trim()) return; s.keep=keep.has(fi); fi++; });
+    renderSubRows();
+    const r=$('hlReason'); if(r) r.textContent=(data.ai?'✨ AI 추천: ':'ℹ 대략 추천(제미나이 키 넣으면 더 똑똑해져요): ')+(data.reason||'');
+  } finally { btn.disabled=false; btn.textContent=old; }
 }
 function seekCut(us){ const p=$('cutPlayer'); p.currentTime=us/1e6; p.play(); }
 function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return m+':'+String(s).padStart(2,'0'); }
@@ -1404,7 +1491,11 @@ async function pronounceSubs(ev){
 }
 async function renderEdited(){
   const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value})});
+  const keepIdx=[]; subs.forEach((s,i)=>{ if(s.keep!==false) keepIdx.push(i); });
+  if(subs.length && !keepIdx.length){ alert('쇼츠에 넣을 구간을 하나 이상 ☑ 체크하세요'); return; }
+  // 전체 선택(또는 자막 없음)이면 재컷 안 함(null), 일부만이면 그 구간만 남김
+  const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -1611,6 +1702,7 @@ async function poll(){
     cp.onplay = () => { $('playToggle').textContent='⏸ 정지'; };
     cp.onpause = () => { $('playToggle').textContent='▶ 재생'; };
     cp.playbackRate = parseFloat(($('playRate')||{}).value || '1');
+    if($('hlReason')) $('hlReason').textContent='';
     renderSubRows();
     $('noteText').textContent = job.edit_summary || '';
   }

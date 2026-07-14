@@ -160,6 +160,69 @@ def test_dicts_to_subtitles_no_pipe_no_highlight():
     assert subs[0].highlight == ""
 
 
+# ─────────── 쇼츠 핵심 추출 (긴 영상 → 짧고 굵게) ───────────
+
+
+def test_remap_subs_to_ranges_rebases_timeline():
+    from cutdaejang.core.edit_mode import _remap_subs_to_ranges
+    from cutdaejang.spec import Subtitle
+
+    # 컷 타임라인의 자막 2개(2~3초, 8~9초) → 두 구간만 남기면 0부터 재배치
+    kept = [Subtitle("가", 2_000_000, 3_000_000), Subtitle("나", 8_000_000, 9_000_000)]
+    ranges = [(2_000_000, 3_000_000), (8_000_000, 9_000_000)]
+    out = _remap_subs_to_ranges(kept, ranges)
+    assert (out[0].start_us, out[0].end_us) == (0, 1_000_000)
+    assert (out[1].start_us, out[1].end_us) == (1_000_000, 2_000_000)
+
+
+@requires_ffmpeg
+def test_rebuild_from_keep_makes_shorter_video(talk_video, tmp_path):
+    from cutdaejang.core.edit_mode import analyze_video, rebuild_from_keep
+    from cutdaejang.utils import ffmpeg as ff
+
+    analysis = analyze_video(talk_video, tmp_path / "w", _engine(tmp_path))
+    assert len(analysis.subtitles) == 3
+    full_us = ff.probe_duration_us(analysis.cut_video)
+    # 가운데 한 구간만 남김 → 확실히 짧아진다
+    new_video, new_subs = rebuild_from_keep(
+        analysis.cut_video, analysis.subtitles, [1], str(tmp_path / "w" / "short.mp4"),
+    )
+    short_us = ff.probe_duration_us(new_video)
+    assert short_us < full_us
+    assert len(new_subs) == 1
+    assert new_subs[0].start_us < 400_000  # 새 타임라인 0 근처에서 시작
+    assert ff.has_audio_stream(new_video)
+
+
+def test_suggest_highlights_heuristic_picks_densest_within_target():
+    from cutdaejang.core.script_generator import suggest_highlights_heuristic
+
+    subs = [
+        {"text": "짧게", "start_us": 0, "end_us": 5_000_000},               # 5초, 정보 적음
+        {"text": "이건 정보가 아주 많은 핵심 문장입니다", "start_us": 5_000_000, "end_us": 8_000_000},
+        {"text": "이것도 알찬 핵심 내용이에요 정말로", "start_us": 8_000_000, "end_us": 11_000_000},
+        {"text": "음", "start_us": 11_000_000, "end_us": 20_000_000},        # 9초, 정보 거의 없음
+    ]
+    res = suggest_highlights_heuristic(subs, target_sec=8)
+    assert res["keep"]  # 뭔가는 고름
+    # 정보 촘촘한 1,2번을 골라야지 물타기 구간(0,3)만 고르면 안 됨
+    assert 1 in res["keep"] or 2 in res["keep"]
+
+
+def test_suggest_highlights_no_key_raises():
+    import os
+
+    from cutdaejang.core.script_generator import ScriptError, suggest_highlights
+
+    old = os.environ.pop("GEMINI_API_KEY", None)
+    try:
+        with pytest.raises(ScriptError):
+            suggest_highlights([{"text": "x", "start_us": 0, "end_us": 1_000_000}], api_key="")
+    finally:
+        if old:
+            os.environ["GEMINI_API_KEY"] = old
+
+
 @requires_ffmpeg
 def test_analyze_with_script_skips_stt(talk_video, tmp_path):
     from cutdaejang.core.edit_mode import analyze_video

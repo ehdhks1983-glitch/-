@@ -321,6 +321,49 @@ def analyze_video(
     )
 
 
+def _remap_subs_to_ranges(kept: List[Subtitle], ranges: List[tuple]) -> List[Subtitle]:
+    """고른 자막들을 잘라 이어붙인 새 타임라인(0부터)으로 재매핑."""
+    new_start, cursor = [], 0
+    for a, b in ranges:
+        new_start.append(cursor)
+        cursor += (b - a)
+    out: List[Subtitle] = []
+    for s in kept:
+        for (a, b), ns in zip(ranges, new_start):
+            if a <= s.start_us < b:
+                out.append(Subtitle(
+                    text=s.text, highlight=s.highlight,
+                    start_us=ns + (s.start_us - a),
+                    end_us=ns + (min(s.end_us, b) - a),
+                ))
+                break
+    return out
+
+
+def rebuild_from_keep(
+    cut_video: str, subtitles: List[Subtitle], keep_idx: List[int], out_path: str,
+    pad_us: int = 150_000,
+) -> tuple:
+    """검토화면에서 고른 자막(keep_idx)만 남겨 컷 영상을 다시 자른다 → 진짜 쇼츠 길이.
+
+    각 자막 구간을 앞뒤로 살짝(pad) 넉넉히 잡아 말이 잘리지 않게 하고, 인접/겹치는
+    구간은 병합한다. 자막은 새 타임라인으로 재매핑해 반환. (핵심만 짧고 굵게)
+    """
+    kept = [subtitles[i] for i in keep_idx if 0 <= i < len(subtitles)]
+    if not kept:
+        raise ValueError("남길 자막을 하나 이상 선택하세요")
+    dur = ff.probe_duration_us(cut_video)
+    ranges: List[tuple] = []
+    for s in sorted(kept, key=lambda x: x.start_us):
+        a, b = max(0, s.start_us - pad_us), min(dur, s.end_us + pad_us)
+        if ranges and a <= ranges[-1][1]:
+            ranges[-1] = (ranges[-1][0], max(ranges[-1][1], b))
+        else:
+            ranges.append((a, b))
+    new_video = video_editor.cut_and_concat(cut_video, ranges, out_path)
+    return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
+
+
 def render_from_analysis(
     cut_video: str,
     subtitles: List[Subtitle],
