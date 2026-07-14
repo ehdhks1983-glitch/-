@@ -8,6 +8,39 @@ from cutdaejang.utils import ffmpeg as ff
 from tests.conftest import requires_ffmpeg
 
 
+def test_resolve_input_video(tmp_path):
+    # 파일 직접 지정
+    f = tmp_path / "clip.mp4"
+    f.write_bytes(b"x")
+    assert ve.resolve_input_video(str(f)) == str(f)
+    # 따옴표 감싼 경로 ("경로로 복사" 형식)
+    assert ve.resolve_input_video(f'"{f}"') == str(f)
+
+
+def test_resolve_input_video_folder_picks_latest(tmp_path):
+    import os
+    import time
+
+    (tmp_path / "old.mp4").write_bytes(b"x")
+    time.sleep(0.02)
+    (tmp_path / "new.mov").write_bytes(b"x")
+    # mtime 명시적으로 조정
+    os.utime(tmp_path / "old.mp4", (1, 1))
+    picked = ve.resolve_input_video(str(tmp_path))
+    assert picked.endswith("new.mov")  # 가장 최근 영상
+
+
+def test_resolve_input_video_folder_no_video(tmp_path):
+    (tmp_path / "readme.txt").write_bytes(b"x")
+    with pytest.raises(ValueError, match="영상 파일이 없습니다"):
+        ve.resolve_input_video(str(tmp_path))
+
+
+def test_resolve_input_video_missing():
+    with pytest.raises(ValueError, match="영상을 찾을 수 없습니다"):
+        ve.resolve_input_video("/nonexistent/path/x.mp4")
+
+
 def test_parse_silences():
     text = (
         "[silencedetect] silence_start: 2.1\n"
