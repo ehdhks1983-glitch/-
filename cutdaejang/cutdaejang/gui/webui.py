@@ -959,7 +959,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.9.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.9.1)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1112,7 +1112,8 @@ _HTML = """<!doctype html>
 
     <div id="subEditBox" class="hidden">
       <div style="font-weight:700;margin-bottom:4px">✏️ 자막 검토·수정</div>
-      <div class="hint">틀린 자막을 고치세요. <b>스페이스바</b>=재생/정지, 각 줄 <b>▶</b>=그 지점부터 듣기, <b>✂</b>=줄 나누기. (자막 없이 완성하려면 전부 비우고 완성)</div>
+      <div class="hint">틀린 자막을 고치세요. 자막 칸을 누르면 <b>영상이 자동으로 멈춥니다</b>. <b>스페이스바</b>=재생/정지, 각 줄 <b>▶</b>=그 지점부터 듣기, <b>✂</b>=줄 나누기. (자막 없이 완성하려면 전부 비우고 완성)</div>
+      <div class="hint">💛 강조(노란 글씨)를 넣으려면 문장 끝에 <b>| 단어</b> — 예: <code>안녕하세요 곰대리 곰부장입니다 | 곰대리</code></div>
       <div class="playbar">
         <video id="cutPlayer" controls playsinline></video>
         <div class="playrow">
@@ -1331,7 +1332,7 @@ function renderSubRows(){
     row.innerHTML =
       `<button class="ghost" title="이 줄부터 재생" onclick="seekCut(${sub.start_us})">▶</button>`+
       `<span class="hint" style="min-width:50px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
-      `<input type="text" style="flex:1" value="${(sub.text||'').replace(/"/g,'&quot;')}" oninput="window._subs[${i}].text=this.value">`+
+      `<input type="text" style="flex:1" value="${(sub.text||'').replace(/"/g,'&quot;')}" onfocus="pauseCut()" oninput="window._subs[${i}].text=this.value">`+
       `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆</button>`+
       `<button class="ghost" title="이 줄을 둘로 나누기" onclick="splitSub(${i})">✂</button>`+
       `<button class="ghost" title="삭제" onclick="delSub(${i})">✕</button>`;
@@ -1341,6 +1342,7 @@ function renderSubRows(){
 function seekCut(us){ const p=$('cutPlayer'); p.currentTime=us/1e6; p.play(); }
 function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return m+':'+String(s).padStart(2,'0'); }
 function togglePlay(ev){ if(ev&&ev.preventDefault)ev.preventDefault(); const p=$('cutPlayer'); if(!p||!p.src) return; if(p.paused) p.play(); else p.pause(); }
+function pauseCut(){ const p=$('cutPlayer'); if(p && !p.paused) p.pause(); }  // 자막 편집 시작하면 자동 정지
 function setPlayRate(){ const p=$('cutPlayer'); if(p) p.playbackRate=parseFloat($('playRate').value||'1'); }
 function splitSub(i){
   const s=window._subs, cur=s[i]; if(!cur) return;
@@ -1596,7 +1598,11 @@ async function poll(){
   if(job.status === 'review_subtitle' && !window._subLoaded){
     clearInterval(timer); timer = null;
     window._subLoaded = true;
-    window._subs = (job.subtitles || []).map(s => ({...s}));
+    // 강조 단어가 있으면 "문장 | 단어" 형태로 보여줘 그 자리에서 수정 가능
+    window._subs = (job.subtitles || []).map(s => ({
+      text: s.highlight ? (s.text + ' | ' + s.highlight) : s.text,
+      start_us: s.start_us, end_us: s.end_us,
+    }));
     $('subEditBox').classList.remove('hidden');
     $('bulkBox').classList.add('hidden'); $('bulkText').value='';
     const cp=$('cutPlayer');

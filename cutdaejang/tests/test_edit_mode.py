@@ -122,6 +122,44 @@ def test_align_script_ignores_blank_lines():
     assert [s.text for s in subs] == ["A", "B"]
 
 
+# ─────────── 편집모드 강조 단어(골드) — 사용자 레퍼런스 스타일 ───────────
+
+
+def test_dicts_to_subtitles_parses_highlight_pipe():
+    from cutdaejang.core.edit_mode import dicts_to_subtitles
+
+    subs = dicts_to_subtitles([
+        {"text": "안녕하세요 곰대리 곰부장입니다 | 곰대리", "start_us": 0, "end_us": 2_000_000},
+    ])
+    assert len(subs) == 1
+    assert subs[0].text == "안녕하세요 곰대리 곰부장입니다"  # | 뒤는 텍스트에서 제거
+    assert subs[0].highlight == "곰대리"                      # 골드로 렌더될 단어
+
+
+def test_dicts_to_subtitles_explicit_highlight_key():
+    from cutdaejang.core.edit_mode import dicts_to_subtitles
+
+    subs = dicts_to_subtitles([
+        {"text": "가격은 육천구백원", "highlight": "육천구백원", "start_us": 0, "end_us": 1_000_000},
+    ])
+    assert subs[0].highlight == "육천구백원"
+
+
+def test_subtitles_to_dicts_roundtrips_highlight():
+    from cutdaejang.core.edit_mode import dicts_to_subtitles, subtitles_to_dicts
+
+    subs = dicts_to_subtitles([{"text": "문장 | 강조", "start_us": 0, "end_us": 1_000_000}])
+    d = subtitles_to_dicts(subs)[0]
+    assert d["text"] == "문장" and d["highlight"] == "강조"
+
+
+def test_dicts_to_subtitles_no_pipe_no_highlight():
+    from cutdaejang.core.edit_mode import dicts_to_subtitles
+
+    subs = dicts_to_subtitles([{"text": "그냥 자막", "start_us": 0, "end_us": 1_000_000}])
+    assert subs[0].highlight == ""
+
+
 @requires_ffmpeg
 def test_analyze_with_script_skips_stt(talk_video, tmp_path):
     from cutdaejang.core.edit_mode import analyze_video

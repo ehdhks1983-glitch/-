@@ -185,15 +185,32 @@ class EditAnalysis:
 
 
 def subtitles_to_dicts(subs: List[Subtitle]) -> List[dict]:
-    return [{"text": s.text, "start_us": s.start_us, "end_us": s.end_us} for s in subs]
+    return [
+        {"text": s.text, "start_us": s.start_us, "end_us": s.end_us, "highlight": s.highlight}
+        for s in subs
+    ]
+
+
+def split_highlight(text: str) -> tuple:
+    """``문장 | 강조단어`` → (문장, 강조단어). 세로줄(|)은 항상 구분자로 취급.
+
+    AI 모드와 동일한 관례. 강조단어가 문장에 실제로 들어있어야 렌더 때 색이 입혀진다.
+    """
+    if "|" in text:
+        head, _, tail = text.rpartition("|")
+        return head.strip(), tail.strip()
+    return text.strip(), ""
 
 
 def dicts_to_subtitles(dicts: List[dict]) -> List[Subtitle]:
     out = []
     for d in dicts:
-        text = (d.get("text") or "").strip()
+        text, hl = split_highlight((d.get("text") or "").strip())
+        hl = (d.get("highlight") or hl or "").strip()
         if text:  # 빈 자막은 제외
-            out.append(Subtitle(text=text, start_us=int(d["start_us"]), end_us=int(d["end_us"])))
+            out.append(Subtitle(
+                text=text, start_us=int(d["start_us"]), end_us=int(d["end_us"]), highlight=hl,
+            ))
     return out
 
 
