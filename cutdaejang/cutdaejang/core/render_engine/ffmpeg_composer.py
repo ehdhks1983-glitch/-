@@ -23,8 +23,8 @@ from ...utils.timefmt import US_PER_SECOND, us_to_seconds_str
 
 @dataclass
 class RenderOptions:
-    crf: int = 19               # 품질 (낮을수록 고품질·대용량)
-    preset: str = "medium"
+    crf: int = 20               # 품질 (낮을수록 고품질·대용량)
+    preset: str = "fast"        # 쇼츠 짧은 영상 — medium보다 빠르고 화질 차이 미미
     use_gpu: str = "auto"       # "auto" | "on" | "off"
     audio_bitrate: str = "192k"
 
@@ -69,9 +69,13 @@ def build_command(
             z_expr = f"min(1+{amt}*on/{total_frames},1+{amt})"
         else:  # zoom_out: 시작을 확대 상태에서 1.0으로
             z_expr = f"max(1+{amt}-{amt}*on/{total_frames},1)"
+        # 지터 방지용 사전 업스케일. 2배는 저사양에서 과도하게 느려 1.5배로 낮춤
+        # (60초 기준 38s→29s, 화질 차이 무시 가능). 짝수 보정.
+        up_w = int(c.w * 1.5) & ~1
+        up_h = int(c.h * 1.5) & ~1
         filters.append(
-            f"[0:v]scale={c.w * 2}:{c.h * 2}:force_original_aspect_ratio=increase,"
-            f"crop={c.w * 2}:{c.h * 2},"
+            f"[0:v]scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
+            f"crop={up_w}:{up_h},"
             f"zoompan=z='{z_expr}'"
             f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
             f":d={total_frames}:s={c.w}x{c.h}:fps={c.fps},setsar=1[bg]"

@@ -683,7 +683,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.4)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.4.1)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="card" id="formCard">
@@ -1010,7 +1010,11 @@ async function poll(){
   $('barFill').style.width = (job.status==='ok'||job.status==='partial' ? 100 : Math.round(frac*100)) + '%';
   $('stageText').textContent = (STAGE_KO[job.stage] || job.stage || '') +
       (job.status==='running' && job.stage!=='review' ? ` — ${Math.round(frac*100)}%` : '');
-  $('noteText').textContent = job.status === 'running' ? (job.note || '') : '';
+  let note = job.status === 'running' ? (job.note || '') : '';
+  // 렌더 초반 0%가 '멈춤'으로 보이지 않도록 안내 (배경 줌은 시간이 걸림)
+  if(job.status==='running' && job.stage==='render' && frac < 0.02)
+    note = note || '영상 렌더링 준비 중… 배경 줌 효과는 사양에 따라 1~5분 걸릴 수 있어요. 검은 창을 닫지 마세요.';
+  $('noteText').textContent = note;
 
   if(job.status === 'awaiting_review' && job.script){
     clearInterval(timer); timer = null;
