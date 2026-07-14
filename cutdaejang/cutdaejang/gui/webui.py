@@ -221,7 +221,11 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
         )
         _record_history(workdir, result, opts)
     except Exception as e:
-        _set_job(job_id, status="failed", errors=[str(e)])
+        import logging  # noqa: PLC0415
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error("작업 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed", errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
 def _run_edit(job_id: str, params: dict, workdir: str) -> None:
@@ -279,7 +283,11 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             errors=result.errors,
         )
     except Exception as e:
-        _set_job(job_id, status="failed", errors=[str(e)])
+        import logging  # noqa: PLC0415
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error("작업 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed", errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
 def _run_generate(job_id: str, params: dict, workdir: str) -> None:
@@ -308,7 +316,11 @@ def _run_generate(job_id: str, params: dict, workdir: str) -> None:
                         "background_prompt": script.background_prompt},
             )
     except Exception as e:
-        _set_job(job_id, status="failed", errors=[str(e)])
+        import logging  # noqa: PLC0415
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error("작업 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed", errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -519,8 +531,12 @@ class _Handler(BaseHTTPRequestHandler):
         from ..utils import ffmpeg as ff  # noqa: PLC0415
 
         lines = [
+            "=" * 60,
             f"컷대장 진단 리포트  {dt.datetime.now().isoformat(timespec='seconds')}",
             f"버전: v{__version__} / Python {platform.python_version()} / {platform.platform()}",
+            "=" * 60,
+            "",
+            "── 환경 ──",
         ]
         try:
             ver = subprocess.run([ff.ffmpeg_bin(), "-version"], capture_output=True, timeout=15)
@@ -529,23 +545,47 @@ class _Handler(BaseHTTPRequestHandler):
             lines.append(f"ffmpeg: ✘ {e}")
         env = _env_check()
         lines.append(f"libass 폰트 동봉: {'OK' if env['font'] else '없음'}")
+        try:
+            lines.append(f"GPU 인코딩(nvenc): {'사용가능' if ff.nvenc_available() else '미감지(libx264)'}")
+        except Exception as e:
+            lines.append(f"GPU 감지 오류: {e}")
         for name, on in self._state()["keys"].items():
             lines.append(f"{name} 키: {'설정됨' if on else '없음'}")
+        lines.append(f"음성인식 사용가능: {_stt_available()}")
+
         lines.append("")
-        lines.append("── 최근 작업 5건 ──")
-        for r in self._state()["history"][:5]:
+        lines.append("── 설정(settings.json) ──")
+        try:
+            lines.append(json.dumps(config.load_settings(), ensure_ascii=False, indent=2))
+        except Exception as e:
+            lines.append(f"설정 로드 오류: {e}")
+
+        lines.append("")
+        lines.append("── 최근 작업 8건 ──")
+        for r in self._state()["history"][:8]:
             lines.append(f"{r['created_at']}  [{r['status']}] {r['title']} (목소리: {r['tts_provider'] or '-'})")
+
+        # 진행 중/방금 끝난 작업의 전체 오류(자르지 않음) + 파라미터(키 제외)
         with _LOCK:
-            for j in list(_JOBS.values())[-3:]:
-                if j.get("errors"):
-                    lines.append("")
-                    lines.append(f"── 오류 ({j['id']}) ──")
-                    lines += [str(e)[:500] for e in j["errors"]]
+            recent = list(_JOBS.values())[-5:]
+        for j in recent:
+            if j.get("errors") or j.get("status") == "failed":
+                lines.append("")
+                lines.append(f"── 작업 상세 ({j['id']}, 상태={j.get('status')}) ──")
+                p = dict(j.get("params") or {})
+                for k in ("gemini_key", "openai_key"):
+                    if p.get(k):
+                        p[k] = "***"
+                if p:
+                    lines.append("입력: " + json.dumps(p, ensure_ascii=False))
+                for e in (j.get("errors") or []):
+                    lines.append(str(e))  # 전체 (원본 오류·stderr 꼬리 포함)
+
         log_file = Path(workdir) / "logs" / "cutdaejang.log"
         if log_file.exists():
             lines.append("")
-            lines.append("── 로그 꼬리 ──")
-            lines += log_file.read_text(encoding="utf-8", errors="replace").splitlines()[-60:]
+            lines.append("── 로그 (마지막 200줄, 전체 오류 추적 포함) ──")
+            lines += log_file.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
 
         out = Path(workdir) / f"진단리포트_{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
         out.write_text("\n".join(lines), encoding="utf-8")
@@ -815,7 +855,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5.2)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.5.3)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
