@@ -939,13 +939,15 @@ _HTML = """<!doctype html>
   .hookcands button { width:100%; text-align:left; background:#12305a; border:1px solid #2c4a7a;
     color:#dfe7f5; border-radius:8px; padding:9px 12px; font-size:14px; cursor:pointer; margin:0; }
   .hookcands button:hover { background:#183c72; }
+  .subrow-active { background:#243052; box-shadow:0 0 0 1px #4266d5 inset; }
+  .subrow-active input { border-color:#4266d5; }
   .hidden { display:none !important; }
   code { background:#0f1117; padding:2px 6px; border-radius:4px; font-size:12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.8)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.8.1)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1276,7 +1278,8 @@ function renderSubRows(){
   const box = $('subList'); box.innerHTML='';
   (window._subs||[]).forEach((sub, i) => {
     const row = document.createElement('div');
-    row.style.cssText='display:flex;gap:6px;align-items:flex-start;margin-bottom:6px';
+    row.className='subrow'; row.id='subrow'+i;
+    row.style.cssText='display:flex;gap:6px;align-items:flex-start;margin-bottom:6px;padding:3px;border-radius:8px';
     row.innerHTML =
       `<span class="hint" style="min-width:74px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
       `<input type="text" style="flex:1" value="${(sub.text||'').replace(/"/g,'&quot;')}" oninput="window._subs[${i}].text=this.value">`+
@@ -1286,6 +1289,21 @@ function renderSubRows(){
   });
 }
 function seekCut(us){ const p=$('cutPlayer'); p.currentTime=us/1e6; p.play(); }
+// 재생 위치 따라 현재 말하는 자막 줄 하이라이트 (+ 화면 밖이면 스크롤)
+function hlActiveSub(){
+  const p=$('cutPlayer'); if(!p) return;
+  const us=p.currentTime*1e6;
+  let active=-1;
+  (window._subs||[]).forEach((s,i)=>{ if(us>=s.start_us && us<s.end_us) active=i; });
+  document.querySelectorAll('.subrow').forEach((r,i)=>{
+    const on=(i===active);
+    r.classList.toggle('subrow-active', on);
+    if(on){
+      const rect=r.getBoundingClientRect();
+      if(rect.top<80 || rect.bottom>window.innerHeight-40) r.scrollIntoView({block:'center', behavior:'smooth'});
+    }
+  });
+}
 function mergeSub(i){
   if(i<=0) return;
   const s=window._subs;
@@ -1504,6 +1522,7 @@ async function poll(){
     window._subs = (job.subtitles || []).map(s => ({...s}));
     $('subEditBox').classList.remove('hidden');
     $('cutPlayer').src = '/cutvideo/' + job.id + '?t=' + Date.now();
+    $('cutPlayer').ontimeupdate = hlActiveSub;  // 재생 위치 따라 자막 하이라이트
     renderSubRows();
     $('noteText').textContent = job.edit_summary || '';
   }
