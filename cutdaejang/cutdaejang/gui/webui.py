@@ -1199,7 +1199,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.22.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.22.1)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1638,9 +1638,9 @@ async function suggestHooks(ev, topicId, targetId){
   const btn = ev.target; btn.disabled = true; const old = btn.textContent; btn.textContent = '추천 중…';
   const cands = $(targetId + 'Cands'); cands.innerHTML = '';
   try {
-    const key = ($('geminiKey') && $('geminiKey').value) || ($('editGeminiKey') && $('editGeminiKey').value) || '';
+    const key = ensureGeminiKey();
     const data = await (await fetch('/api/suggest_hooks', {method:'POST',
-      body: JSON.stringify({context: ctx, gemini_key: key})})).json();
+      body: JSON.stringify({context: ctx, gemini_key: key, save_key: true})})).json();
     if(data.error){ alert(data.error); return; }
     (data.hooks || []).forEach(h => {
       const b = document.createElement('button');
@@ -1695,32 +1695,44 @@ async function aiHighlights(ev){
   const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
   if(!subs.length){ alert('먼저 자막이 있어야 핵심을 고를 수 있어요'); return; }
   const target=parseInt($('hlTarget').value||'30');
+  const key=ensureGeminiKey();  // 키 없으면 붙여넣기 창(취소하면 대략 추천으로 진행)
   const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='고르는 중…';
   try{
-    const key=($('editGeminiKey')&&$('editGeminiKey').value)||'';
     const data=await (await fetch('/api/suggest_highlights',{method:'POST',
-      body:JSON.stringify({subtitles:subs, target_sec:target, gemini_key:key})})).json();
+      body:JSON.stringify({subtitles:subs, target_sec:target, gemini_key:key, save_key:true})})).json();
     if(data.error){ alert(data.error); return; }
     const keep=new Set(data.keep||[]);
     let fi=0;
     (window._subs||[]).forEach(s=>{ if(!(s.text||'').trim()) return; s.keep=keep.has(fi); fi++; });
     renderSubRows();
-    const r=$('hlReason'); if(r) r.textContent=(data.ai?'✨ AI 추천: ':'ℹ 대략 추천(제미나이 키 넣으면 더 똑똑해져요): ')+(data.reason||'');
+    if(data.ai) window._hasGeminiKey=true;
+    const r=$('hlReason'); if(r) r.textContent=(data.ai?'✨ AI 추천: ':'ℹ 대략 추천(제미나이 키 넣으면 문맥으로 골라요): ')+(data.reason||'');
   } finally { btn.disabled=false; btn.textContent=old; }
 }
+// 제미나이 키 확보 — 저장된 키 없으면 그 자리에서 붙여넣기 (PC에 저장 → 다음부턴 안 물음)
+function ensureGeminiKey(){
+  if(window._hasGeminiKey) return '';
+  const k=(($('editGeminiKey')||{}).value||'') || (($('geminiKey')||{}).value||'');
+  if(k.trim()) return k.trim();
+  const v=prompt('제미나이(Gemini) API 키를 붙여넣어 주세요.\\n\\n· 무료 발급: aistudio.google.com/apikey\\n· 이 PC에 저장돼 다음부터는 묻지 않아요');
+  return (v||'').trim();
+}
+
 // AI로 자막(대본) 다듬기 — 발음 오인식을 문맥 기반으로 자연스럽게 교정
 async function refineSubs(ev){
   if(ev)ev.preventDefault();
   const idxs=[]; (window._subs||[]).forEach((s,i)=>{ if((s.text||'').trim()) idxs.push(i); });
   if(!idxs.length){ alert('다듬을 자막이 없습니다'); return; }
   if(!confirm(idxs.length+'줄을 AI가 문맥에 맞게 자연스럽게 고칩니다. 계속할까요?\\n(제미나이 키가 필요해요)')) return;
+  const key=ensureGeminiKey();
+  if(!key && !window._hasGeminiKey){ alert('제미나이 키가 있어야 쓸 수 있어요. (무료 발급: aistudio.google.com/apikey)'); return; }
   const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='다듬는 중…';
   try{
-    const key=($('editGeminiKey')&&$('editGeminiKey').value)||'';
     const subs=idxs.map(i=>({text:window._subs[i].text}));
     const data=await (await fetch('/api/refine_subtitles',{method:'POST',
-      body:JSON.stringify({subtitles:subs, context:$('editHook').value||'', gemini_key:key})})).json();
+      body:JSON.stringify({subtitles:subs, context:$('editHook').value||'', gemini_key:key, save_key:true})})).json();
     if(data.error){ alert(data.error); return; }
+    window._hasGeminiKey=true;
     (data.lines||[]).forEach((t,k)=>{ if(idxs[k]!=null && t) window._subs[idxs[k]].text=t; });
     renderSubRows();
     const r=$('hlReason'); if(r) r.textContent='🪄 AI가 대본을 다듬었어요. 어색한 부분은 직접 더 고치세요.';
@@ -1913,12 +1925,12 @@ async function suggestThumb(ev){
   if(ev)ev.preventDefault();
   const ctx=($('thumbTopic').value||'').trim() || ($('thumbTitle').value||'').trim();
   if(!ctx){ alert('주제/키워드를 먼저 입력하세요'); return; }
+  const key=ensureGeminiKey();
   const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='추천 중…';
   const cands=$('thumbCands'); cands.innerHTML='';
   try{
-    const key=($('geminiKey')&&$('geminiKey').value)||($('editGeminiKey')&&$('editGeminiKey').value)||'';
     const data=await (await fetch('/api/suggest_thumbnail',{method:'POST',
-      body:JSON.stringify({context:ctx, gemini_key:key})})).json();
+      body:JSON.stringify({context:ctx, gemini_key:key, save_key:true})})).json();
     if(data.error){ alert(data.error); return; }
     (data.copies||[]).forEach(c=>{
       const b=document.createElement('button');

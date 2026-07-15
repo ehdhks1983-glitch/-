@@ -274,26 +274,53 @@ def refine_subtitles(texts: list, context: str = "",
     return out
 
 
+# 후킹 신호 키워드 — 쇼츠에서 시선을 잡는 표현들
+_HOOK_WORDS = (
+    "왜", "어떻게", "비법", "꿀팁", "충격", "진짜", "무료", "방법", "핵심", "주의",
+    "실수", "비밀", "최고", "제일", "공개", "후기", "추천", "정리", "결론", "반전",
+    "이것만", "하지 마", "안 됩니다", "됩니다", "만에", "단 ",
+)
+
+
+def _hook_score(text: str, dur: float, idx: int, total: int) -> float:
+    """자막 한 줄의 '후킹 점수' — 숫자·질문·키워드·정보밀도·위치 보정."""
+    t = text.strip()
+    score = min(len(t) / max(dur, 0.5), 8.0)          # 정보 밀도 (상한)
+    if re.search(r"\d", t):
+        score += 3.0                                   # 숫자 = 썸네일급 훅
+    if "?" in t:
+        score += 2.5                                   # 궁금증 유발
+    if "!" in t:
+        score += 1.5
+    score += sum(1.5 for w in _HOOK_WORDS if w in t)
+    if idx == 0:
+        score += 2.0                                   # 도입부(첫 마디) 보정
+    if total > 2 and idx == total - 1:
+        score += 1.0                                   # 마무리(결론) 소폭 보정
+    return score
+
+
 def suggest_highlights_heuristic(subs: list, target_sec: int = 30) -> dict:
-    """키 없이 쓰는 대역 — 글자수(정보량)가 가장 촘촘한 연속 구간을 target초만큼 고른다."""
+    """키 없이 쓰는 대역 — 영상 전체에서 '후킹 요소'(숫자·질문·키워드)가 강한
+    구간들을 골라 모은다 (연속 구간이 아니라 임팩트 순, 시간순으로 재배열)."""
     n = len(subs)
     if not n:
         return {"keep": [], "reason": "자막이 없습니다"}
-    durs = [max(0.1, (s.get("end_us", 0) - s.get("start_us", 0)) / 1e6) for s in subs]
-    weights = [len((s.get("text") or "").strip()) for s in subs]
-    best_i, best_score = 0, -1.0
-    for i in range(n):  # i에서 시작하는 연속 구간
-        total, score = 0.0, 0.0
-        j = i
-        while j < n and total < target_sec:
-            total += durs[j]
-            score += weights[j]
-            j += 1
-        density = score / max(total, 1.0)
-        if density > best_score:
-            best_score, best_i, best_end = density, i, j
-    keep = list(range(best_i, best_end))
-    return {"keep": keep, "reason": f"정보가 가장 촘촘한 {len(keep)}개 구간을 골랐어요(대략치)"}
+    scored = []
+    for i, s in enumerate(subs):
+        dur = max(0.1, (s.get("end_us", 0) - s.get("start_us", 0)) / 1e6)
+        scored.append((_hook_score(str(s.get("text") or ""), dur, i, n), i, dur))
+    scored.sort(key=lambda x: (-x[0], x[1]))           # 점수 높은 순
+    keep, total = [], 0.0
+    for _score, i, dur in scored:
+        if total >= target_sec:
+            break
+        keep.append(i)
+        total += dur
+    keep.sort()                                        # 영상 순서 유지
+    return {"keep": keep,
+            "reason": (f"후킹 요소(숫자·질문·키워드)가 강한 {len(keep)}개 구간을 모아 "
+                       f"약 {int(total)}초 (대략치 — 제미나이 키를 넣으면 문맥까지 봐요)")}
 
 
 THUMB_PROMPT = """\
