@@ -61,6 +61,25 @@ def test_write_ass_hook_band_default_on(tmp_path):
     assert title.split(",")[15] == "3"          # BorderStyle 15번 필드
 
 
+def test_wrap_text_two_lines():
+    from cutdaejang.core.render_engine.ass_writer import wrap_text
+
+    out = wrap_text("오늘은 우리 동네 라멘 맛집에 다녀왔는데 정말 맛있었어요", 16)
+    assert out.count("\n") == 1                       # 2줄로 나뉨
+    assert wrap_text("짧다", 16) == "짧다"             # 짧으면 그대로
+    assert "\n" not in wrap_text("아주 긴 문장인데 끄면 그대로 나온다", 0)  # 0=끔
+    assert wrap_text("이미\n줄바꿈", 16) == "이미\n줄바꿈"  # 이미 줄바꿈 있으면 유지
+
+
+def test_dialogue_wraps_plain_long_text():
+    from cutdaejang.core.render_engine.ass_writer import dialogue_text
+    from cutdaejang.spec import Style, Subtitle
+
+    st = Style(fade=False, wrap_chars=12)
+    body = dialogue_text(Subtitle("아주 긴 자막 문장이라서 두 줄로 나뉘어야 한다", 0, 1_000_000), st)
+    assert "\\N" in body                              # ASS 줄바꿈 들어감
+
+
 def test_colorize_markup_multi_color():
     from cutdaejang.core.render_engine.ass_writer import colorize_markup
 

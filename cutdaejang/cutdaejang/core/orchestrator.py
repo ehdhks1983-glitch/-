@@ -99,6 +99,7 @@ def build_style(settings: dict) -> Style:
         highlight_color=sub.get("highlight_color", "#FFD400"),
         band=sub.get("band", False),
         hook_band=sub.get("hook_band", True),
+        wrap_chars=sub.get("wrap_chars", 16),
     )
 
 

@@ -1077,7 +1077,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.16.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.17.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1339,6 +1339,7 @@ _HTML = """<!doctype html>
       <div><label>자막 크기(px)</label><input type="number" id="setFontSize" min="40" max="120"></div>
       <div><label>외곽선 두께</label><input type="number" id="setOutline" min="0" max="8"></div>
       <div><label>자막 세로 여백</label><input type="number" id="setMarginV" min="100" max="800" step="10"></div>
+      <div><label>한 줄 최대 글자수 <span class="hint">(넘으면 2줄, 0=끔)</span></label><input type="number" id="setWrapChars" min="0" max="40"></div>
     </div>
     <div class="row">
       <div><label>배경 모션</label>
@@ -1779,6 +1780,7 @@ function fillSettings(s){
   $('setFontSize').value = s.subtitle.font_size;
   $('setOutline').value = s.subtitle.outline;
   $('setMarginV').value = s.subtitle.margin_v;
+  $('setWrapChars').value = s.subtitle.wrap_chars != null ? s.subtitle.wrap_chars : 16;
   $('setFade').checked = !!s.subtitle.fade;
   $('setHookBand').checked = s.subtitle.hook_band !== false;
   $('setBand').checked = !!s.subtitle.band;
@@ -1797,7 +1799,8 @@ async function saveSettings(){
     subtitle: {font_size: +$('setFontSize').value, outline: +$('setOutline').value,
                margin_v: +$('setMarginV').value, fade: $('setFade').checked,
                highlight_color: $('setHlColor').value.toUpperCase(),
-               hook_band: $('setHookBand').checked, band: $('setBand').checked},
+               hook_band: $('setHookBand').checked, band: $('setBand').checked,
+               wrap_chars: +$('setWrapChars').value},
     bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,
          ai_image: $('setAiImage').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},

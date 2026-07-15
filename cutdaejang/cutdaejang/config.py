@@ -51,6 +51,7 @@ DEFAULTS: dict = {
         "highlight_color": "#FFD400",
         "band": False,                # 자막 뒤 배경 띠 (유튜브 썸네일 스타일)
         "hook_band": True,            # 상단 제목 뒤 배경 띠 (기본 켬)
+        "wrap_chars": 16,             # 자막 한 줄 최대 글자수(넘으면 2줄). 0=끔
     },
     "edit": {                         # 내 영상 편집 모드 (기획안 v1.5)
         "stt_provider": "whisper",   # whisper(로컬) | gemini | openai | stub

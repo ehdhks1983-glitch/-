@@ -137,6 +137,23 @@ def hook_dialogue_text(hook: str, style) -> str:
     return escape_ass_text(text)
 
 
+def wrap_text(text: str, max_chars: int) -> str:
+    """한 줄이 너무 길면 2줄로 자동 줄바꿈 (중간 근처 공백에서, 없으면 중간 글자).
+
+    이미 줄바꿈이 있거나 짧으면 그대로. 3줄 넘침·잘림 방지 (자막 가독성).
+    """
+    t = text.strip()
+    if max_chars <= 0 or len(t) <= max_chars or "\n" in t:
+        return t
+    mid, best = len(t) // 2, -1
+    for i, ch in enumerate(t):
+        if ch == " " and (best == -1 or abs(i - mid) < abs(best - mid)):
+            best = i
+    if 0 < best < len(t) - 1:
+        return t[:best].strip() + "\n" + t[best + 1:].strip()
+    return t[:mid] + "\n" + t[mid:]
+
+
 def dialogue_text(sub, style) -> str:
     """자막 본문 조립 — 페이드 태그 + 강조 단어 인라인 컬러 (지시서 PATCH 5).
 
@@ -154,8 +171,8 @@ def dialogue_text(sub, style) -> str:
             + "{\\1c" + _inline_color(style.primary_color) + "}"
             + escape_ass_text(post)
         )
-    else:
-        body = escape_ass_text(sub.text)
+    else:  # 순수 텍스트만 자동 줄바꿈 (강조·마크업 있는 건 사용자 편집 존중)
+        body = escape_ass_text(wrap_text(sub.text, getattr(style, "wrap_chars", 0)))
     if style.fade:
         body = "{\\fad(100,60)}" + body
     return body
