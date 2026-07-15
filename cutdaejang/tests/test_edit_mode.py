@@ -277,6 +277,16 @@ def test_refine_subtitles_preserves_count(monkeypatch):
     assert out[2] == "원본3"                    # 응답에 없는 줄은 원문 유지
 
 
+def test_split_into_clips_grouping():
+    from cutdaejang.core.edit_mode import split_into_clips
+    from cutdaejang.spec import Subtitle
+
+    subs = [Subtitle(f"s{i}", i * 2_000_000, (i + 1) * 2_000_000) for i in range(5)]
+    assert split_into_clips(subs, target_sec=5) == [[0, 1, 2], [3, 4]]
+    assert split_into_clips(subs, target_sec=30) == [[0, 1, 2, 3, 4]]  # 짧으면 1개
+    assert split_into_clips([], target_sec=30) == []
+
+
 @requires_ffmpeg
 def test_render_denoise_keeps_audio(talk_video, tmp_path):
     from cutdaejang.core.edit_mode import analyze_video, render_from_analysis

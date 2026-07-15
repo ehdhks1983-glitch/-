@@ -351,6 +351,60 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                  errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
+def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
+                   cut_video: str, workdir: str, target_sec: float = 30.0,
+                   speed: float = 1.0, quality: str = "standard",
+                   denoise=False) -> None:
+    """긴 영상을 목표 길이 단위 쇼츠 여러 개로 분할 렌더 (edited_1..N.mp4)."""
+    try:
+        from ..core import edit_mode  # noqa: PLC0415
+        from ..core.orchestrator import build_style  # noqa: PLC0415
+
+        settings = config.load_settings()
+        subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
+        groups = edit_mode.split_into_clips(subs, target_sec=target_sec)
+        if not groups:
+            _set_job(job_id, status="failed", errors=["나눌 자막이 없습니다"])
+            return
+        job_dir = Path(workdir) / job_id
+        outs, errors = [], []
+        style = build_style(settings)
+        for gi, idxs in enumerate(groups, 1):
+            _set_job(job_id, status="running", stage="render", frac=0.0,
+                     note=f"쇼츠 {gi}/{len(groups)} 만드는 중…")
+            try:
+                clip_video, clip_subs = edit_mode.rebuild_from_keep(
+                    cut_video, subs, idxs, str(job_dir / f"short_{gi}.mp4"),
+                )
+                out = str(job_dir / f"edited_{gi}.mp4")
+                base = (gi - 1) / len(groups)
+                r = edit_mode.render_from_analysis(
+                    clip_video, clip_subs, out, style=style, layout=layout,
+                    hook=hook, speed=speed, quality=quality, denoise=denoise,
+                    progress_cb=lambda f, b=base, n=len(groups): _set_job(
+                        job_id, stage="render", frac=b + f / n),
+                )
+                if Path(out).exists():
+                    outs.append(out)
+                errors += r.errors
+            except Exception as ce:  # 한 클립 실패해도 나머지는 계속
+                errors.append(f"쇼츠 {gi} 실패: {ce}")
+        _set_job(
+            job_id,
+            status="ok" if outs and not errors else "partial" if outs else "failed",
+            stage="done", frac=1.0, job_dir=str(job_dir),
+            note=f"쇼츠 {len(outs)}개 완성" if outs else "",
+            mp4=outs[0] if outs else None, mp4s=outs, errors=errors,
+        )
+    except Exception as e:
+        import logging  # noqa: PLC0415
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error("분할 렌더 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed",
+                 errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+
+
 def _run_generate(job_id: str, params: dict, workdir: str) -> None:
     """대본 생성 → 자동 모드면 즉시 파이프라인, 검토 모드면 대기 (기획안 §1.3)."""
     try:
@@ -557,6 +611,27 @@ class _Handler(BaseHTTPRequestHandler):
                 res["ai"] = False
                 res["reason"] = res.get("reason", "") + f" (AI 실패: {e})"
             self._send_json(res)
+        elif path == "/api/edit_split":
+            job = _get_job(params.get("job_id", ""))
+            if not job or job.get("status") != "review_subtitle":
+                self._send_json({"error": "자막 검토 중인 작업이 아닙니다"}, 400)
+                return
+            ep = job.get("edit_params") or {}
+            try:
+                target = float(params.get("target_sec") or 30)
+                speed = float(params.get("speed") or 1.0)
+            except (TypeError, ValueError):
+                target, speed = 30.0, 1.0
+            threading.Thread(
+                target=_do_edit_split,
+                args=(job["id"], params.get("subtitles") or [],
+                      params.get("hook", ep.get("hook", "")),
+                      ep.get("layout", "shorts"), job.get("cut_video"), workdir,
+                      target, speed, params.get("quality") or "standard",
+                      ep.get("denoise") or False),
+                daemon=True,
+            ).start()
+            self._send_json({"ok": True})
         elif path == "/api/suggest_thumbnail":
             _apply_keys(params)
             from ..core import script_generator as sg  # noqa: PLC0415
@@ -1080,7 +1155,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.19.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.20.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1283,6 +1358,7 @@ _HTML = """<!doctype html>
         <input type="number" id="hlTarget" value="30" min="5" max="90" style="width:54px;padding:6px">
         <span class="hint">초</span>
         <button class="ghost" onclick="aiHighlights(event)" title="AI가 핵심 구간을 골라 체크해줍니다">✨ AI 핵심 추천</button>
+        <button class="ghost" onclick="renderSplit(event)" title="전체를 목표 길이 단위로 잘라 쇼츠 여러 개로 저장">🎬 여러 쇼츠로 나누기</button>
       </div>
       <div class="hint" id="hlReason" style="margin-top:4px"></div>
       <div id="subList" class="subList-scroll" style="margin-top:10px"></div>
@@ -1668,6 +1744,24 @@ async function pronounceSubs(ev){
   const data=await res.json();
   if(data.lines){ data.lines.forEach((t,i)=>{ if(window._subs[i]) window._subs[i].text=t; }); renderSubRows(); }
 }
+// 전체를 목표 길이 단위로 잘라 쇼츠 여러 개 생성
+async function renderSplit(ev){
+  if(ev)ev.preventDefault();
+  const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
+  if(subs.length<2){ alert('나눌 자막이 부족합니다 (2개 이상 필요)'); return; }
+  const target=parseInt($('hlTarget').value||'30');
+  if(!confirm('전체를 약 '+target+'초 단위 쇼츠 여러 개로 나눠 저장합니다. 계속할까요?')) return;
+  const speed=parseFloat(($('outSpeed')||{}).value||'1');
+  const quality=($('outQuality')||{}).value||'standard';
+  const res=await fetch('/api/edit_split',{method:'POST',body:JSON.stringify(
+    {job_id:currentJob, subtitles:subs, target_sec:target, hook:$('editHook').value, speed, quality})});
+  const data=await res.json();
+  if(data.error){ alert(data.error); return; }
+  $('subEditBox').classList.add('hidden');
+  if(!timer) timer=setInterval(poll,900);
+  poll();
+}
+
 async function renderEdited(){
   const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
   const keepIdx=[]; subs.forEach((s,i)=>{ if(s.keep!==false) keepIdx.push(i); });
@@ -1951,7 +2045,13 @@ async function poll(){
     if(job.mp4){
       $('doneBox').classList.remove('hidden');
       $('player').src = '/video/' + job.id + '?t=' + Date.now() + '#t=0.1';
-      $('outPaths').textContent = 'mp4: ' + job.mp4 + (job.draft ? '  |  draft: ' + job.draft : '');
+      if(job.mp4s && job.mp4s.length > 1){
+        $('outPaths').innerHTML = '🎬 쇼츠 ' + job.mp4s.length + '개 완성:<br>' +
+          job.mp4s.map((p,i)=>('  '+(i+1)+') '+p)).join('<br>') +
+          '<br><span class="hint">(위 플레이어는 1번 쇼츠. 나머지는 [📂 폴더 열기]에서 확인)</span>';
+      } else {
+        $('outPaths').textContent = 'mp4: ' + job.mp4 + (job.draft ? '  |  draft: ' + job.draft : '');
+      }
     }
     showErrors(job.errors);
     $('goBtn').disabled = false; $('editBtn').disabled = false;

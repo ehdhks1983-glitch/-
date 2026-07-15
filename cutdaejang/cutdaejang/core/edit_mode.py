@@ -439,6 +439,30 @@ def rebuild_from_keep(
     return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
 
 
+def split_into_clips(subtitles: List[Subtitle], target_sec: float = 30.0,
+                     min_last_sec: float = 6.0) -> List[List[int]]:
+    """자막을 순서대로 목표 길이(초) 단위 그룹으로 나눔 → 쇼츠 여러 개 분할용.
+
+    마지막 그룹이 너무 짧으면 앞 그룹에 합친다. 반환: 자막 번호 그룹 목록.
+    """
+    groups: List[List[int]] = []
+    cur: List[int] = []
+    cur_dur = 0.0
+    for i, s in enumerate(subtitles):
+        cur.append(i)
+        cur_dur += max(0.0, (s.end_us - s.start_us) / 1e6)
+        if cur_dur >= target_sec:
+            groups.append(cur)
+            cur, cur_dur = [], 0.0
+    if cur:
+        # 마지막 그룹 병합 기준은 목표 길이에 비례 (목표가 짧으면 기준도 낮춤)
+        if groups and cur_dur < min(min_last_sec, target_sec * 0.5):
+            groups[-1].extend(cur)
+        else:
+            groups.append(cur)
+    return groups
+
+
 def render_from_analysis(
     cut_video: str,
     subtitles: List[Subtitle],
