@@ -302,7 +302,14 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             job_id, cut_video=analysis.cut_video,
             edit_params={"layout": params.get("layout") or edit_cfg["layout"],
                          "hook": (params.get("hook") or "").strip(),
-                         "denoise": denoise, "narration": bool(narr_topic)},
+                         "denoise": denoise, "narration": bool(narr_topic),
+                         "narr_voice": (params.get("narr_voice") or "").strip(),
+                         "narr_style": (params.get("narr_style") or "").strip(),
+                         # 원본 소리: 내레이션을 얹으면 기본 무음 (원하면 폼에서 변경)
+                         "orig_audio": params.get("orig_audio")
+                         or ("mute" if narr_topic else "keep"),
+                         "bgm": (params.get("bgm") or "").strip(),
+                         "bgm_db": params.get("bgm_db")},
             edit_summary=_edit_summary(analysis),
         )
         analysis.subtitles = review_subs
@@ -368,6 +375,18 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         out = str(Path(workdir) / job_id / "edited.mp4")
         job = _get_job(job_id) or {}
+        ep = job.get("edit_params") or {}
+        if ep.get("narr_style"):  # 내레이션 말투 스타일 (Gemini TTS 프롬프트에 반영)
+            settings = config.deep_merge(settings, {"tts": {"style_preset": ep["narr_style"]}})
+        orig_audio = ep.get("orig_audio") or "keep"
+        bgm_path = None
+        if ep.get("bgm"):
+            b = orchestrator.resolve_bgm(ep["bgm"], settings)
+            bgm_path = b.path if b else None
+        try:
+            bgm_db = float(ep.get("bgm_db"))
+        except (TypeError, ValueError):
+            bgm_db = float(settings["bgm"].get("volume_db", -16))
         # 핵심 구간만 골랐으면(전체가 아니면) 영상을 그 구간만 다시 잘라 진짜 쇼츠 길이로.
         # 내레이션보다 먼저 잘라야 목소리가 최종 타임라인 기준으로 배치된다.
         if keep is not None and 0 < len(keep) < len(subs):
@@ -377,7 +396,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 cut_video, subs, keep, str(Path(workdir) / job_id / "short.mp4"),
             )
         narration_wav = None
-        if (job.get("edit_params") or {}).get("narration") and subs:
+        if ep.get("narration") and subs:
             import re as _re  # noqa: PLC0415
             from ..core import tts_engine  # noqa: PLC0415
 
@@ -393,7 +412,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             texts = [_tts_clean(s2.text) or "네" for s2 in subs]
             clips, used, note = tts_engine.synth_with_fallback(
                 texts, chain, Path(workdir) / "cache" / "tts", settings,
-                voice=settings["tts"].get("voice_gemini", ""),
+                voice=ep.get("narr_voice") or settings["tts"].get("voice_gemini", ""),
                 on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
             )
             from ..core import video_editor  # noqa: PLC0415
@@ -420,6 +439,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             cut_video, subs, out, style=build_style(settings),
             layout=layout, hook=hook, speed=speed, quality=quality, denoise=denoise,
             narration_wav=narration_wav,
+            orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
             progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
         )
         _set_job(
@@ -1243,7 +1263,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.25)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.26)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1292,8 +1312,21 @@ _HTML = """<!doctype html>
     </div>
     <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
       <label style="margin-top:0">🎙️ AI 내레이션 추가 <span class="hint">(선택 — 말 없는 영상에 AI 대본+목소리+자막)</span></label>
-      <input type="text" id="narrTopic" placeholder="영상 주제/내용 입력 (예: 동네 라멘 맛집 소개) — 비우면 사용 안 함">
-      <div class="hint">넣으면 AI가 대본을 쓰고 목소리(제미나이 키 권장, 없으면 내장 음성)를 입혀요. 원본 소리는 배경으로 작게 깔립니다. 대본은 검토 화면에서 수정 가능.</div>
+      <input type="text" id="narrTopic" oninput="onNarrTopicInput()" placeholder="영상 주제/내용 입력 (예: 동네 라멘 맛집 소개) — 비우면 사용 안 함">
+      <div class="row" style="margin-top:8px">
+        <div>
+          <label>목소리(보이스)</label>
+          <select id="narrVoiceSel"></select>
+        </div>
+        <div>
+          <label>말투 스타일</label>
+          <select id="narrStyleSel"></select>
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="ghost" style="margin-bottom:1px" onclick="previewNarrVoice(event)">🔊 미리듣기</button>
+        </div>
+      </div>
+      <div class="hint">넣으면 AI가 대본을 쓰고 목소리(제미나이 키 권장, 없으면 내장 음성)를 입혀요. 보이스·말투는 제미나이 키가 있을 때 적용(내장 음성은 목소리 고정). 대본은 검토 화면에서 수정 가능.</div>
     </div>
     <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
       <label style="margin-top:0">📝 대본 직접 입력 <span class="hint">(선택 — 이미 대본이 있을 때)</span></label>
@@ -1318,6 +1351,27 @@ _HTML = """<!doctype html>
         <option value="high">강하게</option>
       </select>
       <span class="hint">배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
+    </div>
+    <div class="chk" style="gap:8px">
+      <span>🔈 원본 소리</span>
+      <select id="origAudioSel" style="width:auto;padding:6px 8px" onchange="window._origTouched=true">
+        <option value="keep">그대로</option>
+        <option value="low">작게 (배경으로)</option>
+        <option value="mute">무음 (소리 제거)</option>
+      </select>
+      <span class="hint">영상에 있는 말소리·소음을 뺄 때 '무음' — AI 내레이션을 넣으면 자동으로 무음이 돼요</span>
+    </div>
+    <div class="chk" style="gap:8px">
+      <span>🎵 배경음악</span>
+      <select id="bgmEditSel" style="width:auto;max-width:220px;padding:6px 8px">
+        <option value="">없음</option>
+      </select>
+      <select id="bgmVolSel" style="width:auto;padding:6px 8px">
+        <option value="-20">은은하게</option>
+        <option value="-14" selected>중간</option>
+        <option value="-9">크게</option>
+      </select>
+      <span class="hint">영상 길이만큼 반복+페이드. <b>resources/bgm 폴더에 mp3</b>를 넣으면 목록에 떠요</span>
     </div>
     <div class="chk" style="gap:8px">
       <input type="checkbox" id="autoEditChk">
@@ -1669,6 +1723,9 @@ async function startEdit(){
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
+    narr_voice: ($('narrVoiceSel')||{}).value||'', narr_style: ($('narrStyleSel')||{}).value||'',
+    orig_audio: $('origAudioSel').value,
+    bgm: $('bgmEditSel').value, bgm_db: +$('bgmVolSel').value,
     auto_edit: $('autoEditChk').checked, auto_target_sec: +$('autoTargetSec').value||0,
     script: $('editScript').value,
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
@@ -1963,6 +2020,27 @@ async function previewVoice(ev){
   } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
 }
 
+// ── 편집 모드 내레이션 (v0.26) ──
+function onNarrTopicInput(){
+  // AI 내레이션을 쓰면 원본 말소리는 보통 필요 없음 → 자동 무음 (직접 바꾸면 그 값 유지)
+  if(window._origTouched) return;
+  $('origAudioSel').value = $('narrTopic').value.trim() ? 'mute' : 'keep';
+}
+
+async function previewNarrVoice(ev){
+  ev.preventDefault();
+  const prov = window._hasGeminiKey ? 'gemini' : (window._isWin ? 'windows' : 'stub');
+  const btn = ev.target;
+  btn.disabled = true; btn.textContent = '합성 중...';
+  try{
+    const res = await fetch('/api/preview', {method:'POST', body: JSON.stringify({
+      tts_provider: prov, voice: $('narrVoiceSel').value, tts_style: $('narrStyleSel').value,
+    })});
+    const data = await res.json();
+    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+  } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
+}
+
 function showErrors(errs){
   const raw = (errs||[]).filter(e => e.startsWith('[원본 오류]'));
   const main = (errs||[]).filter(e => !e.startsWith('[원본 오류]'));
@@ -2110,17 +2188,19 @@ async function poll(){
   window._hasGeminiKey = state.keys.gemini;
   if(!$('draftsDir').value && state.drafts_dir) $('draftsDir').value = state.drafts_dir;
 
-  if((state.platform || '').startsWith('win')){
+  window._isWin = (state.platform || '').startsWith('win');
+  if(window._isWin){
     $('provWinLabel').classList.remove('hidden');
     if(!window._defaultSet){ window._defaultSet = true; $('provWin').checked = true; }
   }
   if(!window._optsFilled){
     window._optsFilled = true;
-    for(const v of state.voices || []) $('voiceSel').add(new Option(v, v));
-    for(const s of state.styles || []) $('styleSel').add(new Option(s, s));
+    for(const v of state.voices || []){ $('voiceSel').add(new Option(v, v)); $('narrVoiceSel').add(new Option(v, v)); }
+    for(const s of state.styles || []){ $('styleSel').add(new Option(s, s)); $('narrStyleSel').add(new Option(s, s)); }
     if((state.bgm_files || []).length){
       $('bgmSel').add(new Option('랜덤', 'random'));
-      for(const f of state.bgm_files) $('bgmSel').add(new Option(f, f));
+      $('bgmEditSel').add(new Option('랜덤', 'random'));
+      for(const f of state.bgm_files){ $('bgmSel').add(new Option(f, f)); $('bgmEditSel').add(new Option(f, f)); }
     }
     if(state.settings) fillSettings(state.settings);
   }

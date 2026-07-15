@@ -169,6 +169,9 @@ def render_edited(
     quality: str = "standard",         # 화질 등급: standard | high | ultra(4K)
     denoise=False,                     # 잡음 제거: False | True(중) | 'low'|'mid'|'high'
     narration_wav: Optional[str] = None,  # AI 내레이션 트랙(있으면 원본 소리는 덕킹)
+    orig_audio: str = "keep",          # 원본 소리: keep(그대로) | low(작게) | mute(무음)
+    bgm_path: Optional[str] = None,    # 배경음악 파일 (영상 길이만큼 루프 + 페이드)
+    bgm_db: float = -16.0,             # BGM 볼륨(dB)
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> str:
     """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다.
@@ -181,6 +184,9 @@ def render_edited(
     speed = max(0.25, min(4.0, float(speed or 1.0)))
     src_w, src_h = ff.probe_video_size(cut_video)
     dur_us = ff.probe_duration_us(cut_video)
+    has_src_audio = ff.has_audio_stream(cut_video)
+    if narration_wav and orig_audio == "keep":
+        orig_audio = "low"  # 하위호환: 내레이션이 있으면 원본은 배경으로 깔림
 
     canvas, crf, preset, sharpen = _quality_canvas(layout, src_w, src_h, quality)
 
@@ -220,29 +226,56 @@ def render_edited(
         vmap, out_us = "[v]", int(dur_us / speed)
     else:
         vmap, out_us = "[vc]", dur_us
-    # 오디오 필터 체인 (잡음 제거 → 배속). 둘 다 없으면 원본 오디오 그대로
-    afilters = []
+    # 오디오 그래프: 원본(그대로/작게/무음, 잡음 제거) + 내레이션 + BGM(루프·페이드) → 배속
     dn = _denoise_filter(denoise)
-    if dn:
-        afilters.append(dn)
-    if slow:
-        afilters.append(_atempo_chain(speed))
-    if narration_wav:
-        # 원본 오디오는 배경으로 덕킹(0.15), 내레이션을 위에 얹음
-        chain = ("," + ",".join(afilters)) if afilters else ""
-        vf += (f";[0:a]volume=0.15[bgm];[1:a]apad[nar];"
-               f"[bgm][nar]amix=inputs=2:duration=first:normalize=0{chain}[a]")
-        amap = "[a]"
-    elif afilters:
-        vf += f";[0:a]{','.join(afilters)}[a]"
-        amap = "[a]"
-    else:
+    dur_s = dur_us / 1e6
+    plain_passthrough = (
+        not narration_wav and not bgm_path and orig_audio == "keep"
+        and has_src_audio and not dn and not slow
+    )
+    if plain_passthrough:
         amap = "0:a"
+    else:
+        aparts, streams = [], []
+        if orig_audio == "mute" or not has_src_audio:
+            # 소리 제거(또는 오디오 트랙 없는 영상) → 같은 길이의 무음 트랙
+            aparts.append(f"anullsrc=r=44100:cl=stereo:d={dur_s:.3f}[abase]")
+        else:
+            vol = 0.15 if orig_audio == "low" else 1.0
+            dnf = f"{dn}," if dn else ""
+            aparts.append(f"[0:a]{dnf}volume={vol}[abase]")
+        streams.append("[abase]")
+        nar_idx = 1
+        if narration_wav:
+            aparts.append(f"[{nar_idx}:a]apad[anar]")
+            streams.append("[anar]")
+        if bgm_path:
+            bgm_idx = nar_idx + (1 if narration_wav else 0)
+            gain = 10 ** (bgm_db / 20)
+            fade_st = max(0.0, dur_s - 1.2)
+            aparts.append(
+                f"[{bgm_idx}:a]volume={gain:.4f},atrim=0:{dur_s:.3f},"
+                f"afade=t=in:d=0.8,afade=t=out:st={fade_st:.3f}:d=1.2[abgm]")
+            streams.append("[abgm]")
+        if len(streams) > 1:
+            aparts.append(
+                "".join(streams)
+                + f"amix=inputs={len(streams)}:duration=first:normalize=0[apre]")
+            last = "[apre]"
+        else:
+            last = "[abase]"
+        if slow:
+            aparts.append(f"{last}{_atempo_chain(speed)}[a]")
+            last = "[a]"
+        vf += ";" + ";".join(aparts)
+        amap = last
 
     def _build_args(vcodec_args: list) -> list:
         a = ["-y", "-i", str(cut_video)]
         if narration_wav:
             a += ["-i", str(narration_wav)]
+        if bgm_path:
+            a += ["-stream_loop", "-1", "-i", str(bgm_path)]  # 영상 길이만큼 루프
         a += [
             "-filter_complex", vf,
             "-map", vmap, "-map", amap,
@@ -576,6 +609,9 @@ def render_from_analysis(
     quality: str = "standard",
     denoise=False,
     narration_wav: Optional[str] = None,
+    orig_audio: str = "keep",
+    bgm_path: Optional[str] = None,
+    bgm_db: float = -16.0,
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
     """2단계: (수정된) 자막으로 최종 렌더. speed 배속, quality 화질, denoise 잡음 제거."""
@@ -591,7 +627,8 @@ def render_from_analysis(
         render_edited(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
             speed=speed, quality=quality, denoise=denoise,
-            narration_wav=narration_wav, progress_cb=progress_cb,
+            narration_wav=narration_wav, orig_audio=orig_audio,
+            bgm_path=bgm_path, bgm_db=bgm_db, progress_cb=progress_cb,
         )
         if not _fits_us(ff.probe_duration_us(out_path), int(result.cut_us / speed), tol=200_000):
             result.errors.append("출력 길이가 예상과 다릅니다")

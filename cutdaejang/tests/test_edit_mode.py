@@ -355,6 +355,72 @@ def test_split_into_clips_grouping():
     assert split_into_clips([], target_sec=30) == []
 
 
+def _tone_video(tmp_path, name="tone.mp4", sec=3, an=False):
+    v = tmp_path / name
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", f"color=c=0x203040:s=320x240:r=30:d={sec}"]
+    if not an:
+        args += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={sec}", "-af", "volume=0.5"]
+    args += ["-c:v", "libx264", "-preset", "ultrafast"]
+    args += ["-an"] if an else ["-c:a", "aac"]
+    args.append(str(v))
+    ff.run(args)
+    return str(v)
+
+
+def _max_volume_db(path):
+    import re
+    import subprocess
+
+    r = subprocess.run([ff.ffmpeg_bin(), "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    m = re.search(r"max_volume: (-?[\d.]+) dB", r.stderr)
+    return float(m.group(1)) if m else -99.0
+
+
+@requires_ffmpeg
+def test_render_orig_audio_mute(tmp_path):
+    # 원본 소리 '무음' → 소리(440Hz 톤)가 사라진 무음 트랙
+    from cutdaejang.core.edit_mode import render_from_analysis
+
+    video = _tone_video(tmp_path)
+    out = str(tmp_path / "mute.mp4")
+    r = render_from_analysis(video, [], out, layout="keep", quality="draft", orig_audio="mute")
+    assert r.ok, r.errors
+    assert ff.has_audio_stream(out)          # 트랙은 있지만
+    assert _max_volume_db(out) < -50         # 사실상 무음
+
+
+@requires_ffmpeg
+def test_render_bgm_mixed_and_looped(tmp_path):
+    # BGM(1초짜리)이 3초 영상 길이만큼 루프되어 들림 (원본은 무음 처리)
+    from cutdaejang.core.edit_mode import render_from_analysis
+
+    video = _tone_video(tmp_path)
+    bgm = tmp_path / "bgm.wav"
+    # 실전 음원처럼 0dB 근처로 정규화된 1초짜리 톤 (sine 소스 기본 진폭은 -18dB라 증폭)
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", "sine=frequency=880:duration=1", "-af", "volume=8", str(bgm)])
+    out = str(tmp_path / "bgm.mp4")
+    r = render_from_analysis(video, [], out, layout="keep", quality="draft",
+                             orig_audio="mute", bgm_path=str(bgm), bgm_db=-10)
+    assert r.ok, r.errors
+    assert _max_volume_db(out) > -25         # BGM이 실제로 들림 (원본은 무음인데도)
+    assert abs(ff.probe_duration_us(out) - ff.probe_duration_us(video)) < 300_000
+
+
+@requires_ffmpeg
+def test_render_video_without_audio_stream(tmp_path):
+    # 오디오 트랙이 아예 없는 영상(마이크 없는 화면 녹화)도 무음 트랙으로 렌더 성공
+    from cutdaejang.core.edit_mode import render_from_analysis
+
+    video = _tone_video(tmp_path, name="noaudio.mp4", an=True)
+    out = str(tmp_path / "na.mp4")
+    r = render_from_analysis(video, [], out, layout="keep", quality="draft")
+    assert r.ok, r.errors
+    assert ff.has_audio_stream(out)
+
+
 @requires_ffmpeg
 def test_render_denoise_keeps_audio(talk_video, tmp_path):
     from cutdaejang.core.edit_mode import analyze_video, render_from_analysis
