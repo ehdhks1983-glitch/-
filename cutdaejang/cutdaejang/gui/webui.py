@@ -260,8 +260,10 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         stt = None
         if auto_subtitle and not has_script:  # 대본 있으면 STT 생략 (오인식·비용 없음)
             stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
+            # Whisper 모델(정확도)을 이 작업에서 고른 값으로 덮어씀
+            stt_cfg = {**edit_cfg, "whisper_model": params.get("whisper_model") or edit_cfg["whisper_model"]}
             stt = STTEngine(
-                make_provider(stt_name, edit_cfg),
+                make_provider(stt_name, stt_cfg),
                 Path(workdir) / "cache" / "stt",
                 language=params.get("language", "ko"),
             )
@@ -1077,7 +1079,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.17.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.18.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1111,6 +1113,17 @@ _HTML = """<!doctype html>
         <label>음성 인식</label>
         <select id="sttSel"></select>
         <div class="hint" id="sttHint"></div>
+        <div id="whisperModelRow" class="hidden" style="margin-top:6px">
+          <label style="margin-top:0">정확도(Whisper 모델)</label>
+          <select id="whisperModelSel">
+            <option value="tiny">tiny — 가장 빠름·정확도 낮음</option>
+            <option value="base">base — 빠름</option>
+            <option value="small" selected>small — 기본(권장)</option>
+            <option value="medium">medium — 느림·정확도↑</option>
+            <option value="large-v3">large-v3 — 가장 느림·최고 정확도</option>
+          </select>
+          <div class="hint">클수록 정확하지만 느리고, 첫 사용 시 모델 다운로드가 큽니다.</div>
+        </div>
       </div>
     </div>
     <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
@@ -1413,6 +1426,7 @@ async function loadStt(){
 function updateSttHint(){
   const v = $('sttSel').value;
   $('editKeyRow').classList.toggle('hidden', v !== 'gemini' || window._hasGeminiKey);
+  if($('whisperModelRow')) $('whisperModelRow').classList.toggle('hidden', v !== 'whisper');
   $('sttHint').textContent = v === 'whisper'
     ? '최초 1회 모델 다운로드(수십 MB). 이후 무료·오프라인.'
     : v === 'gemini' ? '내 Gemini 키 사용. 구간마다 호출돼 조금 걸릴 수 있어요.'
@@ -1456,7 +1470,8 @@ async function startEdit(){
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
     denoise: $('denoiseChk').checked,
     script: $('editScript').value,
-    stt_provider: $('sttSel').value, gemini_key: $('editGeminiKey').value, save_key: true,
+    stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
+    gemini_key: $('editGeminiKey').value, save_key: true,
   };
   const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
   const data = await res.json();
