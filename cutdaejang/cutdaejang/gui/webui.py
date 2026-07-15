@@ -1311,7 +1311,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.28)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.28.1)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1458,7 +1458,7 @@ _HTML = """<!doctype html>
         <option value="-14" selected>중간</option>
         <option value="-9">크게</option>
       </select>
-      <span class="hint">영상 길이만큼 반복+페이드. <b>resources/bgm 폴더에 mp3</b>를 넣으면 목록에 떠요</span>
+      <span class="hint">영상 길이만큼 반복+페이드. <b>windows\6_무료음원_받기.bat</b>로 유명 무료 BGM 14곡 자동 채우기 (또는 resources/bgm에 mp3 직접)</span>
     </div>
     <div class="chk" style="gap:8px">
       <input type="checkbox" id="autoEditChk">
