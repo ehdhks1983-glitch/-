@@ -295,6 +295,56 @@ def test_build_narration_wav_places_clips(tmp_path):
     assert abs(ff.probe_duration_us(out) - 6_000_000) < 200_000
 
 
+def _tts_clip(tmp_path, name, sec):
+    c = tmp_path / name
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+            "-i", f"sine=frequency=330:duration={sec}:sample_rate=24000", str(c)])
+    return str(c)
+
+
+@requires_ffmpeg
+def test_retime_narration_matches_clip_durations(tmp_path):
+    # 추정 창(균등 2.5초)이 실제 클립 길이(1/3/0.8초)와 달라도 실측 기준으로 재배치
+    from cutdaejang.core.edit_mode import retime_narration
+    from cutdaejang.spec import Subtitle
+
+    clips = [_tts_clip(tmp_path, f"c{i}.wav", d) for i, d in enumerate([1.0, 3.0, 0.8])]
+    subs = [Subtitle(t, i * 2_500_000, (i + 1) * 2_500_000) for i, t in enumerate("가나다")]
+    out_subs, out_clips, note = retime_narration(clips, subs, 10_000_000, tmp_path)
+
+    assert len(out_subs) == len(out_clips) == 3 and note == ""
+    for s, dur in zip(out_subs, [1.0, 3.0, 0.8]):
+        assert abs((s.end_us - s.start_us) - dur * 1e6) < 150_000  # 창 길이 == 발화 길이
+    for a, b in zip(out_subs, out_subs[1:]):
+        gap = b.start_us - a.end_us
+        assert 100_000 <= gap <= 950_000        # 겹침 없음 + 간격 상한
+    assert out_subs[-1].end_us <= 10_000_000
+
+
+@requires_ffmpeg
+def test_retime_narration_speeds_up_or_drops_when_video_short(tmp_path):
+    from cutdaejang.core.edit_mode import retime_narration
+    from cutdaejang.spec import Subtitle
+    from cutdaejang.utils import ffmpeg as ff
+
+    # 목소리 6초 > 영상 5초 → 말 속도 최대 1.25배로 압축 (문장은 유지)
+    clips = [_tts_clip(tmp_path, f"s{i}.wav", 2.0) for i in range(3)]
+    subs = [Subtitle(t, 0, 1) for t in "가나다"]
+    out_subs, out_clips, note = retime_narration(clips, subs, 5_200_000, tmp_path)
+    assert "말 속도" in note
+    total_speech = sum(ff.probe_duration_us(c) for c in out_clips)
+    assert total_speech < 6_000_000              # 실제로 빨라짐
+    assert out_subs[-1].end_us <= 5_200_000 + 300_000
+
+    # 상한(1.25배)으로도 못 담을 만큼 영상이 짧으면 → 뒷문장 생략 + 안내
+    clips2 = [_tts_clip(tmp_path, f"d{i}.wav", 2.0) for i in range(3)]
+    subs2 = [Subtitle(t, 0, 1) for t in "가나다"]
+    out_subs2, out_clips2, note2 = retime_narration(clips2, subs2, 3_500_000, tmp_path / "b")
+    assert len(out_subs2) == len(out_clips2) < 3
+    assert "생략" in note2
+    assert all(s.end_us <= 3_500_000 + 300_000 for s in out_subs2)
+
+
 def test_split_into_clips_grouping():
     from cutdaejang.core.edit_mode import split_into_clips
     from cutdaejang.spec import Subtitle

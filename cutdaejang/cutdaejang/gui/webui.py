@@ -287,7 +287,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             try:
                 provider = SCRIPT_PROVIDERS["gemini"]() if os.environ.get("GEMINI_API_KEY") \
                     else SCRIPT_PROVIDERS["stub"]()
-                target = max(15, min(90, int(analysis.cut_us / 1e6)))
+                # 완전 자동 + 목표 초가 있으면 대본을 그 길이로 (영상은 뒤에서 맞춰 자름)
+                want = int(params.get("auto_target_sec") or 0) if params.get("auto_edit") else 0
+                target = max(15, min(90, want or int(analysis.cut_us / 1e6)))
                 script = provider.generate(narr_topic, target_sec=target)
             except Exception:
                 script = SCRIPT_PROVIDERS["stub"]().generate(narr_topic)
@@ -319,7 +321,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                     pass
             keep = None
             tgt = int(params.get("auto_target_sec") or 0)
-            if subs_d and tgt > 0:
+            # 내레이션 대본은 이미 목표 길이로 새로 쓴 글 → 핵심 선별로 또 자르지 않음
+            if subs_d and tgt > 0 and not narr_topic:
                 _set_job(job_id, note=f"핵심 구간 골라 {tgt}초 쇼츠 구성 중…")
                 try:
                     keep = sg.suggest_highlights(subs_d, target_sec=tgt)["keep"]
@@ -365,6 +368,14 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         out = str(Path(workdir) / job_id / "edited.mp4")
         job = _get_job(job_id) or {}
+        # 핵심 구간만 골랐으면(전체가 아니면) 영상을 그 구간만 다시 잘라 진짜 쇼츠 길이로.
+        # 내레이션보다 먼저 잘라야 목소리가 최종 타임라인 기준으로 배치된다.
+        if keep is not None and 0 < len(keep) < len(subs):
+            _set_job(job_id, stage="cut", frac=0.0,
+                     note=f"고른 {len(keep)}개 구간만 남겨 쇼츠로 자르는 중…")
+            cut_video, subs = edit_mode.rebuild_from_keep(
+                cut_video, subs, keep, str(Path(workdir) / job_id / "short.mp4"),
+            )
         narration_wav = None
         if (job.get("edit_params") or {}).get("narration") and subs:
             import re as _re  # noqa: PLC0415
@@ -385,19 +396,26 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 voice=settings["tts"].get("voice_gemini", ""),
                 on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
             )
+            from ..core import video_editor  # noqa: PLC0415
             from ..utils import ffmpeg as ff  # noqa: PLC0415
             cut_us = ff.probe_duration_us(cut_video)
+            # 목소리 실제 길이에 맞춰 자막 재배치 → 자막·목소리 싱크 보장
+            subs, clips, sync_note = edit_mode.retime_narration(
+                clips, subs, cut_us, Path(workdir) / job_id)
+            if sync_note:
+                note = f"{note} · {sync_note}" if note else sync_note
+            # 내레이션이 끝난 뒤 영상 꼬리가 길게 남으면 잘라 템포 유지
+            narr_end_us = subs[-1].end_us + 700_000 if subs else cut_us
+            if cut_us > narr_end_us + 1_500_000:
+                _set_job(job_id, stage="cut", note="내레이션 길이에 맞춰 영상을 다듬는 중…")
+                cut_video = video_editor.cut_and_concat(
+                    cut_video, [(0, narr_end_us)],
+                    str(Path(workdir) / job_id / "narr_fit.mp4"))
+                cut_us = ff.probe_duration_us(cut_video)
             narration_wav = edit_mode.build_narration_wav(
                 clips, subs, cut_us, Path(workdir) / job_id / "narration.wav")
             if note:
                 _set_job(job_id, note=note)
-        # 핵심 구간만 골랐으면(전체가 아니면) 영상을 그 구간만 다시 잘라 진짜 쇼츠 길이로
-        if keep is not None and 0 < len(keep) < len(subs):
-            _set_job(job_id, stage="cut", frac=0.0,
-                     note=f"고른 {len(keep)}개 구간만 남겨 쇼츠로 자르는 중…")
-            cut_video, subs = edit_mode.rebuild_from_keep(
-                cut_video, subs, keep, str(Path(workdir) / job_id / "short.mp4"),
-            )
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=build_style(settings),
             layout=layout, hook=hook, speed=speed, quality=quality, denoise=denoise,
@@ -1225,7 +1243,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.24)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.25)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">

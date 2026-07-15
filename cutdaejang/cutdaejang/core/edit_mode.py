@@ -461,6 +461,63 @@ def rebuild_from_keep(
     return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
 
 
+def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_dir,
+                     lead_us: int = 200_000, max_tempo: float = 1.25) -> tuple:
+    """자막 타이밍을 TTS 클립 '실제 길이'에 맞춰 순차 재배치 → 목소리·자막 싱크 보장.
+
+    글자 수 비례로 추정한 창은 실제 발화 길이와 어긋나 자막이 밀리고 목소리가
+    겹치거나 끝에서 잘린다. 실측 길이 기준으로:
+      ① 남는 시간은 문장 사이 간격으로 고르게 배분 (0.12~0.9초)
+      ② 영상보다 길면 말 속도를 최대 max_tempo배까지 올려 맞춤
+      ③ 그래도 안 들어가는 뒷문장은 생략하고 사유를 알림
+    반환: (재배치된 자막들, 클립 경로들, 안내 문구 또는 "")
+    """
+    if not clips or not subtitles:
+        return list(subtitles), [str(c) for c in clips], ""
+    n = min(len(clips), len(subtitles))
+    clips, subtitles = [str(c) for c in clips[:n]], list(subtitles[:n])
+    durs = [ff.probe_duration_us(c) for c in clips]
+    note = ""
+
+    min_gap = 120_000
+    speech = sum(durs)
+    if lead_us + speech + min_gap * (n - 1) > total_us:  # ② 넘치면 말 속도 up
+        avail = max(1, total_us - lead_us - min_gap * (n - 1))
+        tempo = min(max_tempo, speech / avail)
+        if tempo > 1.01:
+            tmp = Path(tmp_dir)
+            tmp.mkdir(parents=True, exist_ok=True)
+            sped = []
+            for i, c in enumerate(clips):
+                o = tmp / f"nar_tempo_{i:03d}.wav"
+                ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", c,
+                        "-af", _atempo_chain(tempo), "-c:a", "pcm_s16le", str(o)])
+                sped.append(str(o))
+            clips = sped
+            durs = [ff.probe_duration_us(c) for c in clips]
+            note = f"내레이션이 영상보다 길어 말 속도를 {tempo:.2f}배로 올렸어요"
+
+    # ① 간격: 남는 시간을 문장 사이에 고르게 (너무 벌어지지 않게 상한)
+    gap = 0
+    if n > 1:
+        gap = max(min_gap, min(900_000, (total_us - lead_us - sum(durs)) // (n - 1)))
+
+    out_subs, out_clips, cursor, dropped = [], [], lead_us, 0
+    for clip, dur, sub in zip(clips, durs, subtitles):
+        if cursor + dur > total_us + 300_000 and out_subs:  # ③ 시작해도 못 끝내면 생략
+            dropped += 1
+            continue
+        sub.start_us = cursor
+        sub.end_us = min(cursor + dur, total_us)
+        out_subs.append(sub)
+        out_clips.append(clip)
+        cursor = sub.start_us + dur + gap
+    if dropped:
+        extra = f"영상이 짧아 마지막 {dropped}문장은 생략했어요"
+        note = f"{note} · {extra}" if note else extra
+    return out_subs, out_clips, note
+
+
 def build_narration_wav(clips: List, subtitles: List[Subtitle], total_us: int,
                         out_wav) -> str:
     """TTS 클립들을 각 자막 시작 시각에 배치해 하나의 내레이션 트랙으로 합침."""
