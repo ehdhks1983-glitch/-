@@ -32,10 +32,12 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Thumb,{font},{size},&H00FFFFFF,&H000000FF,{box},&HB0000000,0,0,0,0,100,100,0,0,{border},{pad},0,{align},{ml},{mr},{mv},1
+Style: Badge,{font},{badge_size},&H00FFFFFF,&H000000FF,{badge_box},&HB0000000,0,0,0,0,100,100,0,0,3,{badge_pad},0,9,{ml},{mr},{badge_mv},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:00.00,0:00:10.00,Thumb,,0,0,0,,{text}
+{badge_line}
 """
 
 
@@ -50,10 +52,23 @@ def _extract_frame(video: str, out_png: Path, at_frac: float = 0.4) -> str:
     return str(out_png)
 
 
+def _ass_bgr(hex_rgb: str, alpha: str = "00") -> str:
+    rgb = hex_rgb.lstrip("#")
+    return f"&H{alpha}{rgb[4:6]}{rgb[2:4]}{rgb[0:2]}".upper()
+
+
 def _write_thumb_ass(title: str, style: Style, w: int, h: int, path: Path,
-                     band: bool = True) -> str:
+                     band: bool = True, badge: str = "",
+                     badge_color: str = "#16A34A") -> str:
     size = max(48, int(h * 0.15))          # 720p 기준 ≈ 108px
     pad = max(10, int(size * 0.18))
+    badge_size = max(28, int(h * 0.055))
+    badge_line = ""
+    if badge.strip():  # 우상단 배지 (초록 박스 + 흰 글씨 — "✅ 자동 발행" 스타일)
+        badge_line = (
+            "Dialogue: 1,0:00:00.00,0:00:10.00,Badge,,0,0,0,,"
+            + hook_dialogue_text(badge.strip(), style).replace("\n", " ")
+        )
     ass = _ASS.format(
         w=w, h=h,
         font=presets.font_family(style.font),
@@ -64,9 +79,17 @@ def _write_thumb_ass(title: str, style: Style, w: int, h: int, path: Path,
         align=1,                            # 좌하단 (레퍼런스 스타일)
         ml=int(w * 0.045), mr=int(w * 0.045), mv=int(h * 0.08),
         text=hook_dialogue_text(title, style),
+        badge_size=badge_size,
+        badge_box=_ass_bgr(badge_color),
+        badge_pad=max(8, int(badge_size * 0.35)),
+        badge_mv=int(h * 0.06),
+        badge_line=badge_line,
     )
     Path(path).write_text(ass, encoding="utf-8")
     return str(path)
+
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
 def make_thumbnail(
@@ -78,10 +101,15 @@ def make_thumbnail(
     w: int = 1280,
     h: int = 720,
     band: bool = True,
+    badge: str = "",
+    badge_color: str = "#16A34A",
     fonts_dir: str = DEFAULT_FONTS_DIR,
     workdir: Optional[str] = None,
 ) -> str:
-    """배경(영상/사진) + 제목 → 16:9 유튜브 썸네일 PNG. highlight 단어는 강조색으로."""
+    """배경(영상/사진) + 제목 → 16:9 유튜브 썸네일 PNG.
+
+    highlight 단어는 강조색, badge는 우상단 라벨("✅ 자동 발행" 등, 초록 박스).
+    """
     style = style or Style()
     work = Path(workdir or Path(out_path).parent)
     work.mkdir(parents=True, exist_ok=True)
@@ -95,7 +123,8 @@ def make_thumbnail(
         raise ValueError(f"배경 이미지/영상을 찾을 수 없습니다: {bg_source}")
 
     ttl = f"{title} | {highlight}" if highlight.strip() else title
-    ass = _write_thumb_ass(ttl, style, w, h, work / "thumb.ass", band=band)
+    ass = _write_thumb_ass(ttl, style, w, h, work / "thumb.ass", band=band,
+                           badge=badge, badge_color=badge_color)
     vf = (
         f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
         f"crop={w}:{h},eq=brightness=-0.05:saturation=1.08,"

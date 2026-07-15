@@ -279,7 +279,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             progress_cb=lambda stage, frac: _set_job(job_id, stage=stage, frac=frac),
             status_cb=lambda msg: _set_job(job_id, note=msg),
         )
-        denoise = bool(params.get("denoise", False))
+        denoise = params.get("denoise") or False
         # 분석 결과를 job에 저장 (2단계 렌더에서 사용)
         _set_job(
             job_id, cut_video=analysis.cut_video,
@@ -311,7 +311,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     cut_video: str, workdir: str, keep: Optional[list] = None,
                     speed: float = 1.0, quality: str = "standard",
-                    denoise: bool = False) -> None:
+                    denoise=False) -> None:
     """2단계: (수정된) 자막으로 최종 렌더. keep이 일부면 그 구간만 남겨 쇼츠로 재컷."""
     try:
         from ..core import edit_mode  # noqa: PLC0415
@@ -513,7 +513,7 @@ class _Handler(BaseHTTPRequestHandler):
                 speed = 1.0
             quality = params.get("quality") or "standard"
             # 잡음 제거는 편집 폼에서 정한 값(edit_params)을 따름
-            denoise = bool(ep.get("denoise", False))
+            denoise = ep.get("denoise") or False
             threading.Thread(
                 target=_do_edit_render,
                 args=(job["id"], params.get("subtitles") or [], hook,
@@ -590,6 +590,7 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 thumb.make_thumbnail(
                     bg, title, out, highlight=params.get("highlight", ""),
+                    badge=(params.get("badge") or "").strip(),
                     style=build_style(config.load_settings()),
                 )
                 if job:
@@ -1079,7 +1080,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.18.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.19.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1140,9 +1141,15 @@ _HTML = """<!doctype html>
       <input type="checkbox" id="cutSilenceChk" checked>
       <span>무음(빈) 구간 자동 컷 — 끄면 원본 길이 그대로</span>
     </div>
-    <div class="chk">
-      <input type="checkbox" id="denoiseChk">
-      <span>🔇 잡음 제거 — 배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
+    <div class="chk" style="gap:8px">
+      <span>🔇 잡음 제거</span>
+      <select id="denoiseSel" style="width:auto;padding:6px 8px">
+        <option value="">끔</option>
+        <option value="low">약하게</option>
+        <option value="mid">중간 (권장)</option>
+        <option value="high">강하게</option>
+      </select>
+      <span class="hint">배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
     </div>
     <div id="editKeyRow" class="hidden">
       <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
@@ -1324,6 +1331,16 @@ _HTML = """<!doctype html>
           <button class="ghost" style="white-space:nowrap" onclick="suggestThumb(event)">✨ AI 카피 추천</button>
         </div>
         <div id="thumbCands" class="hookcands"></div>
+        <div class="row" style="margin-top:6px">
+          <div>
+            <label style="margin-top:0">우상단 배지 <span class="hint">(선택 · 초록 라벨)</span></label>
+            <input type="text" id="thumbBadge" placeholder="예) ✅ 자동 발행  /  직접 쓴 글 아닙니다">
+          </div>
+          <div>
+            <label style="margin-top:0">배경 사진 <span class="hint">(선택 · 비우면 완성 영상 장면)</span></label>
+            <input type="text" id="thumbBg" placeholder="내 사진 경로 붙여넣기 (png/jpg)">
+          </div>
+        </div>
         <button onclick="makeThumb(event)">이 제목으로 썸네일 만들기</button>
         <div id="thumbResult" class="hidden" style="margin-top:10px">
           <img id="thumbImg" style="width:100%;border-radius:10px;border:1px solid #262b3a" alt="썸네일">
@@ -1468,7 +1485,7 @@ async function startEdit(){
   const body = {
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
-    denoise: $('denoiseChk').checked,
+    denoise: $('denoiseSel').value,
     script: $('editScript').value,
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
     gemini_key: $('editGeminiKey').value, save_key: true,
@@ -1775,7 +1792,8 @@ async function makeThumb(ev){
   const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='만드는 중…';
   try{
     const data=await (await fetch('/api/thumbnail',{method:'POST',
-      body:JSON.stringify({job_id:currentJob, title})})).json();
+      body:JSON.stringify({job_id:currentJob, title,
+        badge:($('thumbBadge')||{}).value||'', bg_path:($('thumbBg')||{}).value||''})})).json();
     if(data.error){ alert(data.error); return; }
     $('thumbImg').src=(data.url||'')+'?t='+Date.now();
     $('thumbPath').textContent='저장됨: '+(data.path||'');

@@ -126,8 +126,21 @@ QUALITY_PRESETS = {
 }
 _SHARPEN = "unsharp=5:5:0.8:5:5:0.0"
 _MAX_DIM = 3840  # 과도한 업스케일 방지 캡
-# 잡음 제거: 저역 럼블 컷 + FFT 노이즈 리덕션 + 고역 히스 컷 (목소리 대역 보존)
-_DENOISE = "highpass=f=85,afftdn=nr=18:nf=-28,lowpass=f=14500"
+# 잡음 제거(강도별): 저역 럼블 컷 + FFT 노이즈 리덕션 + 고역 히스 컷 (목소리 대역 보존)
+DENOISE_LEVELS = {
+    "low":  "highpass=f=70,afftdn=nr=10:nf=-25",
+    "mid":  "highpass=f=85,afftdn=nr=18:nf=-28,lowpass=f=14500",
+    "high": "highpass=f=100,afftdn=nr=30:nf=-32,lowpass=f=12000",
+}
+
+
+def _denoise_filter(denoise) -> str:
+    """denoise 값(bool 또는 'low'|'mid'|'high') → 필터 문자열(끔이면 빈 문자열)."""
+    if not denoise:
+        return ""
+    if denoise is True:
+        return DENOISE_LEVELS["mid"]
+    return DENOISE_LEVELS.get(str(denoise), "")
 
 
 def _quality_canvas(layout: str, src_w: int, src_h: int, quality: str):
@@ -153,7 +166,7 @@ def render_edited(
     opts: Optional[RenderOptions] = None,
     speed: float = 1.0,                # 저장(렌더) 속도 배수 (1.25/1.5/2배 등)
     quality: str = "standard",         # 화질 등급: standard | high | ultra(4K)
-    denoise: bool = False,             # 오디오 잡음 제거 (배경 잡음·히스)
+    denoise=False,                     # 잡음 제거: False | True(중) | 'low'|'mid'|'high'
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> str:
     """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다.
@@ -207,8 +220,9 @@ def render_edited(
         vmap, out_us = "[vc]", dur_us
     # 오디오 필터 체인 (잡음 제거 → 배속). 둘 다 없으면 원본 오디오 그대로
     afilters = []
-    if denoise:
-        afilters.append(_DENOISE)
+    dn = _denoise_filter(denoise)
+    if dn:
+        afilters.append(dn)
     if slow:
         afilters.append(_atempo_chain(speed))
     if afilters:
@@ -435,7 +449,7 @@ def render_from_analysis(
     opts: Optional[RenderOptions] = None,
     speed: float = 1.0,
     quality: str = "standard",
-    denoise: bool = False,
+    denoise=False,
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
     """2단계: (수정된) 자막으로 최종 렌더. speed 배속, quality 화질, denoise 잡음 제거."""

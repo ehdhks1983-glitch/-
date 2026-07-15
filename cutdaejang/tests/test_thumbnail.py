@@ -44,6 +44,32 @@ def test_make_thumbnail_16x9_from_image(tmp_path):
 
 
 @requires_ffmpeg
+def test_make_thumbnail_with_badge(tmp_path):
+    from cutdaejang.core.thumbnail import make_thumbnail
+
+    bg = tmp_path / "bg.png"
+    ff.run([
+        ff.ffmpeg_bin(), "-y", "-v", "error",
+        "-f", "lavfi", "-i", "color=c=0x1a3a6b:s=1280x720", "-frames:v", "1", str(bg),
+    ])
+    out = make_thumbnail(str(bg), "제목", str(tmp_path / "t.png"), badge="✅ 자동 발행")
+    assert ff.probe_video_size(out) == (1280, 720)
+    # 배지 스타일이 ass에 들어갔는지
+    ass = (tmp_path / "thumb.ass").read_text(encoding="utf-8")
+    assert "Badge,," in ass and "자동 발행" in ass
+
+
+def test_denoise_filter_levels():
+    from cutdaejang.core.edit_mode import _denoise_filter
+
+    assert _denoise_filter(False) == ""
+    assert "nr=18" in _denoise_filter(True)        # bool → 중간
+    assert "nr=10" in _denoise_filter("low")
+    assert "nr=30" in _denoise_filter("high")
+    assert _denoise_filter("이상한값") == ""
+
+
+@requires_ffmpeg
 def test_make_thumbnail_from_video_frame(tmp_path):
     from cutdaejang.core.thumbnail import make_thumbnail
 
