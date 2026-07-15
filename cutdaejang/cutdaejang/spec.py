@@ -82,6 +82,8 @@ class Style:
     margin_v: Optional[int] = None  # 지정 시 position 프리셋의 세로 여백을 덮어씀
     fade: bool = False              # 자막 등장/퇴장 페이드 {\fad(100,60)}
     highlight_color: str = "#FFD400"
+    band: bool = False             # 자막 뒤 배경 띠 (유튜브 썸네일 스타일)
+    hook_band: bool = True         # 상단 제목 뒤 배경 띠 (기본 켬)
 
 
 @dataclass

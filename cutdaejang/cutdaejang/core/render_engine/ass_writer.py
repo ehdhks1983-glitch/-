@@ -23,8 +23,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{size},{primary},&H000000FF,{outline_color},&H80000000,0,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},60,60,{margin_v},1
-Style: Title,{font},{title_size},&H00FFFFFF,&H000000FF,&H00101010,&H90000000,0,0,0,0,100,100,0,0,1,{title_outline},{title_shadow},8,50,50,{title_margin_v},1
+Style: Default,{font},{size},{primary},&H000000FF,{def_outline_color},&H80000000,0,0,0,0,100,100,0,0,{def_border},{def_outline},{shadow},{alignment},60,60,{margin_v},1
+Style: Title,{font},{title_size},&H00FFFFFF,&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,0,{title_border},{title_outline},{title_shadow},8,50,50,{title_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -106,15 +106,20 @@ def dialogue_text(sub, style) -> str:
 def write_ass(spec: TimelineSpec, out_path) -> str:
     """spec.subtitles(+spec.hook) → .ass 파일 생성. 생성된 경로를 반환."""
     style = spec.style
+    # 배경 띠(BorderStyle=3=불투명 박스) — 유튜브 썸네일 스타일. OutlineColour가 박스 색.
+    sub_band = getattr(style, "band", False)
+    hook_band = getattr(style, "hook_band", True)
     header = _HEADER.format(
         w=spec.canvas.w,
         h=spec.canvas.h,
         font=presets.font_family(style.font),
         size=style.size,
         primary=ass_color(style.primary_color),
-        outline_color=ass_color(style.outline_color),
-        outline=style.outline,
-        shadow=style.shadow,
+        def_border=3 if sub_band else 1,
+        # 띠일 때: 반투명 검정 박스 + 박스 여백(Outline), 아니면 글자 외곽선
+        def_outline_color="&H90101010" if sub_band else ass_color(style.outline_color),
+        def_outline=18 if sub_band else style.outline,
+        shadow=0 if sub_band else style.shadow,
         alignment=presets.subtitle_alignment(style.position),
         margin_v=(
             style.margin_v
@@ -122,8 +127,10 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             else presets.subtitle_margin_v(style.position, spec.canvas.h)
         ),
         title_size=presets.title_size(spec.canvas.h),
-        title_outline=presets.TITLE_OUTLINE,
-        title_shadow=presets.TITLE_SHADOW,
+        title_border=3 if hook_band else 1,
+        title_outline_color="&H90101010" if hook_band else "&H00101010",
+        title_outline=20 if hook_band else presets.TITLE_OUTLINE,
+        title_shadow=0 if hook_band else presets.TITLE_SHADOW,
         title_margin_v=presets.title_margin_v(spec.canvas.h),
     )
     lines = []

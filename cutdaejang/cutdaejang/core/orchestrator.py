@@ -97,6 +97,8 @@ def build_style(settings: dict) -> Style:
         margin_v=sub.get("margin_v"),
         fade=sub.get("fade", True),
         highlight_color=sub.get("highlight_color", "#FFD400"),
+        band=sub.get("band", False),
+        hook_band=sub.get("hook_band", True),
     )
 
 

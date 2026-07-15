@@ -48,6 +48,29 @@ def test_write_ass_hook_title(tmp_path):
     assert r"블로그 자동화 꿀팁!" in title_ev and r"\N" in title_ev
 
 
+def _style_line(text, name):
+    return next(l for l in text.splitlines() if l.startswith(f"Style: {name},"))
+
+
+def test_write_ass_hook_band_default_on(tmp_path):
+    # 기본값 hook_band=True → 상단 제목이 배경 띠(BorderStyle=3)
+    spec = make_valid_spec()
+    spec.hook = "썸네일 제목"
+    write_ass(spec, tmp_path / "a.ass")
+    title = _style_line((tmp_path / "a.ass").read_text(encoding="utf-8"), "Title")
+    assert title.split(",")[15] == "3"          # BorderStyle 15번 필드
+
+
+def test_write_ass_band_toggles(tmp_path):
+    spec = make_valid_spec()
+    spec.style.hook_band = False
+    spec.style.band = True                       # 자막은 띠 켬, 제목은 끔
+    write_ass(spec, tmp_path / "a.ass")
+    text = (tmp_path / "a.ass").read_text(encoding="utf-8")
+    assert _style_line(text, "Title").split(",")[15] == "1"    # 제목 띠 끔 → 외곽선
+    assert _style_line(text, "Default").split(",")[15] == "3"  # 자막 띠 켬 → 박스
+
+
 def test_write_ass_no_hook_no_title_event(tmp_path):
     spec = make_valid_spec()  # hook 없음
     out = tmp_path / "subs.ass"

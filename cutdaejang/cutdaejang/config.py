@@ -49,6 +49,8 @@ DEFAULTS: dict = {
         "margin_v": 420,              # 쇼츠 하단 UI(제목·버튼)와 안 겹치는 높이
         "fade": True,
         "highlight_color": "#FFD400",
+        "band": False,                # 자막 뒤 배경 띠 (유튜브 썸네일 스타일)
+        "hook_band": True,            # 상단 제목 뒤 배경 띠 (기본 켬)
     },
     "edit": {                         # 내 영상 편집 모드 (기획안 v1.5)
         "stt_provider": "whisper",   # whisper(로컬) | gemini | openai | stub

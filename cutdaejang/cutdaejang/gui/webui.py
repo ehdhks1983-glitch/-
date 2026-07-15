@@ -1018,7 +1018,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.12.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.13.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1278,6 +1278,8 @@ _HTML = """<!doctype html>
       <div><label>분당 TTS 호출 한도</label><input type="number" id="setRpm" min="1" max="60"></div>
     </div>
     <div class="chk"><input type="checkbox" id="setFade"><span>자막 등장 페이드</span></div>
+    <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
+    <div class="chk"><input type="checkbox" id="setBand"><span>자막에도 배경 띠 (하단 자막 뒤에도 어두운 띠)</span></div>
     <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠)</span></div>
     <div class="chk"><input type="checkbox" id="setAiImage"><span>AI 배경 이미지 생성 (실험적 · Gemini · 실패 시 기본 배경) </span></div>
     <div class="hint" style="margin:2px 0 0 26px">끄면 항상 되는 그라데이션 배경을 씁니다. 모델 가용성에 따라 실패할 수 있어요.</div>
@@ -1655,6 +1657,8 @@ function fillSettings(s){
   $('setOutline').value = s.subtitle.outline;
   $('setMarginV').value = s.subtitle.margin_v;
   $('setFade').checked = !!s.subtitle.fade;
+  $('setHookBand').checked = s.subtitle.hook_band !== false;
+  $('setBand').checked = !!s.subtitle.band;
   $('setHlColor').value = s.subtitle.highlight_color;
   $('setMotion').value = s.bg.motion;
   $('setMotionAmt').value = s.bg.motion_amount;
@@ -1669,7 +1673,8 @@ async function saveSettings(){
   const body = {settings: {
     subtitle: {font_size: +$('setFontSize').value, outline: +$('setOutline').value,
                margin_v: +$('setMarginV').value, fade: $('setFade').checked,
-               highlight_color: $('setHlColor').value.toUpperCase()},
+               highlight_color: $('setHlColor').value.toUpperCase(),
+               hook_band: $('setHookBand').checked, band: $('setBand').checked},
     bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,
          ai_image: $('setAiImage').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
