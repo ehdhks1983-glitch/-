@@ -29,8 +29,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{size},{primary},&H000000FF,{def_outline_color},&H80000000,0,0,0,0,100,100,0,0,{def_border},{def_outline},{shadow},{alignment},60,60,{margin_v},1
-Style: Title,{font},{title_size},&H00FFFFFF,&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,0,{title_border},{title_outline},{title_shadow},8,50,50,{title_margin_v},1
+Style: Default,{font},{size},{primary},&H000000FF,{def_outline_color},&H80000000,0,0,0,0,100,100,0,0,{def_border},{def_outline},{shadow},{alignment},{sub_ml},{sub_ml},{margin_v},1
+Style: Title,{font},{title_size},&H00FFFFFF,&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,0,{title_border},{title_outline},{title_shadow},8,{title_ml},{title_ml},{title_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -226,6 +226,8 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         title_outline=sc(20) if hook_band else sc(presets.TITLE_OUTLINE),
         title_shadow=0 if hook_band else presets.TITLE_SHADOW,
         title_margin_v=presets.title_margin_v(spec.canvas.h),
+        sub_ml=sc(110),    # 자막 좌우 여백 — 우측 버튼 기둥(~140px)에 긴 줄이 깔리지 않게
+        title_ml=sc(90),   # 제목 좌우 여백
     )
     lines = []
     # 상단 제목(훅) — 영상 내내 고정 표시

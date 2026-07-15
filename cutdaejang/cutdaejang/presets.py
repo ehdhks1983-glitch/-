@@ -49,7 +49,7 @@ def subtitle_alignment(position: str) -> int:
 
 def subtitle_margin_v(position: str, canvas_h: int) -> int:
     """세로 여백 기본값 — 쇼츠 하단 UI(제목·버튼) 안전 영역을 피해 화면 높이 비례로 계산."""
-    ratio = {"bottom": 0.146, "center": 0.0, "top": 0.10}[position]
+    ratio = {"bottom": 0.25, "center": 0.0, "top": 0.13}[position]  # 하단 UI(~420px) 위
     return round(canvas_h * ratio)
 
 
@@ -63,8 +63,12 @@ def main_video_target_width(canvas_w: int, layout: str, scale: float) -> int:
 
 
 # 상단 제목(훅) 스타일 — 참고 영상처럼 크게·볼드·상단 고정 (기획안 완성도 향상)
+# ── 유튜브 쇼츠 안전 영역 (1080×1920 기준, 크리에이터 템플릿 합의값) ──
+#  · 상단 0~220px: 시스템 상태바 + Shorts 헤더(검색·카메라·메뉴) → 글자 가림
+#  · 하단 0~420px: 영상 제목·채널명·설명·음악 + 진행바
+#  · 우측 폭 ~140px(높이 45~85% 구간): 좋아요·댓글·공유·리믹스 버튼 기둥
 TITLE_SIZE_RATIO = 0.058      # 캔버스 높이 대비 글자 크기 (1920→약 111px)
-TITLE_MARGIN_RATIO = 0.055    # 상단 여백
+TITLE_MARGIN_RATIO = 0.125    # 상단 여백 240px — Shorts 헤더(0~220px) 아래로
 TITLE_OUTLINE = 5
 TITLE_SHADOW = 1
 
