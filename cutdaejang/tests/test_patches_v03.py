@@ -361,3 +361,66 @@ def test_background_falls_back_on_any_provider_error(tmp_path):
 def test_ai_image_off_by_default():
     assert config.DEFAULTS["bg"]["ai_image"] is False
     assert config.load_settings()["bg"]["image_model"]  # 모델명 설정 존재
+
+
+# ─────────── v0.27: 내 목소리 클로닝 (ElevenLabs) ───────────
+
+
+def test_elevenlabs_requires_key(monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    with pytest.raises(tts_engine.TTSError):
+        tts_engine.make_provider("elevenlabs", config.load_settings())
+
+
+def test_elevenlabs_synthesize_needs_registered_voice(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+    p = tts_engine.make_provider("elevenlabs", config.load_settings())
+    with pytest.raises(TTSNonRetryable, match="등록"):
+        p.synthesize("안녕하세요", "", str(tmp_path / "x.wav"))  # 클론 등록 전
+
+
+def test_clone_voice_validates_inputs(tmp_path, monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    with pytest.raises(tts_engine.TTSError, match="키"):
+        tts_engine.clone_voice("내 목소리", str(tmp_path / "x.mp3"))
+    with pytest.raises(tts_engine.TTSError, match="찾을 수 없"):
+        tts_engine.clone_voice("내 목소리", str(tmp_path / "x.mp3"), api_key="k")
+
+
+def test_clone_voice_builds_multipart_and_parses_id(tmp_path, monkeypatch):
+    rec = tmp_path / "voice.mp3"
+    rec.write_bytes(b"ID3fakemp3bytes")
+    captured = {}
+
+    class FakeResp:
+        def read(self):
+            return json.dumps({"voice_id": "abc123"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=0):
+        captured["url"] = req.full_url
+        captured["headers"] = dict(req.headers)
+        captured["data"] = req.data
+        return FakeResp()
+
+    monkeypatch.setattr(tts_engine.urllib.request, "urlopen", fake_urlopen)
+    vid = tts_engine.clone_voice("내 목소리", str(rec), api_key="k123")
+    assert vid == "abc123"
+    assert "voices/add" in captured["url"]
+    assert captured["headers"].get("Xi-api-key") == "k123"
+    body = captured["data"]
+    assert b'name="name"' in body and "내 목소리".encode() in body
+    assert b'name="files"' in body and b"ID3fakemp3bytes" in body
+    assert b"audio/mpeg" in body
+
+
+def test_resolve_voice_elevenlabs_uses_saved_clone_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+    settings = config.deep_merge(config.load_settings(), {"tts": {"voice_elevenlabs": "vid9"}})
+    eng = TTSEngine(tts_engine.make_provider("elevenlabs", settings), tmp_path, settings=settings)
+    assert eng._resolve_voice("") == "vid9"

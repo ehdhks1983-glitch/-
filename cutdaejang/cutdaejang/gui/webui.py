@@ -124,6 +124,7 @@ def _apply_keys(params: dict) -> None:
     for field, env, name in (
         ("gemini_key", "GEMINI_API_KEY", "gemini"),
         ("openai_key", "OPENAI_API_KEY", "openai"),
+        ("elevenlabs_key", "ELEVENLABS_API_KEY", "elevenlabs"),
     ):
         value = (params.get(field) or "").strip()
         if value:
@@ -136,6 +137,8 @@ def _tts_chain(params: dict, settings: dict) -> list:
     provider = params.get("tts_provider", "stub")
     if provider == "gemini":
         return list(settings["tts"]["fallback_chain"])
+    if provider == "elevenlabs":  # 내 목소리 — 실패 시 기존 체인으로 폴백
+        return ["elevenlabs", *settings["tts"]["fallback_chain"]]
     return [provider]
 
 
@@ -335,9 +338,13 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                     keep = sg.suggest_highlights(subs_d, target_sec=tgt)["keep"]
                 except Exception:
                     keep = sg.suggest_highlights_heuristic(subs_d, target_sec=tgt)["keep"]
+            try:
+                auto_speed = float(params.get("speed") or 1.0)
+            except (TypeError, ValueError):
+                auto_speed = 1.0
             _do_edit_render(job_id, subs_d, (params.get("hook") or "").strip(),
                             params.get("layout") or edit_cfg["layout"],
-                            analysis.cut_video, workdir, keep, 1.0,
+                            analysis.cut_video, workdir, keep, auto_speed,
                             params.get("quality") or "standard", denoise)
             return
         if analysis.subtitles:  # STT/입력 대본/내레이션 대본이 있으면 검토 화면으로
@@ -405,14 +412,22 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 return (t.rsplit("|", 1)[0] if "|" in t else t).strip()
 
             _set_job(job_id, stage="tts", frac=0.0, note="AI 목소리 만드는 중…")
-            chain = (["gemini"] if os.environ.get("GEMINI_API_KEY") else [])
+            narr_voice = ep.get("narr_voice") or ""
+            chain = []
+            if narr_voice == "__mine__" and os.environ.get("ELEVENLABS_API_KEY"):
+                chain.append("elevenlabs")  # 내 목소리 클론 — 실패 시 아래로 폴백
+            if os.environ.get("GEMINI_API_KEY"):
+                chain.append("gemini")
             if sys.platform == "win32":
                 chain.append("windows")
             chain.append("stub")
+            # __mine__은 보이스명이 아니라서 비움 → 제공자별 기본값(클론 id/Kore)으로 해석
+            voice = "" if narr_voice == "__mine__" else (
+                narr_voice or settings["tts"].get("voice_gemini", ""))
             texts = [_tts_clean(s2.text) or "네" for s2 in subs]
             clips, used, note = tts_engine.synth_with_fallback(
                 texts, chain, Path(workdir) / "cache" / "tts", settings,
-                voice=ep.get("narr_voice") or settings["tts"].get("voice_gemini", ""),
+                voice=voice,
                 on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
             )
             from ..core import video_editor  # noqa: PLC0415
@@ -807,6 +822,18 @@ class _Handler(BaseHTTPRequestHandler):
             except sg.ScriptError:
                 hooks = sg.suggest_hooks_stub(ctx)  # 키 없으면 템플릿
             self._send_json({"hooks": hooks})
+        elif path == "/api/clone_voice":
+            # 내 목소리 등록 (ElevenLabs 인스턴트 클론) → voice_id를 설정에 저장
+            _apply_keys(params)
+            fname = (params.get("file_path") or "").strip().strip('"')
+            vname = (params.get("name") or "내 목소리").strip() or "내 목소리"
+            try:
+                vid = tts_engine.clone_voice(vname, fname)
+                config.save_settings({"tts": {"voice_elevenlabs": vid,
+                                              "voice_elevenlabs_name": vname}})
+                self._send_json({"ok": True, "voice_id": vid, "name": vname})
+            except tts_engine.TTSError as e:
+                self._send_json({"error": str(e)}, 400)
         elif path == "/api/pronounce":
             from ..utils.pronounce import pronounce_ko  # noqa: PLC0415
 
@@ -1056,6 +1083,7 @@ class _Handler(BaseHTTPRequestHandler):
             "keys": {
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
+                "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
             },
             "platform": sys.platform,
             "env": _env_check(),
@@ -1263,7 +1291,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.26)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.27)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1327,6 +1355,23 @@ _HTML = """<!doctype html>
         </div>
       </div>
       <div class="hint">넣으면 AI가 대본을 쓰고 목소리(제미나이 키 권장, 없으면 내장 음성)를 입혀요. 보이스·말투는 제미나이 키가 있을 때 적용(내장 음성은 목소리 고정). 대본은 검토 화면에서 수정 가능.</div>
+      <details style="margin-top:8px">
+        <summary class="hint" style="cursor:pointer">🎤 내 목소리 등록(클로닝) — 녹음 파일로 내 목소리를 만들어 내레이션에 사용 <b id="myVoiceState"></b></summary>
+        <div class="row" style="margin-top:8px">
+          <div>
+            <label>녹음 파일 (1~3분 낭독, mp3/wav/m4a)</label>
+            <input type="text" id="cloneFile" placeholder="예) C:\\Users\\me\\내녹음.mp3">
+          </div>
+          <div>
+            <label>ElevenLabs API 키</label>
+            <input type="password" id="elevenKey" placeholder="elevenlabs.io 발급 키">
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button class="ghost" style="margin-bottom:1px" onclick="cloneVoice(event)">등록</button>
+          </div>
+        </div>
+        <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장되고, 위 보이스 목록에 「🎤 내 목소리」가 생깁니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $5)</b>부터 지원 — 꼭 <b>본인 목소리</b>만 등록하세요.</div>
+      </details>
     </div>
     <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
       <label style="margin-top:0">📝 대본 직접 입력 <span class="hint">(선택 — 이미 대본이 있을 때)</span></label>
@@ -1379,6 +1424,13 @@ _HTML = """<!doctype html>
       <span class="hint">목표</span>
       <input type="number" id="autoTargetSec" value="30" min="0" max="90" style="width:64px;padding:6px">
       <span class="hint">초 (0=전체 유지 · 30=핵심만 모아 30초 쇼츠. 키 있으면 AI가 다듬고 골라요)</span>
+      <span class="hint">· 재생 속도</span>
+      <select id="editSpeedSel" style="width:auto;padding:6px 8px">
+        <option value="1">1배</option>
+        <option value="1.25">1.25배</option>
+        <option value="1.5">1.5배</option>
+        <option value="2">2배</option>
+      </select>
     </div>
     <div id="editKeyRow" class="hidden">
       <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
@@ -1408,6 +1460,7 @@ _HTML = """<!doctype html>
         <label>목소리</label>
         <div class="toggle">
           <label id="provWinLabel" class="hidden"><input type="radio" name="prov" value="windows" id="provWin"><span>내장 음성 (무료)</span></label>
+          <label id="provMineLabel" class="hidden"><input type="radio" name="prov" value="elevenlabs" id="provMine"><span>🎤 내 목소리</span></label>
           <label><input type="radio" name="prov" value="gemini"><span>Gemini (실전 품질)</span></label>
           <label><input type="radio" name="prov" value="stub" checked><span>테스트 톤</span></label>
         </div>
@@ -1726,6 +1779,7 @@ async function startEdit(){
     narr_voice: ($('narrVoiceSel')||{}).value||'', narr_style: ($('narrStyleSel')||{}).value||'',
     orig_audio: $('origAudioSel').value,
     bgm: $('bgmEditSel').value, bgm_db: +$('bgmVolSel').value,
+    speed: +$('editSpeedSel').value || 1,
     auto_edit: $('autoEditChk').checked, auto_target_sec: +$('autoTargetSec').value||0,
     script: $('editScript').value,
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
@@ -2029,16 +2083,44 @@ function onNarrTopicInput(){
 
 async function previewNarrVoice(ev){
   ev.preventDefault();
-  const prov = window._hasGeminiKey ? 'gemini' : (window._isWin ? 'windows' : 'stub');
+  let prov = window._hasGeminiKey ? 'gemini' : (window._isWin ? 'windows' : 'stub');
+  if($('narrVoiceSel').value === '__mine__') prov = 'elevenlabs';
   const btn = ev.target;
   btn.disabled = true; btn.textContent = '합성 중...';
   try{
+    const v = $('narrVoiceSel').value;
     const res = await fetch('/api/preview', {method:'POST', body: JSON.stringify({
-      tts_provider: prov, voice: $('narrVoiceSel').value, tts_style: $('narrStyleSel').value,
+      tts_provider: prov, voice: v === '__mine__' ? '' : v, tts_style: $('narrStyleSel').value,
     })});
     const data = await res.json();
     if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
   } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
+}
+
+async function cloneVoice(ev){
+  ev.preventDefault();
+  const file = $('cloneFile').value.trim();
+  if(!file){ alert('녹음 파일 경로를 입력하세요 (1~3분 낭독 녹음)'); return; }
+  const key = $('elevenKey').value.trim();
+  if(!key && !window._hasElevenKey){ alert('ElevenLabs API 키를 입력하세요 (elevenlabs.io에서 발급, 클로닝은 Starter 이상)'); return; }
+  const btn = ev.target; btn.disabled = true; btn.textContent = '등록 중…(최대 1분)';
+  try{
+    const data = await (await fetch('/api/clone_voice', {method:'POST', body: JSON.stringify({
+      file_path: file, name: '내 목소리', elevenlabs_key: key, save_key: true,
+    })})).json();
+    if(data.error){ alert(data.error); return; }
+    window._hasElevenKey = true;
+    addMyVoiceOption(data.name || '내 목소리');
+    $('narrVoiceSel').value = '__mine__';
+    alert('✅ 내 목소리 등록 완료! 보이스 목록에서 「🎤 내 목소리」가 선택됐어요. 🔊 미리듣기로 확인해보세요.');
+  } finally { btn.disabled = false; btn.textContent = '등록'; }
+}
+
+function addMyVoiceOption(name){
+  if(![...$('narrVoiceSel').options].some(o => o.value === '__mine__'))
+    $('narrVoiceSel').add(new Option('🎤 내 목소리 (' + name + ')', '__mine__'), 0);
+  $('provMineLabel').classList.remove('hidden');
+  $('myVoiceState').textContent = '— ✅ 등록됨';
 }
 
 function showErrors(errs){
@@ -2189,6 +2271,7 @@ async function poll(){
   if(!$('draftsDir').value && state.drafts_dir) $('draftsDir').value = state.drafts_dir;
 
   window._isWin = (state.platform || '').startsWith('win');
+  window._hasElevenKey = !!(state.keys && state.keys.elevenlabs);
   if(window._isWin){
     $('provWinLabel').classList.remove('hidden');
     if(!window._defaultSet){ window._defaultSet = true; $('provWin').checked = true; }
@@ -2203,6 +2286,8 @@ async function poll(){
       for(const f of state.bgm_files){ $('bgmSel').add(new Option(f, f)); $('bgmEditSel').add(new Option(f, f)); }
     }
     if(state.settings) fillSettings(state.settings);
+    const mv = ((state.settings || {}).tts || {});
+    if(mv.voice_elevenlabs) addMyVoiceOption(mv.voice_elevenlabs_name || '내 목소리');
   }
   $('keySaved').classList.toggle('hidden', !state.keys.gemini);
   const env = state.env || {};

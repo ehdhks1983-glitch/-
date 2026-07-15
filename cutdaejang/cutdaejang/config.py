@@ -23,6 +23,9 @@ DEFAULTS: dict = {
         "voice_openai": "nova",
         "model_gemini": "gemini-2.5-flash-preview-tts",
         "model_openai": "gpt-4o-mini-tts",
+        "voice_elevenlabs": "",           # 내 목소리 클론 voice_id (등록 시 저장)
+        "voice_elevenlabs_name": "",      # 표시용 이름
+        "model_elevenlabs": "eleven_multilingual_v2",
     },
     "audio": {
         "gap_ms": 220,                # 문장 간격
@@ -116,7 +119,8 @@ def save_settings(overrides: dict, path: Optional[str] = None) -> str:
 
 # ─────────── API 키 저장 (선택 기능 — 이 PC 파일에 평문 저장) ───────────
 
-_KEY_ENVS = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+_KEY_ENVS = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
+             "elevenlabs": "ELEVENLABS_API_KEY"}
 
 
 def api_keys_path() -> Path:

@@ -21,6 +21,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections import deque
 from pathlib import Path
 from typing import Callable, List, Optional, Protocol, Tuple
@@ -216,6 +217,95 @@ class OpenAITTS:
         return str(out_path)
 
 
+class ElevenLabsTTS:
+    """ElevenLabs — 내 목소리 클로닝 TTS (한국어 지원, 클로닝은 유료 구독 필요).
+
+    voice에는 클론/보이스의 voice_id를 넣는다. 응답은 mp3 → 캐시 단계에서 wav 변환.
+    """
+
+    name = "elevenlabs"
+
+    def __init__(self, api_key: Optional[str] = None, model: str = "eleven_multilingual_v2"):
+        self.api_key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
+        self.model = model
+        if not self.api_key:
+            raise TTSError("ELEVENLABS_API_KEY가 설정되어 있지 않습니다")
+
+    def synthesize(self, text: str, voice: str, out_path: str) -> str:
+        if not voice:
+            raise TTSNonRetryable("내 목소리가 아직 등록되지 않았습니다 — [🎤 내 목소리 등록]을 먼저 해주세요")
+        req = urllib.request.Request(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_44100_128",
+            data=json.dumps({
+                "text": text, "model_id": self.model,
+                "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json", "xi-api-key": self.api_key},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                Path(out_path).write_bytes(resp.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")
+            if e.code in (401, 403):
+                raise TTSNonRetryable(f"ElevenLabs 키/권한 오류 {e.code}: {body[:200]}") from e
+            raise TTSHTTPError(e.code, None, body) from e
+        return str(out_path)
+
+
+def clone_voice(name: str, audio_path: str, api_key: str = "") -> str:
+    """녹음 파일 1개로 ElevenLabs 인스턴트 보이스 클론 생성 → voice_id 반환.
+
+    1~3분 분량의 깨끗한 낭독 녹음(mp3/wav/m4a)을 권장. 무료 등급은 클로닝 미지원.
+    """
+    key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
+    if not key:
+        raise TTSError("ElevenLabs API 키를 입력하세요 (elevenlabs.io에서 발급)")
+    p = Path(str(audio_path).strip().strip('"'))
+    if not p.is_file():
+        raise TTSError(f"녹음 파일을 찾을 수 없습니다: {p}")
+    if p.stat().st_size > 25 * 1024 * 1024:
+        raise TTSError("녹음 파일이 너무 큽니다(25MB 초과) — 1~3분 분량이면 충분해요")
+    ctype = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+             ".ogg": "audio/ogg", ".flac": "audio/flac"}.get(p.suffix.lower(), "audio/mpeg")
+    boundary = f"----cutdaejang{uuid.uuid4().hex}"
+
+    def part(headers: str, body: bytes) -> bytes:
+        return f"--{boundary}\r\n{headers}\r\n\r\n".encode("utf-8") + body + b"\r\n"
+
+    body = (
+        part('Content-Disposition: form-data; name="name"', name.encode("utf-8"))
+        + part(
+            f'Content-Disposition: form-data; name="files"; filename="{p.name}"'
+            f"\r\nContent-Type: {ctype}",
+            p.read_bytes(),
+        )
+        + f"--{boundary}--\r\n".encode("utf-8")
+    )
+    req = urllib.request.Request(
+        "https://api.elevenlabs.io/v1/voices/add",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "xi-api-key": key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        text = e.read().decode("utf-8", "replace")
+        if e.code in (401, 403):
+            raise TTSError("ElevenLabs 키가 잘못됐거나 권한이 없습니다 — 키를 확인하세요") from e
+        if "subscription" in text.lower() or "upgrade" in text.lower() or e.code == 402:
+            raise TTSError("이 계정 등급은 목소리 클로닝을 지원하지 않습니다 — "
+                           "elevenlabs.io에서 Starter(월 $5) 이상으로 업그레이드하세요") from e
+        raise TTSError(f"목소리 등록 실패({e.code}): {text[:250]}") from e
+    vid = data.get("voice_id", "")
+    if not vid:
+        raise TTSError(f"목소리 등록 응답에 voice_id가 없습니다: {json.dumps(data)[:200]}")
+    return vid
+
+
 _SAPI_PS1 = r"""param($TextFile, $OutWav)
 Add-Type -AssemblyName System.Speech
 $text = [IO.File]::ReadAllText($TextFile, [Text.Encoding]::UTF8)
@@ -286,7 +376,8 @@ class StubTTS:
         return str(out_path)
 
 
-PROVIDERS = {"gemini": GeminiTTS, "openai": OpenAITTS, "windows": WindowsTTS, "stub": StubTTS}
+PROVIDERS = {"gemini": GeminiTTS, "openai": OpenAITTS, "elevenlabs": ElevenLabsTTS,
+             "windows": WindowsTTS, "stub": StubTTS}
 
 # 보이스 스타일 프리셋 (지시서 PATCH 6) — Gemini는 자연어 지시문을 해석한다.
 # ⚠ 지시문이 음성으로 읽히는지는 실키 검증 필요 — 읽히면 아래를 영어 1줄로 교체.
@@ -376,6 +467,8 @@ class TTSEngine:
             return OPENAI_STYLE_VOICES.get(self.style_preset, tts_cfg.get("voice_openai", "nova"))
         if self.provider.name == "gemini":
             return tts_cfg.get("voice_gemini", "Kore")
+        if self.provider.name == "elevenlabs":
+            return tts_cfg.get("voice_elevenlabs", "")
         return ""
 
     def _speak_text(self, text: str) -> str:
@@ -496,6 +589,8 @@ def make_provider(name: str, settings: dict) -> TTSProvider:
         return GeminiTTS(model=tts_cfg.get("model_gemini", "gemini-2.5-flash-preview-tts"))
     if name == "openai":
         return OpenAITTS(model=tts_cfg.get("model_openai", "gpt-4o-mini-tts"))
+    if name == "elevenlabs":
+        return ElevenLabsTTS(model=tts_cfg.get("model_elevenlabs", "eleven_multilingual_v2"))
     return PROVIDERS[name]()
 
 
