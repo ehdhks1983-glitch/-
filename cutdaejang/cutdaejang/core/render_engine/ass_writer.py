@@ -179,8 +179,17 @@ def dialogue_text(sub, style) -> str:
 
 
 def write_ass(spec: TimelineSpec, out_path) -> str:
-    """spec.subtitles(+spec.hook) → .ass 파일 생성. 생성된 경로를 반환."""
+    """spec.subtitles(+spec.hook) → .ass 파일 생성. 생성된 경로를 반환.
+
+    자막 크기·여백 설정은 1080×1920 기준 픽셀값 → 캔버스 높이에 비례 스케일.
+    (4K 업스케일에서 자막이 절반 크기·절반 높이로 나오던 버그 수정)
+    """
     style = spec.style
+    sf = spec.canvas.h / 1920.0  # 해상도 스케일 팩터 (1920 기준)
+
+    def sc(v: float) -> int:
+        return max(1, round(v * sf))
+
     # 배경 띠(BorderStyle=3=불투명 박스) — 유튜브 썸네일 스타일. OutlineColour가 박스 색.
     sub_band = getattr(style, "band", False)
     hook_band = getattr(style, "hook_band", True)
@@ -188,23 +197,23 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         w=spec.canvas.w,
         h=spec.canvas.h,
         font=presets.font_family(style.font),
-        size=style.size,
+        size=sc(style.size),
         primary=ass_color(style.primary_color),
         def_border=3 if sub_band else 1,
         # 띠일 때: 반투명 검정 박스 + 박스 여백(Outline), 아니면 글자 외곽선
         def_outline_color="&H90101010" if sub_band else ass_color(style.outline_color),
-        def_outline=18 if sub_band else style.outline,
-        shadow=0 if sub_band else style.shadow,
+        def_outline=sc(18) if sub_band else sc(style.outline),
+        shadow=0 if sub_band else sc(style.shadow) if style.shadow else 0,
         alignment=presets.subtitle_alignment(style.position),
         margin_v=(
-            style.margin_v
+            sc(style.margin_v)
             if style.margin_v is not None
             else presets.subtitle_margin_v(style.position, spec.canvas.h)
         ),
         title_size=presets.title_size(spec.canvas.h),
         title_border=3 if hook_band else 1,
         title_outline_color="&H90101010" if hook_band else "&H00101010",
-        title_outline=20 if hook_band else presets.TITLE_OUTLINE,
+        title_outline=sc(20) if hook_band else sc(presets.TITLE_OUTLINE),
         title_shadow=0 if hook_band else presets.TITLE_SHADOW,
         title_margin_v=presets.title_margin_v(spec.canvas.h),
     )

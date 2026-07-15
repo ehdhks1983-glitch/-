@@ -43,10 +43,10 @@ DEFAULTS: dict = {
         "image_model": "gemini-2.5-flash-image-preview",  # 모델 가용성 변동 대비 설정화
     },
     "subtitle": {
-        "font_size": 76,
+        "font_size": 84,             # 유튜브 쇼츠 기본 (v0.23 상향)
         "outline": 4,
         "shadow": 1,
-        "margin_v": 420,              # 쇼츠 하단 UI(제목·버튼)와 안 겹치는 높이
+        "margin_v": 480,              # 쇼츠 하단 UI(제목·버튼·진행바)에 안 가리는 높이
         "fade": True,
         "highlight_color": "#FFD400",
         "band": False,                # 자막 뒤 배경 띠 (유튜브 썸네일 스타일)

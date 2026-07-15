@@ -304,6 +304,32 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             edit_summary=_edit_summary(analysis),
         )
         analysis.subtitles = review_subs
+        if params.get("auto_edit"):  # 🤖 완전 자동: 검토 생략, (키 있으면) AI 다듬기+핵심 선별 → 렌더
+            from ..core import script_generator as sg  # noqa: PLC0415
+
+            subs_d = edit_mode.subtitles_to_dicts(analysis.subtitles)
+            if subs_d and os.environ.get("GEMINI_API_KEY") and not narr_topic and not has_script:
+                _set_job(job_id, stage="script", note="AI가 대본을 다듬는 중…")
+                try:
+                    lines = sg.refine_subtitles([d["text"] for d in subs_d])
+                    for d, t in zip(subs_d, lines):
+                        if t:
+                            d["text"] = t
+                except Exception:
+                    pass
+            keep = None
+            tgt = int(params.get("auto_target_sec") or 0)
+            if subs_d and tgt > 0:
+                _set_job(job_id, note=f"핵심 구간 골라 {tgt}초 쇼츠 구성 중…")
+                try:
+                    keep = sg.suggest_highlights(subs_d, target_sec=tgt)["keep"]
+                except Exception:
+                    keep = sg.suggest_highlights_heuristic(subs_d, target_sec=tgt)["keep"]
+            _do_edit_render(job_id, subs_d, (params.get("hook") or "").strip(),
+                            params.get("layout") or edit_cfg["layout"],
+                            analysis.cut_video, workdir, keep, 1.0,
+                            params.get("quality") or "standard", denoise)
+            return
         if analysis.subtitles:  # STT/입력 대본/내레이션 대본이 있으면 검토 화면으로
             _set_job(
                 job_id, status="review_subtitle", stage="review", note="",
@@ -1199,7 +1225,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.22.1)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.23.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1274,6 +1300,13 @@ _HTML = """<!doctype html>
         <option value="high">강하게</option>
       </select>
       <span class="hint">배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
+    </div>
+    <div class="chk" style="gap:8px">
+      <input type="checkbox" id="autoEditChk">
+      <span>🤖 완전 자동 — 검토 없이 바로 완성</span>
+      <span class="hint">목표</span>
+      <input type="number" id="autoTargetSec" value="30" min="0" max="90" style="width:64px;padding:6px">
+      <span class="hint">초 (0=전체 유지 · 30=핵심만 모아 30초 쇼츠. 키 있으면 AI가 다듬고 골라요)</span>
     </div>
     <div id="editKeyRow" class="hidden">
       <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
@@ -1548,6 +1581,10 @@ function switchAppMode(){
   const edit = pick('appmode') === 'edit';
   $('editCard').classList.toggle('hidden', !edit);
   $('formCard').classList.toggle('hidden', edit);
+  // 진행/완료 상태 카드는 그 작업을 시작한 모드에서만 보이게 (모드 간 섞임 방지)
+  const mismatch = currentJob && window._jobMode &&
+    ((edit && window._jobMode !== 'edit') || (!edit && window._jobMode !== 'gen'));
+  if(currentJob) $('statusCard').classList.toggle('hidden', !!mismatch);
   if(edit && !window._sttFilled) loadStt();
 }
 
@@ -1612,6 +1649,7 @@ async function startEdit(){
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
+    auto_edit: $('autoEditChk').checked, auto_target_sec: +$('autoTargetSec').value||0,
     script: $('editScript').value,
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
     gemini_key: $('editGeminiKey').value, save_key: true,
@@ -1620,6 +1658,7 @@ async function startEdit(){
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
   currentJob = data.job_id;
+  window._jobMode = 'edit';
   window._subLoaded = false;
   $('editBtn').disabled = true;
   $('statusCard').classList.remove('hidden');
@@ -1857,6 +1896,7 @@ async function generate(){
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
   currentJob = data.job_id;
+  window._jobMode = 'gen';
   $('goBtn').disabled = true;
   $('statusCard').classList.remove('hidden');
   $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
@@ -2005,6 +2045,7 @@ async function regen(id){
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
   currentJob = data.job_id;
+  window._jobMode = 'gen';
   $('statusCard').classList.remove('hidden');
   $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
   $('reviewBox').classList.add('hidden');

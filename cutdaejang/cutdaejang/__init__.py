@@ -5,6 +5,6 @@
   - 출력 B: Timeline Spec → render_engine(FFmpeg) → mp4 (무인 대량생산용)
 """
 
-__version__ = "0.22.1"
+__version__ = "0.23.0"
 
 from .spec import TimelineSpec  # noqa: F401

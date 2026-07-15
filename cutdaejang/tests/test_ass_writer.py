@@ -144,3 +144,19 @@ def test_write_ass_margin_override(tmp_path):
         l for l in out.read_text(encoding="utf-8").splitlines() if l.startswith("Style:")
     )
     assert style_line.split(",")[21] == "500"
+
+
+def test_write_ass_scales_to_canvas(tmp_path):
+    # 4K(2배) 캔버스 → 자막 크기·여백도 2배 (초고화질에서 절반 크기로 나오던 버그)
+    from cutdaejang.spec import Background, Canvas, Style, Subtitle, TimelineSpec
+
+    spec = TimelineSpec(
+        canvas=Canvas(w=2160, h=3840, fps=30), duration_us=1_000_000,
+        background=Background(type="color", color="#000"),
+        subtitles=[Subtitle("가", 0, 500_000)],
+        style=Style(size=84, margin_v=480, outline=4),
+    )
+    write_ass(spec, tmp_path / "a.ass")
+    st = next(l for l in (tmp_path / "a.ass").read_text(encoding="utf-8").splitlines()
+              if l.startswith("Style: Default")).split(",")
+    assert st[2] == "168" and st[21] == "960"
