@@ -257,8 +257,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         cut_silence = params.get("cut_silence", True)
         script_lines = (params.get("script") or "").splitlines()
         has_script = any(ln.strip() for ln in script_lines)
+        narr_topic = (params.get("narr_topic") or "").strip()
         stt = None
-        if auto_subtitle and not has_script:  # 대본 있으면 STT 생략 (오인식·비용 없음)
+        if auto_subtitle and not has_script and not narr_topic:  # 대본/내레이션 있으면 STT 생략
             stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
             # Whisper 모델(정확도)을 이 작업에서 고른 값으로 덮어씀
             stt_cfg = {**edit_cfg, "whisper_model": params.get("whisper_model") or edit_cfg["whisper_model"]}
@@ -280,15 +281,30 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             status_cb=lambda msg: _set_job(job_id, note=msg),
         )
         denoise = params.get("denoise") or False
+        review_subs = analysis.subtitles
+        if narr_topic:  # AI 내레이션: 대본 생성 → 컷 길이에 비례 배치 (검토에서 수정)
+            _set_job(job_id, stage="script", note="AI 대본 작성 중…")
+            try:
+                provider = SCRIPT_PROVIDERS["gemini"]() if os.environ.get("GEMINI_API_KEY") \
+                    else SCRIPT_PROVIDERS["stub"]()
+                target = max(15, min(90, int(analysis.cut_us / 1e6)))
+                script = provider.generate(narr_topic, target_sec=target)
+            except Exception:
+                script = SCRIPT_PROVIDERS["stub"]().generate(narr_topic)
+            review_subs = edit_mode.align_script_to_segments(
+                script.sentences, [(0, analysis.cut_us)], total_us=analysis.cut_us)
+            for sub, hl in zip(review_subs, script.highlights):
+                sub.highlight = hl or ""
         # 분석 결과를 job에 저장 (2단계 렌더에서 사용)
         _set_job(
             job_id, cut_video=analysis.cut_video,
             edit_params={"layout": params.get("layout") or edit_cfg["layout"],
                          "hook": (params.get("hook") or "").strip(),
-                         "denoise": denoise},
+                         "denoise": denoise, "narration": bool(narr_topic)},
             edit_summary=_edit_summary(analysis),
         )
-        if analysis.subtitles:  # STT 또는 입력 대본으로 자막이 있으면 검토 화면으로
+        analysis.subtitles = review_subs
+        if analysis.subtitles:  # STT/입력 대본/내레이션 대본이 있으면 검토 화면으로
             _set_job(
                 job_id, status="review_subtitle", stage="review", note="",
                 subtitles=edit_mode.subtitles_to_dicts(analysis.subtitles),
@@ -322,6 +338,33 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         _set_job(job_id, status="running", stage="render", frac=0.0, note=note)
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         out = str(Path(workdir) / job_id / "edited.mp4")
+        job = _get_job(job_id) or {}
+        narration_wav = None
+        if (job.get("edit_params") or {}).get("narration") and subs:
+            import re as _re  # noqa: PLC0415
+            from ..core import tts_engine  # noqa: PLC0415
+
+            def _tts_clean(t: str) -> str:  # 색 마크업·강조 표기는 TTS에서 제거
+                t = _re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", t)
+                return (t.rsplit("|", 1)[0] if "|" in t else t).strip()
+
+            _set_job(job_id, stage="tts", frac=0.0, note="AI 목소리 만드는 중…")
+            chain = (["gemini"] if os.environ.get("GEMINI_API_KEY") else [])
+            if sys.platform == "win32":
+                chain.append("windows")
+            chain.append("stub")
+            texts = [_tts_clean(s2.text) or "네" for s2 in subs]
+            clips, used, note = tts_engine.synth_with_fallback(
+                texts, chain, Path(workdir) / "cache" / "tts", settings,
+                voice=settings["tts"].get("voice_gemini", ""),
+                on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
+            )
+            from ..utils import ffmpeg as ff  # noqa: PLC0415
+            cut_us = ff.probe_duration_us(cut_video)
+            narration_wav = edit_mode.build_narration_wav(
+                clips, subs, cut_us, Path(workdir) / job_id / "narration.wav")
+            if note:
+                _set_job(job_id, note=note)
         # 핵심 구간만 골랐으면(전체가 아니면) 영상을 그 구간만 다시 잘라 진짜 쇼츠 길이로
         if keep is not None and 0 < len(keep) < len(subs):
             _set_job(job_id, stage="cut", frac=0.0,
@@ -332,6 +375,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=build_style(settings),
             layout=layout, hook=hook, speed=speed, quality=quality, denoise=denoise,
+            narration_wav=narration_wav,
             progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
         )
         _set_job(
@@ -1155,7 +1199,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.20.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.21.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1201,6 +1245,11 @@ _HTML = """<!doctype html>
           <div class="hint">클수록 정확하지만 느리고, 첫 사용 시 모델 다운로드가 큽니다.</div>
         </div>
       </div>
+    </div>
+    <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
+      <label style="margin-top:0">🎙️ AI 내레이션 추가 <span class="hint">(선택 — 말 없는 영상에 AI 대본+목소리+자막)</span></label>
+      <input type="text" id="narrTopic" placeholder="영상 주제/내용 입력 (예: 동네 라멘 맛집 소개) — 비우면 사용 안 함">
+      <div class="hint">넣으면 AI가 대본을 쓰고 목소리(제미나이 키 권장, 없으면 내장 음성)를 입혀요. 원본 소리는 배경으로 작게 깔립니다. 대본은 검토 화면에서 수정 가능.</div>
     </div>
     <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
       <label style="margin-top:0">📝 대본 직접 입력 <span class="hint">(선택 — 이미 대본이 있을 때)</span></label>
@@ -1561,7 +1610,7 @@ async function startEdit(){
   const body = {
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
-    denoise: $('denoiseSel').value,
+    denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
     script: $('editScript').value,
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
     gemini_key: $('editGeminiKey').value, save_key: true,

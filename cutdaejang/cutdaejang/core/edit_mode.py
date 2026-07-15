@@ -167,6 +167,7 @@ def render_edited(
     speed: float = 1.0,                # 저장(렌더) 속도 배수 (1.25/1.5/2배 등)
     quality: str = "standard",         # 화질 등급: standard | high | ultra(4K)
     denoise=False,                     # 잡음 제거: False | True(중) | 'low'|'mid'|'high'
+    narration_wav: Optional[str] = None,  # AI 내레이션 트랙(있으면 원본 소리는 덕킹)
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> str:
     """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다.
@@ -225,14 +226,22 @@ def render_edited(
         afilters.append(dn)
     if slow:
         afilters.append(_atempo_chain(speed))
-    if afilters:
+    if narration_wav:
+        # 원본 오디오는 배경으로 덕킹(0.15), 내레이션을 위에 얹음
+        chain = ("," + ",".join(afilters)) if afilters else ""
+        vf += (f";[0:a]volume=0.15[bgm];[1:a]apad[nar];"
+               f"[bgm][nar]amix=inputs=2:duration=first:normalize=0{chain}[a]")
+        amap = "[a]"
+    elif afilters:
         vf += f";[0:a]{','.join(afilters)}[a]"
         amap = "[a]"
     else:
         amap = "0:a"
 
-    args = [
-        "-y", "-i", str(cut_video),
+    args = ["-y", "-i", str(cut_video)]
+    if narration_wav:
+        args += ["-i", str(narration_wav)]
+    args += [
         "-filter_complex", vf,
         "-map", vmap, "-map", amap,
         "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
@@ -439,6 +448,28 @@ def rebuild_from_keep(
     return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
 
 
+def build_narration_wav(clips: List, subtitles: List[Subtitle], total_us: int,
+                        out_wav) -> str:
+    """TTS 클립들을 각 자막 시작 시각에 배치해 하나의 내레이션 트랙으로 합침."""
+    if not clips:
+        raise ValueError("내레이션 클립이 없습니다")
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error"]
+    parts, labels = [], []
+    for i, (clip, sub) in enumerate(zip(clips, subtitles)):
+        args += ["-i", str(clip)]
+        ms = max(0, sub.start_us // 1000)
+        parts.append(f"[{i}:a]adelay={ms}|{ms}[n{i}]")
+        labels.append(f"[n{i}]")
+    total_s = max(0.1, total_us / 1e6)
+    fc = (
+        ";".join(parts) + ";" + "".join(labels)
+        + f"amix=inputs={len(labels)}:normalize=0,apad,atrim=0:{total_s:.3f}[a]"
+    )
+    args += ["-filter_complex", fc, "-map", "[a]", "-ar", "44100", str(out_wav)]
+    ff.run(args)
+    return str(out_wav)
+
+
 def split_into_clips(subtitles: List[Subtitle], target_sec: float = 30.0,
                      min_last_sec: float = 6.0) -> List[List[int]]:
     """자막을 순서대로 목표 길이(초) 단위 그룹으로 나눔 → 쇼츠 여러 개 분할용.
@@ -474,6 +505,7 @@ def render_from_analysis(
     speed: float = 1.0,
     quality: str = "standard",
     denoise=False,
+    narration_wav: Optional[str] = None,
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
     """2단계: (수정된) 자막으로 최종 렌더. speed 배속, quality 화질, denoise 잡음 제거."""
@@ -488,7 +520,8 @@ def render_from_analysis(
             save_srt(subtitles, Path(out_path).parent / "subtitles.srt")
         render_edited(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
-            speed=speed, quality=quality, denoise=denoise, progress_cb=progress_cb,
+            speed=speed, quality=quality, denoise=denoise,
+            narration_wav=narration_wav, progress_cb=progress_cb,
         )
         if not _fits_us(ff.probe_duration_us(out_path), int(result.cut_us / speed), tol=200_000):
             result.errors.append("출력 길이가 예상과 다릅니다")

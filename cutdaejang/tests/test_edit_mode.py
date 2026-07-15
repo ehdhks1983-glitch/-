@@ -277,6 +277,24 @@ def test_refine_subtitles_preserves_count(monkeypatch):
     assert out[2] == "원본3"                    # 응답에 없는 줄은 원문 유지
 
 
+@requires_ffmpeg
+def test_build_narration_wav_places_clips(tmp_path):
+    from cutdaejang.core.edit_mode import build_narration_wav
+    from cutdaejang.spec import Subtitle
+    from cutdaejang.utils import ffmpeg as ff
+
+    clips = []
+    for i in range(2):
+        c = tmp_path / f"c{i}.wav"
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                "-i", f"sine=frequency={300 + i * 100}:duration=1:sample_rate=24000", str(c)])
+        clips.append(str(c))
+    subs = [Subtitle("a", 500_000, 1_500_000), Subtitle("b", 3_000_000, 4_000_000)]
+    out = build_narration_wav(clips, subs, 6_000_000, tmp_path / "n.wav")
+    # 전체 길이(6초)에 맞춰 패딩·트림됨
+    assert abs(ff.probe_duration_us(out) - 6_000_000) < 200_000
+
+
 def test_split_into_clips_grouping():
     from cutdaejang.core.edit_mode import split_into_clips
     from cutdaejang.spec import Subtitle
