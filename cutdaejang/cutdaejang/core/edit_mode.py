@@ -117,6 +117,29 @@ def _atempo_chain(speed: float) -> str:
     return ",".join(parts)
 
 
+# 화질(선명도) 프리셋 — 유튜브는 고해상도 업로드에 더 좋은 코덱·비트레이트를 줘 체감 화질↑
+#  mult: 기준 해상도 배수(2.0=4K), crf: 낮을수록 고화질, sharpen: 선명화(unsharp)
+QUALITY_PRESETS = {
+    "standard": {"mult": 1.0, "crf": 20, "preset": "fast", "sharpen": False},
+    "high":     {"mult": 1.0, "crf": 17, "preset": "medium", "sharpen": True},
+    "ultra":    {"mult": 2.0, "crf": 19, "preset": "fast", "sharpen": True},  # 4K 업스케일
+}
+_SHARPEN = "unsharp=5:5:0.8:5:5:0.0"
+_MAX_DIM = 3840  # 과도한 업스케일 방지 캡
+
+
+def _quality_canvas(layout: str, src_w: int, src_h: int, quality: str):
+    """화질 등급 → (Canvas, crf, preset, sharpen). shorts는 세로 기준, keep은 원본 기준 배수."""
+    q = QUALITY_PRESETS.get(quality, QUALITY_PRESETS["standard"])
+    base_w, base_h = (1080, 1920) if layout == "shorts" else (src_w, src_h)
+    mult = q["mult"]
+    if layout != "shorts" and max(base_w, base_h) > 0:  # keep: 최대 3840 캡
+        mult = max(1.0, min(mult, _MAX_DIM / max(base_w, base_h)))
+    w = int(round(base_w * mult)) & ~1
+    h = int(round(base_h * mult)) & ~1
+    return Canvas(w=w, h=h, fps=30), q["crf"], q["preset"], q["sharpen"]
+
+
 def render_edited(
     cut_video: str,
     subtitles: List[Subtitle],
@@ -127,21 +150,20 @@ def render_edited(
     fonts_dir: str = DEFAULT_FONTS_DIR,
     opts: Optional[RenderOptions] = None,
     speed: float = 1.0,                # 저장(렌더) 속도 배수 (1.25/1.5/2배 등)
+    quality: str = "standard",         # 화질 등급: standard | high | ultra(4K)
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> str:
     """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다.
 
     speed>1이면 자막을 구운 뒤 영상·오디오를 통째로 배속 → 자막이 그대로 싱크 유지.
+    quality가 high/ultra면 해상도·비트레이트↑ + 선명화(unsharp)로 화질을 올린다.
     """
     opts = opts or RenderOptions()
     speed = max(0.25, min(4.0, float(speed or 1.0)))
     src_w, src_h = ff.probe_video_size(cut_video)
     dur_us = ff.probe_duration_us(cut_video)
 
-    if layout == "shorts":
-        canvas = Canvas(w=1080, h=1920, fps=30)
-    else:  # keep: 원본 해상도(짝수 보정)
-        canvas = Canvas(w=src_w - (src_w % 2), h=src_h - (src_h % 2), fps=30)
+    canvas, crf, preset, sharpen = _quality_canvas(layout, src_w, src_h, quality)
 
     # 자막 .ass — ass_writer는 spec.canvas/style/subtitles/hook만 사용
     ass_spec = TimelineSpec(
@@ -159,18 +181,19 @@ def render_edited(
         f"subtitles=filename={ff.escape_filter_value(str(ass_path))}"
         f":fontsdir={ff.escape_filter_value(str(fonts_dir))}"
     )
+    sharp = f",{_SHARPEN}" if sharpen else ""  # 전경만 선명화(자막·블러배경은 제외)
     if layout == "shorts":
         # 블러 커버 배경 + 원본 비율 유지 전경 오버레이 (가로영상도 세로로 자연스럽게)
         vf = (
             f"[0:v]split=2[bg][fg];"
-            f"[bg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=increase,"
+            f"[bg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=increase:flags=lanczos,"
             f"crop={canvas.w}:{canvas.h},boxblur=24:2,eq=brightness=-0.1[bgb];"
-            f"[fg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=decrease[fgs];"
+            f"[fg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=decrease:flags=lanczos{sharp}[fgs];"
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2[comp];"
             f"[comp]{subs_arg}[vc]"
         )
     else:
-        vf = f"[0:v]scale={canvas.w}:{canvas.h},{subs_arg}[vc]"
+        vf = f"[0:v]scale={canvas.w}:{canvas.h}:flags=lanczos{sharp},{subs_arg}[vc]"
 
     slow = abs(speed - 1.0) > 1e-3
     if slow:  # 자막 구운 뒤 통째로 배속 (영상·오디오 함께 → 싱크 유지)
@@ -185,7 +208,7 @@ def render_edited(
         "-y", "-i", str(cut_video),
         "-filter_complex", vf,
         "-map", vmap, "-map", amap,
-        "-c:v", "libx264", "-crf", str(opts.crf), "-preset", opts.preset,
+        "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
         "-pix_fmt", "yuv420p", "-r", str(canvas.fps),
         "-c:a", "aac", "-b:a", opts.audio_bitrate, "-movflags", "+faststart",
         str(out_path),
@@ -398,9 +421,10 @@ def render_from_analysis(
     hook: str = "",
     opts: Optional[RenderOptions] = None,
     speed: float = 1.0,
+    quality: str = "standard",
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
-    """2단계: (수정된) 자막으로 최종 렌더. speed>1이면 저장 영상도 배속."""
+    """2단계: (수정된) 자막으로 최종 렌더. speed>1이면 배속, quality로 화질↑."""
     style = style or presets.SUBTITLE_STYLE_PRESETS["shorts_basic"]
     speed = max(0.25, min(4.0, float(speed or 1.0)))
     result = EditResult(ok=False, out_path=out_path)
@@ -412,7 +436,7 @@ def render_from_analysis(
             save_srt(subtitles, Path(out_path).parent / "subtitles.srt")
         render_edited(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
-            speed=speed, progress_cb=progress_cb,
+            speed=speed, quality=quality, progress_cb=progress_cb,
         )
         if not _fits_us(ff.probe_duration_us(out_path), int(result.cut_us / speed), tol=200_000):
             result.errors.append("출력 길이가 예상과 다릅니다")

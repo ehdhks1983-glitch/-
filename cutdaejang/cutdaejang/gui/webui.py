@@ -306,14 +306,15 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
 
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     cut_video: str, workdir: str, keep: Optional[list] = None,
-                    speed: float = 1.0) -> None:
+                    speed: float = 1.0, quality: str = "standard") -> None:
     """2단계: (수정된) 자막으로 최종 렌더. keep이 일부면 그 구간만 남겨 쇼츠로 재컷."""
     try:
         from ..core import edit_mode  # noqa: PLC0415
         from ..core.orchestrator import build_style  # noqa: PLC0415
 
         settings = config.load_settings()
-        _set_job(job_id, status="running", stage="render", frac=0.0, note="")
+        note = "고화질(4K) 렌더는 사양에 따라 몇 분 걸릴 수 있어요…" if quality == "ultra" else ""
+        _set_job(job_id, status="running", stage="render", frac=0.0, note=note)
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         out = str(Path(workdir) / job_id / "edited.mp4")
         # 핵심 구간만 골랐으면(전체가 아니면) 영상을 그 구간만 다시 잘라 진짜 쇼츠 길이로
@@ -325,7 +326,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             )
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=build_style(settings),
-            layout=layout, hook=hook, speed=speed,
+            layout=layout, hook=hook, speed=speed, quality=quality,
             progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
         )
         _set_job(
@@ -498,10 +499,12 @@ class _Handler(BaseHTTPRequestHandler):
                 speed = float(params.get("speed") or 1.0)
             except (TypeError, ValueError):
                 speed = 1.0
+            quality = params.get("quality") or "standard"
             threading.Thread(
                 target=_do_edit_render,
                 args=(job["id"], params.get("subtitles") or [], hook,
-                      ep.get("layout", "shorts"), job.get("cut_video"), workdir, keep, speed),
+                      ep.get("layout", "shorts"), job.get("cut_video"), workdir,
+                      keep, speed, quality),
                 daemon=True,
             ).start()
             self._send_json({"ok": True})
@@ -1015,7 +1018,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.11.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.12.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1218,6 +1221,15 @@ _HTML = """<!doctype html>
           <option value="1.5">1.5배</option>
           <option value="2">2배</option>
         </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <span class="hint">🎞️ 화질</span>
+        <select id="outQuality" style="width:auto;padding:6px 8px" onchange="qualityHint()">
+          <option value="standard">표준 (1080p · 빠름)</option>
+          <option value="high">고화질 (1080p · 선명·저압축)</option>
+          <option value="ultra">초고화질 (4K 업스케일 · 유튜브 노출↑ · 느림)</option>
+        </select>
+        <span class="hint" id="qualityHint"></span>
       </div>
       <button id="renderBtn" onclick="renderEdited()">✅ 이 자막으로 완성</button>
     </div>
@@ -1479,6 +1491,11 @@ function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return
 function togglePlay(ev){ if(ev&&ev.preventDefault)ev.preventDefault(); const p=$('cutPlayer'); if(!p||!p.src) return; if(p.paused) p.play(); else p.pause(); }
 function pauseCut(){ const p=$('cutPlayer'); if(p && !p.paused) p.pause(); }  // 자막 편집 시작하면 자동 정지
 function setPlayRate(){ const p=$('cutPlayer'); if(p) p.playbackRate=parseFloat($('playRate').value||'1'); }
+function qualityHint(){
+  const v=($('outQuality')||{}).value, h=$('qualityHint'); if(!h) return;
+  h.textContent = v==='ultra' ? '유튜브가 더 좋은 코덱으로 처리 → 체감 화질↑ (원본 화소는 안 늘어요)'
+    : v==='high' ? '압축을 덜 해 더 또렷하게 (파일 조금 커짐)' : '';
+}
 function splitSub(i){
   const s=window._subs, cur=s[i]; if(!cur) return;
   const mid=Math.round((cur.start_us+cur.end_us)/2);
@@ -1544,7 +1561,8 @@ async function renderEdited(){
   // 전체 선택(또는 자막 없음)이면 재컷 안 함(null), 일부만이면 그 구간만 남김
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed})});
+  const quality=($('outQuality')||{}).value || 'standard';
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');

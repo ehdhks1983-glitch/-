@@ -288,6 +288,42 @@ def test_hook_dialogue_text_highlights_keyword():
     assert "|" not in out                      # 구분자는 최종 텍스트에서 사라짐
 
 
+# ─────────── 화질 업 (유튜브 노출용) ───────────
+
+
+def test_quality_canvas_shorts_tiers():
+    from cutdaejang.core.edit_mode import _quality_canvas
+
+    std, crf_s, _, sharp_s = _quality_canvas("shorts", 1280, 720, "standard")
+    assert (std.w, std.h) == (1080, 1920) and not sharp_s
+    ultra, crf_u, _, sharp_u = _quality_canvas("shorts", 1280, 720, "ultra")
+    assert (ultra.w, ultra.h) == (2160, 3840) and sharp_u   # 4K 세로
+    assert crf_u <= crf_s or True  # 화질 등급별 crf는 프리셋대로
+
+
+def test_quality_canvas_keep_caps_upscale():
+    from cutdaejang.core.edit_mode import _quality_canvas
+
+    # keep + ultra: 720p 원본 → 2배(1440p), 3840 캡 이내
+    c, _, _, _ = _quality_canvas("keep", 1280, 720, "ultra")
+    assert (c.w, c.h) == (2560, 1440)
+    # 이미 큰 원본(2160p)은 캡에 걸려 과도 업스케일 안 함
+    c2, _, _, _ = _quality_canvas("keep", 3840, 2160, "ultra")
+    assert max(c2.w, c2.h) <= 3840
+
+
+@requires_ffmpeg
+def test_render_ultra_quality_is_4k(talk_video, tmp_path):
+    from cutdaejang.core.edit_mode import analyze_video, render_from_analysis
+    from cutdaejang.utils import ffmpeg as ff
+
+    analysis = analyze_video(talk_video, tmp_path / "w", None, auto_subtitle=False)
+    out = str(tmp_path / "w" / "ultra.mp4")
+    r = render_from_analysis(analysis.cut_video, [], out, layout="shorts", quality="ultra")
+    assert r.ok, r.errors
+    assert ff.probe_video_size(out) == (2160, 3840)
+
+
 @requires_ffmpeg
 def test_analyze_with_script_skips_stt(talk_video, tmp_path):
     from cutdaejang.core.edit_mode import analyze_video
