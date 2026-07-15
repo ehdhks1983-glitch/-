@@ -66,11 +66,56 @@ def _inline_color(hex_rgb: str) -> str:
     return f"&H{rgb[4:6]}{rgb[2:4]}{rgb[0:2]}&".upper()
 
 
+# 문장 내 다색 강조 — [노랑]텍스트[/] 처럼 색 이름으로 부분 색칠
+COLOR_NAMES = {
+    "노랑": "#FFD400", "노란": "#FFD400", "골드": "#FFD400", "옐로": "#FFD400",
+    "빨강": "#FF3B30", "빨간": "#FF3B30", "레드": "#FF3B30", "빨": "#FF3B30",
+    "초록": "#34C759", "녹색": "#34C759", "그린": "#34C759",
+    "파랑": "#0A84FF", "파란": "#0A84FF", "블루": "#0A84FF",
+    "하늘": "#5AC8FA", "민트": "#31E1C4",
+    "주황": "#FF9500", "오렌지": "#FF9500",
+    "분홍": "#FF375F", "핑크": "#FF375F",
+    "보라": "#BF5AF2", "퍼플": "#BF5AF2",
+    "하양": "#FFFFFF", "흰": "#FFFFFF", "화이트": "#FFFFFF", "흰색": "#FFFFFF",
+    "검정": "#111111", "검은": "#111111",
+}
+_MARKUP_RE = re.compile(r"\[([가-힣A-Za-z]+)\](.*?)\[/[가-힣A-Za-z]*\]", re.S)
+
+
+def colorize_markup(text: str, default_hex: str):
+    """``[노랑]...[/]`` 마크업을 ASS 인라인 색으로. 마크업 없으면 None 반환.
+
+    한 줄에 여러 색을 넣을 수 있다 (예: ``[노랑]사진만[/] 홍보글이 [초록]뚝딱![/]``).
+    닫는 태그는 ``[/]`` 또는 ``[/노랑]`` 둘 다 허용. 모르는 색 이름은 그냥 흰 글씨.
+    """
+    if "[/" not in text:
+        return None
+    out, last = [], 0
+    for m in _MARKUP_RE.finditer(text):
+        out.append(escape_ass_text(text[last:m.start()]))
+        name, seg = m.group(1), m.group(2)
+        hexc = COLOR_NAMES.get(name)
+        if hexc:
+            out.append(
+                "{\\1c" + _inline_color(hexc) + "}"
+                + escape_ass_text(seg)
+                + "{\\1c" + _inline_color(default_hex) + "}"
+            )
+        else:
+            out.append(escape_ass_text(seg))
+        last = m.end()
+    out.append(escape_ass_text(text[last:]))
+    return "".join(out)
+
+
 def hook_dialogue_text(hook: str, style) -> str:
     """상단 제목(훅) 본문 — ``제목 | 강조단어``면 그 단어를 강조색으로 팝 (썸네일 임팩트).
 
     Title 스타일 기본색은 흰색이므로 강조 뒤 흰색으로 복원한다.
     """
+    marked = colorize_markup(hook, "#FFFFFF")  # 다색 마크업 우선 (제목 기본 흰색)
+    if marked is not None:
+        return marked
     text, hl = hook, ""
     if "|" in hook:
         head, _, tail = hook.rpartition("|")
@@ -97,7 +142,10 @@ def dialogue_text(sub, style) -> str:
 
     강조색 적용 후 기본색을 명시적으로 복원한다.
     """
-    if sub.highlight and sub.highlight in sub.text:
+    marked = colorize_markup(sub.text, style.primary_color)  # 다색 마크업 우선
+    if marked is not None:
+        body = marked
+    elif sub.highlight and sub.highlight in sub.text:
         pre, _, post = sub.text.partition(sub.highlight)
         body = (
             escape_ass_text(pre)

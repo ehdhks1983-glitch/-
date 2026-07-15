@@ -1077,7 +1077,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.15.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.16.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1092,8 +1092,8 @@ _HTML = """<!doctype html>
       <button class="ghost" style="white-space:nowrap" onclick="pickFile(event)">📁 영상 선택</button>
     </div>
     <div class="hint">버튼을 누르면 파일 탐색기가 열립니다. (폴더 경로만 넣으면 그 안의 최신 영상을 씁니다)</div>
-    <label>상단 제목(훅) <span class="hint">— 화면 위에 크게 계속 표시. 줄바꿈 Enter. 끝에 <b>| 단어</b>면 그 단어만 강조색으로 팝!</span></label>
-    <textarea id="editHook" style="min-height:56px" placeholder="예) 블로그 글도 AI가? 자동화 꿀팁 3가지 | AI가?"></textarea>
+    <label>상단 제목(훅) <span class="hint">— 줄바꿈 Enter · 숫자는 자동 강조 · <b>| 단어</b> 강조 · 여러 색 <b>[노랑]..[/] [빨강]..[/]</b></span></label>
+    <textarea id="editHook" style="min-height:56px" placeholder="예) [노랑]사진만 넣으면[/] 홍보글이 [초록]뚝딱![/]"></textarea>
     <div style="display:flex;gap:6px;margin-top:6px">
       <input type="text" id="editHookTopic" style="flex:1" placeholder="영상 주제 키워드 (예: 블로그 자동화)">
       <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ 제목 추천</button>
@@ -1235,7 +1235,7 @@ _HTML = """<!doctype html>
     <div id="subEditBox" class="hidden">
       <div style="font-weight:700;margin-bottom:4px">✏️ 자막 검토·수정</div>
       <div class="hint">틀린 자막을 고치세요. 자막 칸을 누르면 <b>영상이 자동으로 멈춥니다</b>. <b>스페이스바</b>=재생/정지, 각 줄 <b>▶</b>=그 지점부터 듣기, <b>✂</b>=줄 나누기. (자막 없이 완성하려면 전부 비우고 완성)</div>
-      <div class="hint">💛 강조(노란 글씨)를 넣으려면 문장 끝에 <b>| 단어</b> — 예: <code>안녕하세요 곰대리 곰부장입니다 | 곰대리</code></div>
+      <div class="hint">💛 강조(노란 글씨): 문장 끝에 <b>| 단어</b> · 🌈 여러 색: <b>[노랑]...[/] [빨강]...[/] [초록]...[/]</b> — 예: <code>[노랑]월급 3배[/] 밥값은 [빨강]절반?![/]</code></div>
       <div class="playbar">
         <video id="cutPlayer" controls playsinline></video>
         <div class="playrow">

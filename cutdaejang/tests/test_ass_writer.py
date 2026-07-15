@@ -61,6 +61,29 @@ def test_write_ass_hook_band_default_on(tmp_path):
     assert title.split(",")[15] == "3"          # BorderStyle 15번 필드
 
 
+def test_colorize_markup_multi_color():
+    from cutdaejang.core.render_engine.ass_writer import colorize_markup
+
+    out = colorize_markup("[노랑]월급 3배[/] 밥값은 [빨강]절반?![/]", "#FFFFFF")
+    assert out is not None
+    assert out.count("\\1c") == 4                 # 색 2개 * (적용+복원)
+    assert "월급 3배" in out and "절반?!" in out
+    # 마크업 없으면 None (기존 로직으로 폴백)
+    assert colorize_markup("그냥 텍스트", "#FFFFFF") is None
+    # 모르는 색 이름은 텍스트만 남김
+    out2 = colorize_markup("[없는색]가나[/]", "#FFFFFF")
+    assert "가나" in out2 and "\\1c" not in out2
+
+
+def test_dialogue_text_uses_markup():
+    from cutdaejang.core.render_engine.ass_writer import dialogue_text
+    from cutdaejang.spec import Style, Subtitle
+
+    st = Style(primary_color="#FFFFFF", fade=False)
+    body = dialogue_text(Subtitle("[초록]초록말[/] 흰말", 0, 1_000_000), st)
+    assert "\\1c" in body and "초록말" in body
+
+
 def test_hook_auto_highlights_number():
     from cutdaejang.core.render_engine.ass_writer import hook_dialogue_text
     from cutdaejang.spec import Style
