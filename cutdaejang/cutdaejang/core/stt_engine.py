@@ -56,8 +56,11 @@ class FasterWhisperSTT:
             ) from e
         # 클래스 레벨 캐시 (같은 모델 재사용)
         if FasterWhisperSTT._model is None or FasterWhisperSTT._model_size != self.model_size:
+            import os as _os  # noqa: PLC0415
+
             FasterWhisperSTT._model = WhisperModel(
-                self.model_size, device="cpu", compute_type="int8"
+                self.model_size, device="cpu", compute_type="int8",
+                cpu_threads=_os.cpu_count() or 4,  # CPU 코어 전부 사용 (속도↑)
             )
             FasterWhisperSTT._model_size = self.model_size
         return FasterWhisperSTT._model
@@ -65,8 +68,9 @@ class FasterWhisperSTT:
     def transcribe(self, audio_path: str, language: str = "ko") -> str:
         model = self._get_model()
         # VAD로 비발화(음악·잡음) 구간을 먼저 걸러 환각 방지. no_speech_prob 높은 세그먼트도 제외.
+        # beam_size=1(그리디): 기본값 5 대비 3~5배 빠름, 한국어 정확도 손실 미미.
         segments, _ = model.transcribe(
-            str(audio_path), language=language,
+            str(audio_path), language=language, beam_size=1,
             vad_filter=True, vad_parameters={"min_silence_duration_ms": 400},
             no_speech_threshold=0.6, condition_on_previous_text=False,
         )

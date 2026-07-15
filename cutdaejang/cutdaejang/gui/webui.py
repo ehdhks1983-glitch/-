@@ -1199,7 +1199,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.21.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.22.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1433,7 +1433,8 @@ _HTML = """<!doctype html>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
         <span class="hint">🎞️ 화질</span>
         <select id="outQuality" style="width:auto;padding:6px 8px" onchange="qualityHint()">
-          <option value="standard">표준 (1080p · 빠름)</option>
+          <option value="draft">빠름 (초안·가장 빠름)</option>
+          <option value="standard" selected>표준 (1080p)</option>
           <option value="high">고화질 (1080p · 선명·저압축)</option>
           <option value="ultra">초고화질 (4K 업스케일 · 유튜브 노출↑ · 느림)</option>
         </select>

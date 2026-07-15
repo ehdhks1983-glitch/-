@@ -20,7 +20,7 @@ from ..spec import Background, Canvas, Style, Subtitle, TimelineSpec
 from ..utils import ffmpeg as ff
 from . import video_editor
 from .render_engine import DEFAULT_FONTS_DIR, ass_writer
-from .render_engine.ffmpeg_composer import RenderOptions
+from .render_engine.ffmpeg_composer import _NVENC_PRESETS, RenderOptions
 from .stt_engine import STTEngine
 from .video_editor import SilenceOptions
 
@@ -120,6 +120,7 @@ def _atempo_chain(speed: float) -> str:
 # 화질(선명도) 프리셋 — 유튜브는 고해상도 업로드에 더 좋은 코덱·비트레이트를 줘 체감 화질↑
 #  mult: 기준 해상도 배수(2.0=4K), crf: 낮을수록 고화질, sharpen: 선명화(unsharp)
 QUALITY_PRESETS = {
+    "draft":    {"mult": 1.0, "crf": 23, "preset": "ultrafast", "sharpen": False},  # 초안·미리보기
     "standard": {"mult": 1.0, "crf": 20, "preset": "fast", "sharpen": False},
     "high":     {"mult": 1.0, "crf": 17, "preset": "medium", "sharpen": True},
     "ultra":    {"mult": 2.0, "crf": 19, "preset": "fast", "sharpen": True},  # 4K 업스케일
@@ -238,18 +239,30 @@ def render_edited(
     else:
         amap = "0:a"
 
-    args = ["-y", "-i", str(cut_video)]
-    if narration_wav:
-        args += ["-i", str(narration_wav)]
-    args += [
-        "-filter_complex", vf,
-        "-map", vmap, "-map", amap,
-        "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
-        "-pix_fmt", "yuv420p", "-r", str(canvas.fps),
-        "-c:a", "aac", "-b:a", opts.audio_bitrate, "-movflags", "+faststart",
-        str(out_path),
-    ]
-    ff.run_with_progress(args, total_us=out_us, progress_cb=progress_cb)
+    def _build_args(vcodec_args: list) -> list:
+        a = ["-y", "-i", str(cut_video)]
+        if narration_wav:
+            a += ["-i", str(narration_wav)]
+        a += [
+            "-filter_complex", vf,
+            "-map", vmap, "-map", amap,
+            *vcodec_args,
+            "-pix_fmt", "yuv420p", "-r", str(canvas.fps),
+            "-c:a", "aac", "-b:a", opts.audio_bitrate, "-movflags", "+faststart",
+            str(out_path),
+        ]
+        return a
+
+    cpu_args = ["-c:v", "libx264", "-crf", str(crf), "-preset", preset]
+    if ff.nvenc_available():  # GPU 자동 사용 (몇 배 빠름) — 실패 시 CPU로 폴백
+        gpu_args = ["-c:v", "h264_nvenc", "-preset", _NVENC_PRESETS.get(preset, "p5"),
+                    "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
+        try:
+            ff.run_with_progress(_build_args(gpu_args), total_us=out_us, progress_cb=progress_cb)
+            return str(out_path)
+        except Exception:
+            log.warning("GPU(nvenc) 렌더 실패 → CPU로 재시도")
+    ff.run_with_progress(_build_args(cpu_args), total_us=out_us, progress_cb=progress_cb)
     return str(out_path)
 
 

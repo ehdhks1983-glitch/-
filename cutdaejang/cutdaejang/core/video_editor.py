@@ -180,13 +180,14 @@ def cut_and_concat(
     concat = "".join(labels) + f"concat=n={len(segments)}:v=1:a=1[v][a]"
     filtergraph = ";".join(parts) + ";" + concat
 
+    # 중간 산출물(최종 렌더에서 다시 인코딩됨) → ultrafast + 저손실 crf18로 속도 우선
     ff.run(
         [
             ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(video_path),
             "-filter_complex", filtergraph,
             "-map", "[v]", "-map", "[a]",
             "-r", str(fps),
-            "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-crf", "18", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
             str(out_path),
         ]
