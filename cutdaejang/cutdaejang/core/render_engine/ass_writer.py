@@ -79,22 +79,32 @@ COLOR_NAMES = {
     "하양": "#FFFFFF", "흰": "#FFFFFF", "화이트": "#FFFFFF", "흰색": "#FFFFFF",
     "검정": "#111111", "검은": "#111111",
 }
-_MARKUP_RE = re.compile(r"\[([가-힣A-Za-z]+)\](.*?)\[/[가-힣A-Za-z]*\]", re.S)
+_MARKUP_RE = re.compile(r"\[([가-힣A-Za-z]+)\](.*?)(?:\[/[가-힣A-Za-z]*\]|(?=\[[가-힣A-Za-z]+\])|$)", re.S)
+
+
+def _color_by_name(name: str):
+    """색 이름 → hex. ``노란색``처럼 '색' 접미가 붙어도 인식."""
+    return COLOR_NAMES.get(name) or COLOR_NAMES.get(name.rstrip("색"))
 
 
 def colorize_markup(text: str, default_hex: str):
     """``[노랑]...[/]`` 마크업을 ASS 인라인 색으로. 마크업 없으면 None 반환.
 
-    한 줄에 여러 색을 넣을 수 있다 (예: ``[노랑]사진만[/] 홍보글이 [초록]뚝딱![/]``).
-    닫는 태그는 ``[/]`` 또는 ``[/노랑]`` 둘 다 허용. 모르는 색 이름은 그냥 흰 글씨.
+    한 줄에 여러 색 가능 (예: ``[노랑]사진만[/] 홍보글이 [초록]뚝딱![/]``).
+    닫는 태그 ``[/]``/``[/노랑]``, 안 닫으면 다음 색 태그나 줄 끝까지 적용.
+    ``[노란색]``처럼 '색' 접미가 붙어도 인식. 모르는 이름은 그냥 기본색.
     """
-    if "[/" not in text:
+    if not re.search(r"\[[가-힣A-Za-z]+\]", text):
         return None
+    if not any(_color_by_name(m.group(1)) for m in re.finditer(r"\[([가-힣A-Za-z]+)\]", text)):
+        return None  # 아는 색 이름이 하나도 없으면 마크업으로 취급 안 함
     out, last = [], 0
     for m in _MARKUP_RE.finditer(text):
+        if m.start() < last:
+            continue
         out.append(escape_ass_text(text[last:m.start()]))
         name, seg = m.group(1), m.group(2)
-        hexc = COLOR_NAMES.get(name)
+        hexc = _color_by_name(name)
         if hexc:
             out.append(
                 "{\\1c" + _inline_color(hexc) + "}"

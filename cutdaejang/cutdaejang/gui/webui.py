@@ -1225,7 +1225,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.23.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.23.1)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1449,6 +1449,8 @@ _HTML = """<!doctype html>
         <button class="ghost" onclick="addSubRow(event)">+ 자막 줄 추가</button>
         <button class="ghost" onclick="pronounceSubs(event)">숫자·영어 → 한글</button>
         <button class="ghost" onclick="toggleBulk(event)">📋 대본 일괄 붙여넣기</button>
+        <button class="ghost" onclick="downloadScript(event,'txt')">📥 대본 저장(.txt)</button>
+        <button class="ghost" onclick="downloadScript(event,'srt')">📥 자막 저장(.srt)</button>
       </div>
       <div id="bulkBox" class="hidden" style="margin-top:8px">
         <textarea id="bulkText" style="min-height:90px" placeholder="대본을 한 줄에 한 자막씩 붙여넣고 아래 버튼을 누르면, 위 자막들의 텍스트가 순서대로 교체됩니다 (타이밍은 유지). 줄이 더 많으면 뒤에 추가돼요."></textarea>
@@ -1796,6 +1798,30 @@ function splitSub(i){
     {text:words.slice(0,half).join(' '), start_us:cur.start_us, end_us:mid},
     {text:words.slice(half).join(' '), start_us:mid, end_us:cur.end_us});
   renderSubRows();
+}
+function fmtSrtTime(us){
+  const ms=Math.floor(us/1000), h=Math.floor(ms/3600000), m=Math.floor(ms%3600000/60000),
+        sec=Math.floor(ms%60000/1000), mm=ms%1000;
+  const p=(n,w)=>String(n).padStart(w,'0');
+  return p(h,2)+':'+p(m,2)+':'+p(sec,2)+','+p(mm,3);
+}
+// 검토 중인 전체 대본을 파일로 다운로드 (수정한 내용 그대로)
+function downloadScript(ev, kind){
+  if(ev)ev.preventDefault();
+  const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
+  if(!subs.length){ alert('저장할 대본이 없습니다'); return; }
+  const clean=t=>t.replace(/\\[[가-힣A-Za-z]+\\]|\\[\\/[가-힣A-Za-z]*\\]/g,'').replace(/\\s*\\|[^|]*$/,'').trim();
+  let content, name;
+  if(kind==='srt'){
+    content=subs.map((s,i)=>(i+1)+'\\n'+fmtSrtTime(s.start_us)+' --> '+fmtSrtTime(s.end_us)+'\\n'+clean(s.text)+'\\n').join('\\n');
+    name='대본.srt';
+  } else {
+    content=subs.map(s=>clean(s.text)).join('\\n');
+    name='대본.txt';
+  }
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob(['\\ufeff'+content],{type:'text/plain;charset=utf-8'}));
+  a.download=name; a.click(); URL.revokeObjectURL(a.href);
 }
 function toggleBulk(ev){ if(ev)ev.preventDefault(); $('bulkBox').classList.toggle('hidden'); }
 function applyBulk(ev){

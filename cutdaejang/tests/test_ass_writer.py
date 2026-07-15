@@ -89,9 +89,12 @@ def test_colorize_markup_multi_color():
     assert "월급 3배" in out and "절반?!" in out
     # 마크업 없으면 None (기존 로직으로 폴백)
     assert colorize_markup("그냥 텍스트", "#FFFFFF") is None
-    # 모르는 색 이름은 텍스트만 남김
-    out2 = colorize_markup("[없는색]가나[/]", "#FFFFFF")
-    assert "가나" in out2 and "\\1c" not in out2
+    # 아는 색이 하나도 없으면 마크업 취급 안 함 → 원문 유지([참고] 같은 대괄호 보존)
+    assert colorize_markup("[없는색]가나[/]", "#FFFFFF") is None
+    # 안 닫힌 태그는 줄 끝(또는 다음 색)까지 적용 + '색' 접미 허용
+    assert "\\1c" in colorize_markup("[노랑]사진만 넣으면 끝", "#FFFFFF")
+    assert "\\1c" in colorize_markup("[노란색]강조[/]", "#FFFFFF")
+    assert colorize_markup("[노랑]앞[빨강]뒤", "#FFFFFF").count("\\1c") >= 4
 
 
 def test_dialogue_text_uses_markup():
