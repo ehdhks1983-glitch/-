@@ -61,6 +61,20 @@ def test_write_ass_hook_band_default_on(tmp_path):
     assert title.split(",")[15] == "3"          # BorderStyle 15번 필드
 
 
+def test_hook_auto_highlights_number():
+    from cutdaejang.core.render_engine.ass_writer import hook_dialogue_text
+    from cutdaejang.spec import Style
+
+    st = Style(highlight_color="#FFD400")
+    # | 없이도 숫자(30개)가 강조색으로 자동 적용
+    out = hook_dialogue_text("월 30개 글도 거뜬!\n블로그 자동화 비법", st)
+    assert "30개" in out and "\\1c" in out          # 강조색 인라인 태그
+    # 숫자 없으면 강조 없음
+    assert "\\1c" not in hook_dialogue_text("블로그 자동화 비법", st)
+    # 명시 | 가 우선
+    assert "\\1c" in hook_dialogue_text("제목 비법 | 비법", st)
+
+
 def test_write_ass_band_toggles(tmp_path):
     spec = make_valid_spec()
     spec.style.hook_band = False

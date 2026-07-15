@@ -277,6 +277,20 @@ def test_refine_subtitles_preserves_count(monkeypatch):
     assert out[2] == "원본3"                    # 응답에 없는 줄은 원문 유지
 
 
+@requires_ffmpeg
+def test_render_denoise_keeps_audio(talk_video, tmp_path):
+    from cutdaejang.core.edit_mode import analyze_video, render_from_analysis
+    from cutdaejang.utils import ffmpeg as ff
+
+    analysis = analyze_video(talk_video, tmp_path / "w", None, auto_subtitle=False)
+    out = str(tmp_path / "w" / "dn.mp4")
+    r = render_from_analysis(analysis.cut_video, [], out, layout="keep", denoise=True)
+    assert r.ok, r.errors
+    assert ff.has_audio_stream(out)                       # 잡음 제거 후에도 오디오 유지
+    # 길이는 그대로 (denoise는 길이 안 바꿈)
+    assert abs(ff.probe_duration_us(out) - ff.probe_duration_us(analysis.cut_video)) < 200_000
+
+
 def test_hook_dialogue_text_highlights_keyword():
     from cutdaejang.core.render_engine.ass_writer import hook_dialogue_text
     from cutdaejang.spec import Style

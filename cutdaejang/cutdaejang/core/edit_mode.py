@@ -126,6 +126,8 @@ QUALITY_PRESETS = {
 }
 _SHARPEN = "unsharp=5:5:0.8:5:5:0.0"
 _MAX_DIM = 3840  # 과도한 업스케일 방지 캡
+# 잡음 제거: 저역 럼블 컷 + FFT 노이즈 리덕션 + 고역 히스 컷 (목소리 대역 보존)
+_DENOISE = "highpass=f=85,afftdn=nr=18:nf=-28,lowpass=f=14500"
 
 
 def _quality_canvas(layout: str, src_w: int, src_h: int, quality: str):
@@ -151,12 +153,14 @@ def render_edited(
     opts: Optional[RenderOptions] = None,
     speed: float = 1.0,                # 저장(렌더) 속도 배수 (1.25/1.5/2배 등)
     quality: str = "standard",         # 화질 등급: standard | high | ultra(4K)
+    denoise: bool = False,             # 오디오 잡음 제거 (배경 잡음·히스)
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> str:
     """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다.
 
     speed>1이면 자막을 구운 뒤 영상·오디오를 통째로 배속 → 자막이 그대로 싱크 유지.
     quality가 high/ultra면 해상도·비트레이트↑ + 선명화(unsharp)로 화질을 올린다.
+    denoise면 목소리 대역만 남기고 배경 잡음을 줄인다.
     """
     opts = opts or RenderOptions()
     speed = max(0.25, min(4.0, float(speed or 1.0)))
@@ -196,13 +200,22 @@ def render_edited(
         vf = f"[0:v]scale={canvas.w}:{canvas.h}:flags=lanczos{sharp},{subs_arg}[vc]"
 
     slow = abs(speed - 1.0) > 1e-3
-    if slow:  # 자막 구운 뒤 통째로 배속 (영상·오디오 함께 → 싱크 유지)
-        vf += f";[vc]setpts=PTS/{speed:.6f}[v];[0:a]{_atempo_chain(speed)}[a]"
-        vmap, amap = "[v]", "[a]"
-        out_us = int(dur_us / speed)
+    if slow:  # 자막 구운 뒤 영상 배속 (오디오는 아래 atempo)
+        vf += f";[vc]setpts=PTS/{speed:.6f}[v]"
+        vmap, out_us = "[v]", int(dur_us / speed)
     else:
-        vmap, amap = "[vc]", "0:a"
-        out_us = dur_us
+        vmap, out_us = "[vc]", dur_us
+    # 오디오 필터 체인 (잡음 제거 → 배속). 둘 다 없으면 원본 오디오 그대로
+    afilters = []
+    if denoise:
+        afilters.append(_DENOISE)
+    if slow:
+        afilters.append(_atempo_chain(speed))
+    if afilters:
+        vf += f";[0:a]{','.join(afilters)}[a]"
+        amap = "[a]"
+    else:
+        amap = "0:a"
 
     args = [
         "-y", "-i", str(cut_video),
@@ -422,9 +435,10 @@ def render_from_analysis(
     opts: Optional[RenderOptions] = None,
     speed: float = 1.0,
     quality: str = "standard",
+    denoise: bool = False,
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
-    """2단계: (수정된) 자막으로 최종 렌더. speed>1이면 배속, quality로 화질↑."""
+    """2단계: (수정된) 자막으로 최종 렌더. speed 배속, quality 화질, denoise 잡음 제거."""
     style = style or presets.SUBTITLE_STYLE_PRESETS["shorts_basic"]
     speed = max(0.25, min(4.0, float(speed or 1.0)))
     result = EditResult(ok=False, out_path=out_path)
@@ -436,7 +450,7 @@ def render_from_analysis(
             save_srt(subtitles, Path(out_path).parent / "subtitles.srt")
         render_edited(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
-            speed=speed, quality=quality, progress_cb=progress_cb,
+            speed=speed, quality=quality, denoise=denoise, progress_cb=progress_cb,
         )
         if not _fits_us(ff.probe_duration_us(out_path), int(result.cut_us / speed), tol=200_000):
             result.errors.append("출력 길이가 예상과 다릅니다")

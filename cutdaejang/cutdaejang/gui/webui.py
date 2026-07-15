@@ -277,11 +277,13 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             progress_cb=lambda stage, frac: _set_job(job_id, stage=stage, frac=frac),
             status_cb=lambda msg: _set_job(job_id, note=msg),
         )
+        denoise = bool(params.get("denoise", False))
         # 분석 결과를 job에 저장 (2단계 렌더에서 사용)
         _set_job(
             job_id, cut_video=analysis.cut_video,
             edit_params={"layout": params.get("layout") or edit_cfg["layout"],
-                         "hook": (params.get("hook") or "").strip()},
+                         "hook": (params.get("hook") or "").strip(),
+                         "denoise": denoise},
             edit_summary=_edit_summary(analysis),
         )
         if analysis.subtitles:  # STT 또는 입력 대본으로 자막이 있으면 검토 화면으로
@@ -294,7 +296,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             # 자막 없음(b-roll 등) → 바로 렌더
             _do_edit_render(job_id, [], params.get("hook", ""),
                             params.get("layout") or edit_cfg["layout"],
-                            analysis.cut_video, workdir)
+                            analysis.cut_video, workdir, denoise=denoise)
     except Exception as e:
         import logging  # noqa: PLC0415
         import traceback  # noqa: PLC0415
@@ -306,7 +308,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
 
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     cut_video: str, workdir: str, keep: Optional[list] = None,
-                    speed: float = 1.0, quality: str = "standard") -> None:
+                    speed: float = 1.0, quality: str = "standard",
+                    denoise: bool = False) -> None:
     """2단계: (수정된) 자막으로 최종 렌더. keep이 일부면 그 구간만 남겨 쇼츠로 재컷."""
     try:
         from ..core import edit_mode  # noqa: PLC0415
@@ -326,7 +329,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             )
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=build_style(settings),
-            layout=layout, hook=hook, speed=speed, quality=quality,
+            layout=layout, hook=hook, speed=speed, quality=quality, denoise=denoise,
             progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
         )
         _set_job(
@@ -507,11 +510,13 @@ class _Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 speed = 1.0
             quality = params.get("quality") or "standard"
+            # 잡음 제거는 편집 폼에서 정한 값(edit_params)을 따름
+            denoise = bool(ep.get("denoise", False))
             threading.Thread(
                 target=_do_edit_render,
                 args=(job["id"], params.get("subtitles") or [], hook,
                       ep.get("layout", "shorts"), job.get("cut_video"), workdir,
-                      keep, speed, quality),
+                      keep, speed, quality, denoise),
                 daemon=True,
             ).start()
             self._send_json({"ok": True})
@@ -1072,7 +1077,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.14.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.15.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1121,6 +1126,10 @@ _HTML = """<!doctype html>
     <div class="chk">
       <input type="checkbox" id="cutSilenceChk" checked>
       <span>무음(빈) 구간 자동 컷 — 끄면 원본 길이 그대로</span>
+    </div>
+    <div class="chk">
+      <input type="checkbox" id="denoiseChk">
+      <span>🔇 잡음 제거 — 배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
     </div>
     <div id="editKeyRow" class="hidden">
       <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
@@ -1444,6 +1453,7 @@ async function startEdit(){
   const body = {
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
+    denoise: $('denoiseChk').checked,
     script: $('editScript').value,
     stt_provider: $('sttSel').value, gemini_key: $('editGeminiKey').value, save_key: true,
   };

@@ -6,11 +6,17 @@ Dialogue 시간은 μs → ``h:mm:ss.cc`` 변환, 문장별 1줄.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ... import presets
 from ...spec import TimelineSpec
 from ...utils.timefmt import us_to_ass
+
+# 제목/썸네일 자동 강조 — 숫자(+한국어 단위)는 썸네일에서 가장 강조되는 요소
+_NUM_HL = re.compile(
+    r"\d[\d,.]*\s*(?:개월|가지|퍼센트|만원|천원|시간|억|만|천|개|배|명|원|일|주|달|년|분|초|위|등|%)?"
+)
 
 _HEADER = """\
 [Script Info]
@@ -70,6 +76,10 @@ def hook_dialogue_text(hook: str, style) -> str:
         head, _, tail = hook.rpartition("|")
         if head.strip() and tail.strip():
             text, hl = head.strip(), tail.strip()
+    if not hl:  # 명시 강조가 없으면 숫자를 자동 강조 (색이 항상 들어가도록)
+        m = _NUM_HL.search(text)
+        if m and m.group(0).strip():
+            hl = m.group(0).strip()
     if hl and hl in text:
         pre, _, post = text.partition(hl)
         return (
