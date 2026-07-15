@@ -254,6 +254,52 @@ class ElevenLabsTTS:
         return str(out_path)
 
 
+class GPTSoVITSTTS:
+    """GPT-SoVITS 로컬 API — 완전 무료·오프라인 내 목소리 (zero-shot 참조 클로닝).
+
+    사용자가 GPT-SoVITS 통합패키지의 API 서버(api_v2.py, 기본 127.0.0.1:9880)를
+    켜두면, 참조 녹음(5~10초)+그 대사만으로 내 목소리 합성. 학습은 선택(한 번만).
+    """
+
+    name = "sovits"
+
+    def __init__(self, url: str = "", ref_audio: str = "", ref_text: str = ""):
+        self.url = (url or "http://127.0.0.1:9880").rstrip("/")
+        self.ref_audio = str(ref_audio or "").strip().strip('"')
+        self.ref_text = (ref_text or "").strip()
+        if not self.ref_audio:
+            raise TTSError("내 목소리 참조 녹음이 설정되지 않았습니다 — [🎤 내 목소리 등록]에서 저장하세요")
+
+    def synthesize(self, text: str, voice: str, out_path: str) -> str:
+        payload = {
+            "text": text, "text_lang": "ko",
+            "ref_audio_path": self.ref_audio,
+            "prompt_text": self.ref_text, "prompt_lang": "ko",
+            "text_split_method": "cut5", "media_type": "wav",
+            "streaming_mode": False,
+        }
+        req = urllib.request.Request(
+            f"{self.url}/tts",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                Path(out_path).write_bytes(resp.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")
+            raise TTSNonRetryable(f"GPT-SoVITS 합성 실패({e.code}): {body[:250]} — "
+                                  "참조 녹음 경로/대사가 맞는지 확인하세요") from e
+        except urllib.error.URLError as e:
+            raise TTSNonRetryable(
+                "GPT-SoVITS 서버에 연결할 수 없습니다 — 통합패키지의 API 서버"
+                f"(api_v2)를 먼저 실행하세요 (주소: {self.url}) / {e.reason}") from e
+        if Path(out_path).stat().st_size < 1000:
+            raise TTSNonRetryable("GPT-SoVITS 응답이 비어 있습니다 — 서버 콘솔의 오류를 확인하세요")
+        return str(out_path)
+
+
 def clone_voice(name: str, audio_path: str, api_key: str = "") -> str:
     """녹음 파일 1개로 ElevenLabs 인스턴트 보이스 클론 생성 → voice_id 반환.
 
@@ -377,7 +423,7 @@ class StubTTS:
 
 
 PROVIDERS = {"gemini": GeminiTTS, "openai": OpenAITTS, "elevenlabs": ElevenLabsTTS,
-             "windows": WindowsTTS, "stub": StubTTS}
+             "sovits": GPTSoVITSTTS, "windows": WindowsTTS, "stub": StubTTS}
 
 # 보이스 스타일 프리셋 (지시서 PATCH 6) — Gemini는 자연어 지시문을 해석한다.
 # ⚠ 지시문이 음성으로 읽히는지는 실키 검증 필요 — 읽히면 아래를 영어 1줄로 교체.
@@ -591,6 +637,10 @@ def make_provider(name: str, settings: dict) -> TTSProvider:
         return OpenAITTS(model=tts_cfg.get("model_openai", "gpt-4o-mini-tts"))
     if name == "elevenlabs":
         return ElevenLabsTTS(model=tts_cfg.get("model_elevenlabs", "eleven_multilingual_v2"))
+    if name == "sovits":
+        return GPTSoVITSTTS(url=tts_cfg.get("sovits_url", ""),
+                            ref_audio=tts_cfg.get("sovits_ref_audio", ""),
+                            ref_text=tts_cfg.get("sovits_ref_text", ""))
     return PROVIDERS[name]()
 
 

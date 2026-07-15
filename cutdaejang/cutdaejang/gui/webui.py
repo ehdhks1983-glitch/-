@@ -139,6 +139,8 @@ def _tts_chain(params: dict, settings: dict) -> list:
         return list(settings["tts"]["fallback_chain"])
     if provider == "elevenlabs":  # 내 목소리 — 실패 시 기존 체인으로 폴백
         return ["elevenlabs", *settings["tts"]["fallback_chain"]]
+    if provider == "sovits":      # 무료 내 목소리(로컬) — 실패 시 기존 체인으로 폴백
+        return ["sovits", *settings["tts"]["fallback_chain"]]
     return [provider]
 
 
@@ -414,6 +416,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             _set_job(job_id, stage="tts", frac=0.0, note="AI 목소리 만드는 중…")
             narr_voice = ep.get("narr_voice") or ""
             chain = []
+            if narr_voice == "__sovits__":
+                chain.append("sovits")      # 무료 내 목소리(로컬) — 실패 시 아래로 폴백
             if narr_voice == "__mine__" and os.environ.get("ELEVENLABS_API_KEY"):
                 chain.append("elevenlabs")  # 내 목소리 클론 — 실패 시 아래로 폴백
             if os.environ.get("GEMINI_API_KEY"):
@@ -421,8 +425,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             if sys.platform == "win32":
                 chain.append("windows")
             chain.append("stub")
-            # __mine__은 보이스명이 아니라서 비움 → 제공자별 기본값(클론 id/Kore)으로 해석
-            voice = "" if narr_voice == "__mine__" else (
+            # __mine__/__sovits__는 보이스명이 아니라서 비움 → 제공자별 기본값으로 해석
+            voice = "" if narr_voice in ("__mine__", "__sovits__") else (
                 narr_voice or settings["tts"].get("voice_gemini", ""))
             texts = [_tts_clean(s2.text) or "네" for s2 in subs]
             clips, used, note = tts_engine.synth_with_fallback(
@@ -822,6 +826,22 @@ class _Handler(BaseHTTPRequestHandler):
             except sg.ScriptError:
                 hooks = sg.suggest_hooks_stub(ctx)  # 키 없으면 템플릿
             self._send_json({"hooks": hooks})
+        elif path == "/api/sovits_save":
+            # GPT-SoVITS 무료 내 목소리 — 참조 녹음/대사/서버 주소 저장
+            ref = (params.get("ref_audio") or "").strip().strip('"')
+            txt = (params.get("ref_text") or "").strip()
+            url = (params.get("url") or "").strip()
+            if not ref or not Path(ref).is_file():
+                self._send_json({"error": f"참조 녹음 파일을 찾을 수 없습니다: {ref or '(비어 있음)'}"}, 400)
+                return
+            if not txt:
+                self._send_json({"error": "참조 녹음에서 말한 문장을 입력하세요 (정확할수록 품질↑)"}, 400)
+                return
+            merged = {"tts": {"sovits_ref_audio": ref, "sovits_ref_text": txt}}
+            if url:
+                merged["tts"]["sovits_url"] = url
+            config.save_settings(merged)
+            self._send_json({"ok": True})
         elif path == "/api/clone_voice":
             # 내 목소리 등록 (ElevenLabs 인스턴트 클론) → voice_id를 설정에 저장
             _apply_keys(params)
@@ -1291,7 +1311,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.27)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.28)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1356,7 +1376,27 @@ _HTML = """<!doctype html>
       </div>
       <div class="hint">넣으면 AI가 대본을 쓰고 목소리(제미나이 키 권장, 없으면 내장 음성)를 입혀요. 보이스·말투는 제미나이 키가 있을 때 적용(내장 음성은 목소리 고정). 대본은 검토 화면에서 수정 가능.</div>
       <details style="margin-top:8px">
-        <summary class="hint" style="cursor:pointer">🎤 내 목소리 등록(클로닝) — 녹음 파일로 내 목소리를 만들어 내레이션에 사용 <b id="myVoiceState"></b></summary>
+        <summary class="hint" style="cursor:pointer">🎤 내 목소리 등록 — 녹음 파일로 내 목소리를 만들어 내레이션에 사용 <b id="myVoiceState"></b></summary>
+        <div style="margin-top:8px;padding:8px 10px;border:1px solid #2c3350;border-radius:8px">
+          <b style="font-size:13px">방법 A — 무료·내 PC (GPT-SoVITS)</b>
+          <span class="hint">프로그램 설치 후 켜두면 무제한 무료. 설치법은 카페가이드 Q12</span>
+          <div class="row" style="margin-top:6px">
+            <div>
+              <label>참조 녹음 (5~10초, 깨끗하게)</label>
+              <input type="text" id="sovitsRef" placeholder="예) C:\\Users\\me\\참조녹음.wav">
+            </div>
+            <div>
+              <label>그 녹음에서 말한 문장</label>
+              <input type="text" id="sovitsRefText" placeholder="예) 안녕하세요 곰대리입니다 오늘도 좋은 하루 보내세요">
+            </div>
+            <div style="display:flex;align-items:flex-end">
+              <button class="ghost" style="margin-bottom:1px" onclick="saveSovits(event)">저장</button>
+            </div>
+          </div>
+          <div class="hint">GPT-SoVITS 통합패키지의 API 서버(api_v2, 127.0.0.1:9880)를 켜두면 학습 없이(zero-shot) 바로 내 목소리가 나와요. 더 똑같이 만들고 싶으면 GPT-SoVITS에서 한 번만 학습하면 됩니다.</div>
+        </div>
+        <div style="margin-top:8px;padding:8px 10px;border:1px solid #2c3350;border-radius:8px">
+        <b style="font-size:13px">방법 B — 유료·간편 (ElevenLabs, 월 $5)</b>
         <div class="row" style="margin-top:8px">
           <div>
             <label>녹음 파일 (1~3분 낭독, mp3/wav/m4a)</label>
@@ -1370,7 +1410,9 @@ _HTML = """<!doctype html>
             <button class="ghost" style="margin-bottom:1px" onclick="cloneVoice(event)">등록</button>
           </div>
         </div>
-        <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장되고, 위 보이스 목록에 「🎤 내 목소리」가 생깁니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $5)</b>부터 지원 — 꼭 <b>본인 목소리</b>만 등록하세요.</div>
+        <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장됩니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $5)</b>부터 지원.</div>
+        </div>
+        <div class="hint" style="margin-top:6px">등록하면 위 보이스 목록에 「🎤 내 목소리」가 생겨요. ⚠ 어떤 방식이든 꼭 <b>본인 목소리</b>만 등록하세요 (타인 목소리 무단 클로닝 금지).</div>
       </details>
     </div>
     <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
@@ -1461,6 +1503,7 @@ _HTML = """<!doctype html>
         <div class="toggle">
           <label id="provWinLabel" class="hidden"><input type="radio" name="prov" value="windows" id="provWin"><span>내장 음성 (무료)</span></label>
           <label id="provMineLabel" class="hidden"><input type="radio" name="prov" value="elevenlabs" id="provMine"><span>🎤 내 목소리</span></label>
+          <label id="provSovitsLabel" class="hidden"><input type="radio" name="prov" value="sovits" id="provSovits"><span>🎤 내 목소리 (무료·내 PC)</span></label>
           <label><input type="radio" name="prov" value="gemini"><span>Gemini (실전 품질)</span></label>
           <label><input type="radio" name="prov" value="stub" checked><span>테스트 톤</span></label>
         </div>
@@ -2085,12 +2128,13 @@ async function previewNarrVoice(ev){
   ev.preventDefault();
   let prov = window._hasGeminiKey ? 'gemini' : (window._isWin ? 'windows' : 'stub');
   if($('narrVoiceSel').value === '__mine__') prov = 'elevenlabs';
+  if($('narrVoiceSel').value === '__sovits__') prov = 'sovits';
   const btn = ev.target;
   btn.disabled = true; btn.textContent = '합성 중...';
   try{
     const v = $('narrVoiceSel').value;
     const res = await fetch('/api/preview', {method:'POST', body: JSON.stringify({
-      tts_provider: prov, voice: v === '__mine__' ? '' : v, tts_style: $('narrStyleSel').value,
+      tts_provider: prov, voice: (v === '__mine__' || v === '__sovits__') ? '' : v, tts_style: $('narrStyleSel').value,
     })});
     const data = await res.json();
     if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
@@ -2114,6 +2158,30 @@ async function cloneVoice(ev){
     $('narrVoiceSel').value = '__mine__';
     alert('✅ 내 목소리 등록 완료! 보이스 목록에서 「🎤 내 목소리」가 선택됐어요. 🔊 미리듣기로 확인해보세요.');
   } finally { btn.disabled = false; btn.textContent = '등록'; }
+}
+
+async function saveSovits(ev){
+  ev.preventDefault();
+  const ref = $('sovitsRef').value.trim(), txt = $('sovitsRefText').value.trim();
+  if(!ref){ alert('참조 녹음 파일 경로를 입력하세요 (5~10초 낭독)'); return; }
+  if(!txt){ alert('참조 녹음에서 말한 문장을 입력하세요'); return; }
+  const btn = ev.target; btn.disabled = true; btn.textContent = '저장 중…';
+  try{
+    const data = await (await fetch('/api/sovits_save', {method:'POST', body: JSON.stringify({
+      ref_audio: ref, ref_text: txt,
+    })})).json();
+    if(data.error){ alert(data.error); return; }
+    addSovitsOption();
+    $('narrVoiceSel').value = '__sovits__';
+    alert('✅ 저장 완료! GPT-SoVITS API 서버(127.0.0.1:9880)를 켜둔 상태에서 🔊 미리듣기로 확인해보세요.');
+  } finally { btn.disabled = false; btn.textContent = '저장'; }
+}
+
+function addSovitsOption(){
+  if(![...$('narrVoiceSel').options].some(o => o.value === '__sovits__'))
+    $('narrVoiceSel').add(new Option('🎤 내 목소리 (무료·내 PC)', '__sovits__'), 0);
+  $('provSovitsLabel').classList.remove('hidden');
+  $('myVoiceState').textContent = '— ✅ 등록됨';
 }
 
 function addMyVoiceOption(name){
@@ -2288,6 +2356,11 @@ async function poll(){
     if(state.settings) fillSettings(state.settings);
     const mv = ((state.settings || {}).tts || {});
     if(mv.voice_elevenlabs) addMyVoiceOption(mv.voice_elevenlabs_name || '내 목소리');
+    if(mv.sovits_ref_audio){
+      addSovitsOption();
+      $('sovitsRef').value = mv.sovits_ref_audio;
+      $('sovitsRefText').value = mv.sovits_ref_text || '';
+    }
   }
   $('keySaved').classList.toggle('hidden', !state.keys.gemini);
   const env = state.env || {};

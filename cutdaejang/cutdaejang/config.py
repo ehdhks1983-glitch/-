@@ -26,6 +26,9 @@ DEFAULTS: dict = {
         "voice_elevenlabs": "",           # 내 목소리 클론 voice_id (등록 시 저장)
         "voice_elevenlabs_name": "",      # 표시용 이름
         "model_elevenlabs": "eleven_multilingual_v2",
+        "sovits_url": "http://127.0.0.1:9880",  # GPT-SoVITS 로컬 API (무료 내 목소리)
+        "sovits_ref_audio": "",                 # 참조 녹음(5~10초) 경로
+        "sovits_ref_text": "",                  # 참조 녹음에서 말한 문장
     },
     "audio": {
         "gap_ms": 220,                # 문장 간격

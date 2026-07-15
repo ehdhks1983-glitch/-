@@ -424,3 +424,79 @@ def test_resolve_voice_elevenlabs_uses_saved_clone_id(tmp_path, monkeypatch):
     settings = config.deep_merge(config.load_settings(), {"tts": {"voice_elevenlabs": "vid9"}})
     eng = TTSEngine(tts_engine.make_provider("elevenlabs", settings), tmp_path, settings=settings)
     assert eng._resolve_voice("") == "vid9"
+
+
+# ─────────── v0.28: GPT-SoVITS 무료 로컬 내 목소리 ───────────
+
+
+def test_sovits_requires_ref_audio():
+    with pytest.raises(tts_engine.TTSError, match="참조 녹음"):
+        tts_engine.make_provider("sovits", config.load_settings())
+
+
+def test_sovits_connection_refused_is_nonretryable(tmp_path):
+    p = tts_engine.GPTSoVITSTTS(url="http://127.0.0.1:1", ref_audio="ref.wav", ref_text="안녕")
+    with pytest.raises(TTSNonRetryable, match="연결할 수 없"):
+        p.synthesize("테스트 문장", "", str(tmp_path / "o.wav"))
+
+
+def test_sovits_posts_korean_zero_shot_request(tmp_path):
+    import http.server
+    import threading
+
+    got = {}
+    fake_wav = b"RIFF" + b"\x00" * 2000  # 1KB 이상이면 통과
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            got["path"] = self.path
+            got["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.end_headers()
+            self.wfile.write(fake_wav)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        p = tts_engine.GPTSoVITSTTS(url=f"http://127.0.0.1:{srv.server_address[1]}",
+                                    ref_audio="C:/rec/ref.wav", ref_text="안녕하세요 곰대리입니다")
+        out = tmp_path / "o.wav"
+        p.synthesize("오늘의 꿀팁을 소개합니다", "", str(out))
+    finally:
+        srv.shutdown()
+    assert out.read_bytes() == fake_wav
+    assert got["path"] == "/tts"
+    b = got["body"]
+    assert b["text"] == "오늘의 꿀팁을 소개합니다"
+    assert b["text_lang"] == "ko" and b["prompt_lang"] == "ko"
+    assert b["ref_audio_path"] == "C:/rec/ref.wav"
+    assert b["prompt_text"] == "안녕하세요 곰대리입니다"
+    assert b["media_type"] == "wav"
+
+
+def test_sovits_empty_response_is_nonretryable(tmp_path):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"x")  # 1KB 미만 = 비정상
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        p = tts_engine.GPTSoVITSTTS(url=f"http://127.0.0.1:{srv.server_address[1]}",
+                                    ref_audio="r.wav", ref_text="안녕")
+        with pytest.raises(TTSNonRetryable, match="비어"):
+            p.synthesize("문장", "", str(tmp_path / "o.wav"))
+    finally:
+        srv.shutdown()
