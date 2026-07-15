@@ -296,6 +296,61 @@ def suggest_highlights_heuristic(subs: list, target_sec: int = 30) -> dict:
     return {"keep": keep, "reason": f"정보가 가장 촘촘한 {len(keep)}개 구간을 골랐어요(대략치)"}
 
 
+THUMB_PROMPT = """\
+역할: 유튜브 썸네일 카피라이터
+대본/주제: "{context}"
+위 내용으로 썸네일에 넣을 **짧고 강한 문구** {n}개를 지어줘.
+규칙:
+- 각 문구는 1~2줄, 한 줄은 아주 짧게(공백 포함 10자 안팎). 두 줄이면 사이에 \\n
+- 궁금증·이득·숫자·반전 중 하나로 확 잡기, 과장 낚시는 금지
+- 각 문구에서 가장 강조할 단어 1개(highlight)도 골라줘 (문구에 그대로 있는 단어)
+출력(JSON만): [{{"title":"1줄\\n2줄","highlight":"강조단어"}}, ...]  (정확히 {n}개)
+"""
+
+
+def suggest_thumbnail_copy(context: str, n: int = 4,
+                           model: str = "gemini-2.5-flash", api_key=None) -> list:
+    """대본/주제 → 썸네일용 후킹 카피 후보 (title/highlight). 키 없으면 ScriptError."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 썸네일 카피 추천을 쓸 수 없습니다")
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": THUMB_PROMPT.format(context=context, n=n)}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as e:
+        raise ScriptError(f"썸네일 카피 응답 형식 예상 밖: {json.dumps(data)[:200]}") from e
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    arr = json.loads(cleaned)
+    out = []
+    for it in arr if isinstance(arr, list) else []:
+        if isinstance(it, dict) and str(it.get("title", "")).strip():
+            out.append({"title": str(it["title"]).strip(),
+                        "highlight": str(it.get("highlight", "") or "").strip()})
+    return out[:n]
+
+
+def suggest_thumbnail_copy_stub(context: str, n: int = 4) -> list:
+    """오프라인 대역 — 키 없이 UI 확인용 템플릿."""
+    c = (context.strip() or "이 영상")[:14]
+    base = [
+        {"title": f"{c}\n이렇게 하세요", "highlight": "이렇게"},
+        {"title": f"{c}\n딱 1분 정리", "highlight": "1분"},
+        {"title": f"아직도 몰라요?\n{c}", "highlight": "아직도"},
+        {"title": f"{c}\n이게 됩니다!", "highlight": "됩니다!"},
+    ]
+    return base[:n]
+
+
 def suggest_hooks_stub(context: str, n: int = 5) -> list:
     """오프라인 대역 — 템플릿 기반 후보 (키 없이 UI 확인용)."""
     c = context.strip() or "이 영상"

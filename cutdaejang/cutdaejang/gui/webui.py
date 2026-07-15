@@ -417,6 +417,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_video(path.split("/", 2)[2])
         elif path.startswith("/cutvideo/"):
             self._serve_cutvideo(path.split("/", 2)[2])
+        elif path.startswith("/thumbnail/"):
+            job = _get_job(path.split("/", 2)[2])
+            tp = job.get("thumbnail") if job else None
+            if tp and Path(tp).is_file():
+                self._serve_file(tp)
+            else:
+                self._send_json({"error": "썸네일 없음"}, 404)
         elif path.startswith("/preview/"):
             self._serve_preview(path.split("/", 2)[2])
         else:
@@ -543,6 +550,51 @@ class _Handler(BaseHTTPRequestHandler):
                 res["ai"] = False
                 res["reason"] = res.get("reason", "") + f" (AI 실패: {e})"
             self._send_json(res)
+        elif path == "/api/suggest_thumbnail":
+            _apply_keys(params)
+            from ..core import script_generator as sg  # noqa: PLC0415
+
+            ctx = (params.get("context") or "").strip()
+            if not ctx:
+                self._send_json({"error": "주제/대본을 먼저 넣어주세요"}, 400)
+                return
+            try:
+                copies = sg.suggest_thumbnail_copy(ctx)
+                ai = True
+            except sg.ScriptError:
+                copies = sg.suggest_thumbnail_copy_stub(ctx)  # 키 없으면 템플릿
+                ai = False
+            self._send_json({"copies": copies, "ai": ai})
+        elif path == "/api/thumbnail":
+            from ..core import thumbnail as thumb  # noqa: PLC0415
+            from ..core.orchestrator import build_style  # noqa: PLC0415
+
+            job = _get_job(params.get("job_id", ""))
+            bg = (params.get("bg_path") or "").strip() or (job.get("mp4") if job else None)
+            if not bg or not Path(bg).is_file():
+                self._send_json({"error": "배경으로 쓸 완성 영상(또는 사진)이 없습니다"}, 400)
+                return
+            title = (params.get("title") or "").strip()
+            if not title:
+                self._send_json({"error": "썸네일 제목을 입력하세요"}, 400)
+                return
+            out_dir = Path(job["job_dir"]) if job and job.get("job_dir") else Path(bg).parent
+            out = str(out_dir / "thumbnail.png")
+            try:
+                thumb.make_thumbnail(
+                    bg, title, out, highlight=params.get("highlight", ""),
+                    style=build_style(config.load_settings()),
+                )
+                if job:
+                    _set_job(job["id"], thumbnail=out)
+                    self._send_json({"ok": True, "url": f"/thumbnail/{job['id']}", "path": out})
+                else:
+                    self._send_json({"ok": True, "path": out})
+            except Exception as e:
+                import logging  # noqa: PLC0415
+                import traceback  # noqa: PLC0415
+                logging.getLogger("cutdaejang").error("썸네일 실패\n%s", traceback.format_exc())
+                self._send_json({"error": f"썸네일 생성 실패: {e}"}, 500)
         elif path == "/api/pick_file":
             try:
                 picked = pick_video_file()
@@ -875,8 +927,10 @@ class _Handler(BaseHTTPRequestHandler):
                 start, end = 0, size - 1
         length = end - start + 1
 
+        ctype = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                 ".webp": "image/webp"}.get(Path(path).suffix.lower(), "video/mp4")
         self.send_response(206 if range_header else 200)
-        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
         if range_header:
@@ -1018,7 +1072,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.13.0)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.14.0)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1239,6 +1293,21 @@ _HTML = """<!doctype html>
       <video id="player" controls playsinline></video>
       <div class="stage" id="outPaths"></div>
       <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
+      <button class="ghost" style="margin-top:10px" onclick="toggleThumb(event)">🖼️ 유튜브 썸네일 만들기 (16:9)</button>
+      <div id="thumbBox" class="hidden" style="margin-top:10px;padding:10px;border:1px dashed #3a4157;border-radius:10px">
+        <label style="margin-top:0">썸네일 제목 <span class="hint">— 짧고 강하게. 줄바꿈 Enter. 강조는 <b>| 단어</b></span></label>
+        <textarea id="thumbTitle" style="min-height:52px" placeholder="예) 사진만 넣으면&#10;홍보글이 뚝딱! | 뚝딱!"></textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+          <input type="text" id="thumbTopic" style="flex:1;min-width:160px" placeholder="주제/키워드 (예: 블로그 홍보글 자동화)">
+          <button class="ghost" style="white-space:nowrap" onclick="suggestThumb(event)">✨ AI 카피 추천</button>
+        </div>
+        <div id="thumbCands" class="hookcands"></div>
+        <button onclick="makeThumb(event)">이 제목으로 썸네일 만들기</button>
+        <div id="thumbResult" class="hidden" style="margin-top:10px">
+          <img id="thumbImg" style="width:100%;border-radius:10px;border:1px solid #262b3a" alt="썸네일">
+          <div class="hint" id="thumbPath" style="margin-top:6px"></div>
+        </div>
+      </div>
     </div>
     <div class="err hidden" id="errBox"></div>
     <details class="hidden" id="rawErr" style="margin-top:8px">
@@ -1644,6 +1713,50 @@ async function openFolder(ev){
   if(data.error) alert('폴더를 열 수 없습니다: ' + (data.path || data.error));
 }
 
+// ── 유튜브 썸네일 만들기 (16:9) ──
+function toggleThumb(ev){
+  if(ev)ev.preventDefault();
+  const box=$('thumbBox'); box.classList.toggle('hidden');
+  if(!box.classList.contains('hidden')){
+    if(!$('thumbTitle').value) $('thumbTitle').value = ($('editHook')&&$('editHook').value) || ($('topic')&&$('topic').value) || '';
+    if(!$('thumbTopic').value) $('thumbTopic').value = ($('editHookTopic')&&$('editHookTopic').value) || ($('topic')&&$('topic').value) || '';
+  }
+}
+async function suggestThumb(ev){
+  if(ev)ev.preventDefault();
+  const ctx=($('thumbTopic').value||'').trim() || ($('thumbTitle').value||'').trim();
+  if(!ctx){ alert('주제/키워드를 먼저 입력하세요'); return; }
+  const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='추천 중…';
+  const cands=$('thumbCands'); cands.innerHTML='';
+  try{
+    const key=($('geminiKey')&&$('geminiKey').value)||($('editGeminiKey')&&$('editGeminiKey').value)||'';
+    const data=await (await fetch('/api/suggest_thumbnail',{method:'POST',
+      body:JSON.stringify({context:ctx, gemini_key:key})})).json();
+    if(data.error){ alert(data.error); return; }
+    (data.copies||[]).forEach(c=>{
+      const b=document.createElement('button');
+      b.textContent=(c.title||'').replace(/\\n/g,' / ')+(c.highlight?('  ✨'+c.highlight):'');
+      b.onclick=(e)=>{ e.preventDefault(); $('thumbTitle').value = c.highlight ? (c.title+' | '+c.highlight) : c.title; cands.innerHTML=''; };
+      cands.appendChild(b);
+    });
+    if(!(data.copies||[]).length) cands.innerHTML='<span class="hint">추천 결과가 없습니다.</span>';
+  } finally { btn.disabled=false; btn.textContent=old; }
+}
+async function makeThumb(ev){
+  if(ev)ev.preventDefault();
+  const title=($('thumbTitle').value||'').trim();
+  if(!title){ alert('썸네일 제목을 입력하세요'); return; }
+  const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='만드는 중…';
+  try{
+    const data=await (await fetch('/api/thumbnail',{method:'POST',
+      body:JSON.stringify({job_id:currentJob, title})})).json();
+    if(data.error){ alert(data.error); return; }
+    $('thumbImg').src=(data.url||'')+'?t='+Date.now();
+    $('thumbPath').textContent='저장됨: '+(data.path||'');
+    $('thumbResult').classList.remove('hidden');
+  } finally { btn.disabled=false; btn.textContent=old; }
+}
+
 async function diagnostic(ev){
   ev.preventDefault();
   const data = await (await fetch('/api/diagnostic', {method:'POST', body:'{}'})).json();
@@ -1842,6 +1955,8 @@ function resetForm(){
   $('rvTitle').value = ''; $('rvSentences').value = '';
   $('noteText').textContent = ''; $('providerBadge').textContent = '';
   $('errBox').classList.add('hidden'); $('rawErr').classList.add('hidden');
+  if($('thumbBox')){ $('thumbBox').classList.add('hidden'); $('thumbResult').classList.add('hidden');
+    $('thumbTitle').value=''; $('thumbCands').innerHTML=''; }
   $('goBtn').disabled = false; $('editBtn').disabled = false;
 }
 
