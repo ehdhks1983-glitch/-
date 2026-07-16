@@ -121,3 +121,37 @@ def test_detect_and_cut_roundtrip(tmp_path):
     expected = sum(e - s for s, e in segments)
     assert abs(cut_us - expected) <= 200_000
     assert ff.has_audio_stream(cut)
+
+
+# ─────────── v0.31: 사진 → 슬라이드쇼 영상 ───────────
+
+
+def test_resolve_photo_inputs_folder_sorted(tmp_path):
+    from pathlib import Path
+
+    from cutdaejang.core.video_editor import resolve_photo_inputs
+
+    for name in ["b.png", "a.jpg", "c.webp", "note.txt"]:
+        (tmp_path / name).write_bytes(b"x")
+    out = resolve_photo_inputs(str(tmp_path))
+    assert [Path(p).name for p in out] == ["a.jpg", "b.png", "c.webp"]  # 이름순, 사진만
+    with pytest.raises(ValueError, match="찾을 수 없"):
+        resolve_photo_inputs(str(tmp_path / "없는폴더"))
+
+
+@requires_ffmpeg
+def test_photos_to_video_divides_duration(tmp_path):
+    from cutdaejang.core.video_editor import photos_to_video
+    from cutdaejang.utils import ffmpeg as ff
+
+    imgs = []
+    for i, c in enumerate(["red", "green", "blue"]):
+        p = tmp_path / f"p{i}.png"
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                "-i", f"color=c={c}:s=800x600:d=0.1", "-frames:v", "1", str(p)])
+        imgs.append(str(p))
+    out = str(tmp_path / "slide.mp4")
+    photos_to_video(imgs, 9_000_000, out)  # 3장·9초 → 장당 3초
+    assert abs(ff.probe_duration_us(out) - 9_000_000) < 400_000
+    assert ff.probe_video_size(out) == (1080, 1920)
+    assert ff.has_audio_stream(out)  # 무음 트랙 (내레이션·BGM 얹기용)

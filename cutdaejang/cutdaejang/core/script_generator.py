@@ -415,3 +415,66 @@ class StubScript:
 
 
 SCRIPT_PROVIDERS = {"gemini": GeminiScript, "stub": StubScript}
+
+
+# ─────────── v0.31: 영상 AI 분석 → 제목·대본 추천 (멀티모달) ───────────
+
+VIDEO_ANALYZE_PROMPT = """\
+역할: 유튜브 쇼츠 기획자. 아래는 한 영상의 장면 캡처들{with_tr}이다.
+영상 내용을 파악해 JSON으로만 답하라 (설명 없이):
+{{
+ "summary": "영상 내용 한두 문장 요약",
+ "titles": ["유튜브 제목 후보 3개 — 짧고 후킹 있게"],
+ "hooks": ["영상 위에 크게 얹을 상단 훅 문구 3개 — 1~2줄, 궁금증/숫자/이득"],
+ "script": ["이 영상에 어울리는 내레이션 대본 — 한 문장씩 6~10줄, 각 22자 이내"],
+ "hashtags": ["해시태그 5개"]
+}}
+낚시성 과장 금지. 전부 한국어.
+{transcript}"""
+
+
+def suggest_from_video(frames_b64: list, transcript: str = "",
+                       model: str = "gemini-2.5-flash", api_key=None) -> dict:
+    """장면 캡처(+자막 텍스트)를 Gemini에 보내 제목·훅·대본·해시태그 추천."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 영상 분석을 쓸 수 없습니다")
+    tr = f"\n[영상 속 대사(자동 인식)]\n{transcript.strip()}" if transcript.strip() else ""
+    prompt = VIDEO_ANALYZE_PROMPT.format(
+        with_tr="과 대사" if tr else "", transcript=tr)
+    parts = [{"text": prompt}] + [
+        {"inline_data": {"mime_type": "image/jpeg", "data": b64}} for b64 in frames_b64
+    ]
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent")
+    payload = {"contents": [{"parts": parts}],
+               "generationConfig": {"responseMimeType": "application/json"}}
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        out = json.loads(text)
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        raise ScriptError(f"영상 분석 응답 형식 예상 밖: {json.dumps(data)[:250]}") from e
+    return {
+        "summary": str(out.get("summary", "")),
+        "titles": [str(x) for x in out.get("titles", [])][:5],
+        "hooks": [str(x) for x in out.get("hooks", [])][:5],
+        "script": [str(x) for x in out.get("script", [])][:15],
+        "hashtags": [str(x) for x in out.get("hashtags", [])][:8],
+    }
+
+
+def suggest_from_video_stub(frames_b64: list, transcript: str = "") -> dict:
+    """오프라인 대역 — 파이프라인 점검용 고정 추천."""
+    base = transcript.strip().splitlines()[0][:18] if transcript.strip() else "이 영상"
+    return {
+        "summary": f"{base} 내용을 담은 영상입니다.",
+        "titles": [f"{base}, 이렇게 하면 됩니다", f"{base} 핵심 정리", f"{base} 30초 요약"],
+        "hooks": [f"{base} | 핵심", "이거 모르면 손해!", "30초만 보세요"],
+        "script": [f"{base}를 소개합니다.", "핵심만 빠르게 짚어드릴게요.",
+                   "첫째, 준비물을 확인하세요.", "둘째, 순서대로 따라 하세요.",
+                   "마지막으로 결과를 확인합니다.", "구독과 좋아요 부탁드려요!"],
+        "hashtags": ["쇼츠", "꿀팁", "자동화", "정리", "요약"],
+    }

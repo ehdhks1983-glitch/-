@@ -213,3 +213,60 @@ def silence_ratio(segments: List[Tuple[int, int]], duration_us: int) -> float:
     """제거될 무음 비율 (0~1) — 리포트용."""
     kept = sum(e - s for s, e in segments)
     return max(0.0, 1.0 - kept / duration_us) if duration_us else 0.0
+
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+
+def resolve_photo_inputs(path_str: str) -> List[str]:
+    """사진 입력 해석 — 폴더(안의 사진 전부, 이름순) 또는 줄바꿈/세미콜론 구분 파일들."""
+    raw = (path_str or "").replace(";", "\n").splitlines()
+    out: List[str] = []
+    for item in raw:
+        p = Path(item.strip().strip('"'))
+        if not str(p).strip():
+            continue
+        if p.is_dir():
+            out += [str(f) for f in sorted(p.iterdir())
+                    if f.is_file() and f.suffix.lower() in IMAGE_EXTS]
+        elif p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+            out.append(str(p))
+        else:
+            raise ValueError(f"사진 파일/폴더를 찾을 수 없습니다: {p}")
+    if not out:
+        raise ValueError("사진이 없습니다 — 폴더에 jpg/png 사진을 넣거나 파일 경로를 확인하세요")
+    return out
+
+
+def photos_to_video(images: List[str], total_us: int, out_path: str,
+                    size: Tuple[int, int] = (1080, 1920), fps: int = 30) -> str:
+    """사진들 → 슬라이드쇼 영상. 전체 길이를 장수로 균등 분배 (5장·15초 → 장당 3초).
+
+    각 사진은 블러 배경 + 원본 비율 유지로 세로 캔버스에 배치(가로 사진도 자연스럽게).
+    오디오는 무음 트랙(뒤에서 내레이션·BGM을 얹기 좋게).
+    """
+    if not images:
+        raise ValueError("사진이 없습니다")
+    w, h = size
+    per_s = max(0.5, (total_us / 1e6) / len(images))
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error"]
+    parts = []
+    for i, img in enumerate(images):
+        args += ["-loop", "1", "-t", f"{per_s:.3f}", "-i", str(img)]
+        parts.append(
+            f"[{i}:v]split=2[bg{i}][fg{i}];"
+            f"[bg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},boxblur=24:2,eq=brightness=-0.1[bgb{i}];"
+            f"[fg{i}]scale={w}:{h}:force_original_aspect_ratio=decrease[fgs{i}];"
+            f"[bgb{i}][fgs{i}]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={fps}[v{i}]"
+        )
+    total_s = per_s * len(images)
+    args += ["-f", "lavfi", "-t", f"{total_s:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
+    fc = (";".join(parts) + ";"
+          + "".join(f"[v{i}]" for i in range(len(images)))
+          + f"concat=n={len(images)}:v=1:a=0[v]")
+    args += ["-filter_complex", fc, "-map", "[v]", "-map", f"{len(images)}:a",
+             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+             "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out_path)]
+    ff.run(args)
+    return str(out_path)

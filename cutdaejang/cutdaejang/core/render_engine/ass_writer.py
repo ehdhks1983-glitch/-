@@ -220,7 +220,8 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             if style.margin_v is not None
             else presets.subtitle_margin_v(style.position, spec.canvas.h)
         ),
-        title_size=presets.title_size(spec.canvas.h),
+        title_size=round(presets.title_size(spec.canvas.h)
+                         * max(0.6, min(1.6, float(getattr(style, "hook_scale", 1.0) or 1.0)))),
         title_border=3 if hook_band else 1,
         title_outline_color="&H90101010" if hook_band else "&H00101010",
         title_outline=sc(20) if hook_band else sc(presets.TITLE_OUTLINE),

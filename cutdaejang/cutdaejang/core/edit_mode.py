@@ -494,6 +494,25 @@ def rebuild_from_keep(
     return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
 
 
+def extract_frames_b64(video: str, n: int = 4, width: int = 480) -> List[str]:
+    """영상에서 고르게 n장 캡처 → base64 JPEG 목록 (AI 영상 분석 입력용)."""
+    import base64
+    import tempfile
+
+    dur = ff.probe_duration_us(video) / 1e6
+    out: List[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for i in range(n):
+            at = dur * (i + 0.5) / n
+            fp = Path(tmp) / f"f{i}.jpg"
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-ss", f"{at:.2f}",
+                    "-i", str(video), "-frames:v", "1",
+                    "-vf", f"scale={width}:-2", "-q:v", "5", str(fp)])
+            if fp.is_file():
+                out.append(base64.b64encode(fp.read_bytes()).decode("ascii"))
+    return out
+
+
 def spread_ranges(total_us: int, target_us: int, piece_us: int = 3_500_000) -> List[tuple]:
     """긴 영상 전체에서 고르게 조각을 뽑아 목표 길이를 채우는 구간 목록.
 

@@ -85,6 +85,7 @@ class Style:
     band: bool = False             # 자막 뒤 배경 띠 (유튜브 썸네일 스타일)
     hook_band: bool = True         # 상단 제목 뒤 배경 띠 (기본 켬)
     wrap_chars: int = 16           # 자막 한 줄 최대 글자수(넘으면 2줄로 자동 줄바꿈). 0=끔
+    hook_scale: float = 1.0        # 상단 제목 크기 배수 (0.6~1.6, UI 크기 선택)
 
 
 @dataclass

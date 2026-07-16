@@ -163,3 +163,15 @@ def test_write_ass_scales_to_canvas(tmp_path):
     st = next(l for l in (tmp_path / "a.ass").read_text(encoding="utf-8").splitlines()
               if l.startswith("Style: Default")).split(",")
     assert st[2] == "168" and st[21] == "960"
+
+
+def test_write_ass_hook_scale_multiplies_title_size(tmp_path):
+    # 훅 스튜디오 크기 선택(v0.31) — hook_scale 배수가 Title 폰트 크기에 반영
+    spec = make_valid_spec()
+    spec.hook = "크기 테스트"
+    write_ass(spec, tmp_path / "base.ass")
+    base = _style_line((tmp_path / "base.ass").read_text(encoding="utf-8"), "Title")
+    spec.style.hook_scale = 1.4
+    write_ass(spec, tmp_path / "big.ass")
+    big = _style_line((tmp_path / "big.ass").read_text(encoding="utf-8"), "Title")
+    assert round(int(base.split(",")[2]) * 1.4) == int(big.split(",")[2])

@@ -252,14 +252,35 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         from ..core.stt_engine import STTEngine, make_provider  # noqa: PLC0415
         from ..core.video_editor import SilenceOptions, resolve_input_video  # noqa: PLC0415
 
-        try:  # 폴더를 넣으면 안의 최신 영상 자동 선택
-            video = resolve_input_video(params.get("video_path") or "")
-        except ValueError as ve:
-            _set_job(job_id, status="failed", errors=[str(ve)])
-            return
+        photo_path = (params.get("photo_path") or "").strip()
+        if photo_path:  # 📸 사진들 → 슬라이드쇼 영상 (장수로 전체 길이 균등 분배)
+            from ..core.video_editor import photos_to_video, resolve_photo_inputs  # noqa: PLC0415
+            try:
+                imgs = resolve_photo_inputs(photo_path)
+                try:
+                    photo_sec = float(params.get("photo_sec") or 15)
+                except (TypeError, ValueError):
+                    photo_sec = 15.0
+                photo_sec = max(3.0, min(180.0, photo_sec))
+                _set_job(job_id, stage="cut", frac=0.0,
+                         note=f"사진 {len(imgs)}장 → {photo_sec:.0f}초 영상 만드는 중…")
+                (Path(workdir) / job_id).mkdir(parents=True, exist_ok=True)
+                video = photos_to_video(
+                    imgs, int(photo_sec * 1e6),
+                    str(Path(workdir) / job_id / "slideshow.mp4"))
+            except Exception as ve:  # noqa: BLE001
+                _set_job(job_id, status="failed", errors=[str(ve)])
+                return
+        else:
+            try:  # 폴더를 넣으면 안의 최신 영상 자동 선택
+                video = resolve_input_video(params.get("video_path") or "")
+            except ValueError as ve:
+                _set_job(job_id, status="failed", errors=[str(ve)])
+                return
 
-        auto_subtitle = params.get("auto_subtitle", True)
-        cut_silence = params.get("cut_silence", True)
+        # 사진 영상은 무음이라 음성 인식·무음 컷이 의미 없음 → 자동 비활성
+        auto_subtitle = params.get("auto_subtitle", True) and not photo_path
+        cut_silence = bool(params.get("cut_silence", True)) and not photo_path
         script_lines = (params.get("script") or "").splitlines()
         has_script = any(ln.strip() for ln in script_lines)
         narr_topic = (params.get("narr_topic") or "").strip()
@@ -332,7 +353,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "orig_audio": params.get("orig_audio")
                          or ("mute" if narr_topic and not narr_subs_only else "keep"),
                          "bgm": (params.get("bgm") or "").strip(),
-                         "bgm_db": params.get("bgm_db")},
+                         "bgm_db": params.get("bgm_db"),
+                         "hook_scale": params.get("hook_scale")},
             edit_summary=_edit_summary(analysis),
         )
         analysis.subtitles = review_subs
@@ -403,6 +425,11 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         out = str(Path(workdir) / job_id / "edited.mp4")
         job = _get_job(job_id) or {}
         ep = job.get("edit_params") or {}
+        style = build_style(settings)
+        try:  # 상단 제목 크기 배수 (훅 스튜디오)
+            style.hook_scale = float(ep.get("hook_scale") or 1.0)
+        except (TypeError, ValueError):
+            style.hook_scale = 1.0
         if ep.get("narr_style"):  # 내레이션 말투 스타일 (Gemini TTS 프롬프트에 반영)
             settings = config.deep_merge(settings, {"tts": {"style_preset": ep["narr_style"]}})
         orig_audio = ep.get("orig_audio") or "keep"
@@ -485,7 +512,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             if note:
                 _set_job(job_id, note=note)
         result = edit_mode.render_from_analysis(
-            cut_video, subs, out, style=build_style(settings),
+            cut_video, subs, out, style=style,
             layout=layout, hook=hook, speed=speed, quality=quality, denoise=denoise,
             narration_wav=narration_wav,
             orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
@@ -701,9 +728,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
         elif path == "/api/edit":
             video = (params.get("video_path") or "").strip().strip('"')
-            if not video:
-                self._send_json({"error": "영상 파일 경로를 입력하세요"}, 400)
+            if not video and not (params.get("photo_path") or "").strip():
+                self._send_json({"error": "영상 파일(또는 사진 폴더) 경로를 입력하세요"}, 400)
                 return
+            if not video:
+                video = "사진영상"  # 사진 모드 — 제목용
             job_id = orchestrator.new_job_id(Path(video).stem or "edit")
             _set_job(job_id, status="running", stage="analyze", frac=0.0,
                      title=Path(video).stem, params=params)
@@ -717,6 +746,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "자막 검토 중인 작업이 아닙니다"}, 400)
                 return
             ep = job.get("edit_params") or {}
+            if params.get("hook_scale") is not None:
+                ep["hook_scale"] = params.get("hook_scale")
+                _set_job(job["id"], edit_params=ep)
             hook = params.get("hook", ep.get("hook", ""))
             keep = params.get("keep")  # 고른 구간(번호). None이면 전체 유지
             if keep is not None:
@@ -859,6 +891,28 @@ class _Handler(BaseHTTPRequestHandler):
             except sg.ScriptError:
                 hooks = sg.suggest_hooks_stub(ctx)  # 키 없으면 템플릿
             self._send_json({"hooks": hooks})
+        elif path == "/api/analyze_ai":
+            # 🧠 영상 AI 분석 — 장면 캡처+자막을 Gemini에 보내 제목·훅·대본 추천
+            _apply_keys(params)
+            from ..core import edit_mode, script_generator as sg  # noqa: PLC0415
+            job = _get_job(params.get("job_id", ""))
+            video = (job or {}).get("cut_video")
+            if not video or not Path(video).is_file():
+                self._send_json({"error": "분석할 영상이 없습니다 — 먼저 편집을 시작하세요"}, 400)
+                return
+            transcript = "\n".join(
+                (s.get("text") or "") for s in (job.get("subtitles") or []))[:4000]
+            try:
+                frames = edit_mode.extract_frames_b64(video, n=4)
+                if os.environ.get("GEMINI_API_KEY"):
+                    out = sg.suggest_from_video(frames, transcript)
+                    out["stub"] = False
+                else:
+                    out = sg.suggest_from_video_stub(frames, transcript)
+                    out["stub"] = True
+                self._send_json(out)
+            except sg.ScriptError as e:
+                self._send_json({"error": str(e)}, 400)
         elif path == "/api/sovits_save":
             # GPT-SoVITS 무료 내 목소리 — 참조 녹음/대사/서버 주소 저장
             ref = (params.get("ref_audio") or "").strip().strip('"')
@@ -1356,7 +1410,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.30)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.31)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1372,7 +1426,20 @@ _HTML = """<!doctype html>
     </div>
     <div class="hint">버튼을 누르면 파일 탐색기가 열립니다. (폴더 경로만 넣으면 그 안의 최신 영상을 씁니다)</div>
     <label>상단 제목(훅) <span class="hint">— 줄바꿈 Enter · 숫자는 자동 강조 · <b>| 단어</b> 강조 · 여러 색 <b>[노랑]..[/] [빨강]..[/]</b></span></label>
-    <textarea id="editHook" style="min-height:56px" placeholder="예) [노랑]사진만 넣으면[/] 홍보글이 [초록]뚝딱![/]"></textarea>
+    <textarea id="editHook" style="min-height:56px" oninput="renderHookPreview()" placeholder="예) [노랑]사진만 넣으면[/] 홍보글이 [초록]뚝딱![/]"></textarea>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px" id="hookStudio">
+      <span class="hint">글자를 <b>드래그로 선택</b>하고 색을 누르세요 →</span>
+      <span id="hookColorChips"></span>
+      <button class="ghost" style="padding:4px 8px" onclick="clearHookMarkup(event)">지우기</button>
+      <span class="hint" style="margin-left:6px">· 크기</span>
+      <select id="hookSizeSel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
+        <option value="0.85">작게</option>
+        <option value="1" selected>기본</option>
+        <option value="1.2">크게</option>
+        <option value="1.4">아주 크게</option>
+      </select>
+    </div>
+    <div id="hookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
     <div style="display:flex;gap:6px;margin-top:6px">
       <input type="text" id="editHookTopic" style="flex:1" placeholder="영상 주제 키워드 (예: 블로그 자동화)">
       <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ 제목 추천</button>
@@ -1402,6 +1469,19 @@ _HTML = """<!doctype html>
           <div class="hint">클수록 정확하지만 느리고, 첫 사용 시 모델 다운로드가 큽니다.</div>
         </div>
       </div>
+    </div>
+    <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
+      <label style="margin-top:0">📸 사진으로 영상 만들기 <span class="hint">(선택 — 영상 대신 사진들로)</span></label>
+      <div class="row">
+        <div style="flex:2">
+          <input type="text" id="photoPath" placeholder="사진 폴더 경로 (안의 사진 전부, 이름순) 또는 파일 경로 여러 개(줄바꿈/세미콜론)">
+        </div>
+        <div>
+          <label class="hint" style="margin:0 0 4px">전체 길이(초)</label>
+          <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px">
+        </div>
+      </div>
+      <div class="hint">예) 사진 5장 + 15초 → 한 장당 3초씩. 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게. 여기에 AI 내레이션(또는 자막만)·배경음악·상단 제목을 그대로 얹을 수 있어요. 사진을 넣으면 위 영상 경로는 무시됩니다.</div>
     </div>
     <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
       <label style="margin-top:0">🎙️ AI 내레이션 추가 <span class="hint">(선택 — 말 없는 영상에 AI 대본+목소리+자막)</span></label>
@@ -1666,12 +1746,27 @@ _HTML = """<!doctype html>
       <div class="hint" id="hlReason" style="margin-top:4px"></div>
       <div id="subList" class="subList-scroll" style="margin-top:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="ghost" onclick="analyzeAI(event)" title="장면 캡처+자막을 AI가 보고 제목·훅·대본을 추천 (제미나이 키 권장)">🧠 AI 영상 분석 (제목·대본)</button>
         <button class="ghost" onclick="refineSubs(event)" title="발음 오인식을 문맥에 맞게 자연스럽게 자동 교정 (제미나이 키 필요)">🪄 AI로 대본 다듬기</button>
         <button class="ghost" onclick="addSubRow(event)">+ 자막 줄 추가</button>
         <button class="ghost" onclick="pronounceSubs(event)">숫자·영어 → 한글</button>
         <button class="ghost" onclick="toggleBulk(event)">📋 대본 일괄 붙여넣기</button>
         <button class="ghost" onclick="downloadScript(event,'txt')">📥 대본 저장(.txt)</button>
         <button class="ghost" onclick="downloadScript(event,'srt')">📥 자막 저장(.srt)</button>
+      </div>
+      <div id="aiAnalyzeBox" class="hidden" style="margin-top:8px;padding:10px 12px;border:1px solid #2c3350;border-radius:10px">
+        <div class="hint" id="aiSummary" style="margin-bottom:6px"></div>
+        <b style="font-size:13px">🪝 상단 훅 추천 (클릭하면 채워져요)</b>
+        <div id="aiHooks" class="hookcands"></div>
+        <b style="font-size:13px">📌 유튜브 제목 추천</b>
+        <div id="aiTitles" class="hint" style="white-space:pre-line;margin:4px 0 8px"></div>
+        <b style="font-size:13px">📝 추천 내레이션 대본</b>
+        <textarea id="aiScript" readonly style="min-height:84px;margin-top:4px"></textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <button class="ghost" onclick="applyAiScript(event)">이 대본으로 자막 텍스트 교체</button>
+          <button class="ghost" onclick="copyAiScript(event)">📋 복사</button>
+          <span class="hint" id="aiTags"></span>
+        </div>
       </div>
       <div id="bulkBox" class="hidden" style="margin-top:8px">
         <textarea id="bulkText" style="min-height:90px" placeholder="대본을 한 줄에 한 자막씩 붙여넣고 아래 버튼을 누르면, 위 자막들의 텍스트가 순서대로 교체됩니다 (타이밍은 유지). 줄이 더 많으면 뒤에 추가돼요."></textarea>
@@ -1867,7 +1962,8 @@ function onScriptInput(){
 
 async function startEdit(){
   const video = $('editVideo').value.trim();
-  if(!video){ alert('영상 파일을 선택하거나 경로를 입력하세요'); return; }
+  const photos = ($('photoPath')||{}).value||'';
+  if(!video && !photos.trim()){ alert('영상 파일(또는 📸 사진 폴더) 경로를 입력하세요'); return; }
   const nv = ($('narrVoiceSel')||{}).value||'';
   let editKey = $('editGeminiKey').value;
   // 내레이션 보이스는 제미나이 키가 있어야 적용 — 없으면 여기서 물어봐 저장
@@ -1880,6 +1976,8 @@ async function startEdit(){
   const body = {
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
+    photo_path: ($('photoPath')||{}).value||'', photo_sec: +(($('photoSec')||{}).value)||15,
+    hook_scale: +(($('hookSizeSel')||{}).value)||1,
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
@@ -1995,6 +2093,131 @@ function ensureGeminiKey(){
 }
 
 // AI로 자막(대본) 다듬기 — 발음 오인식을 문맥 기반으로 자연스럽게 교정
+// ── 훅 제목 스튜디오 (v0.31) — 색 칩·크기·실시간 미리보기 ──
+const HOOK_COLORS = {'노랑':'#FFD400','빨강':'#FF3B30','초록':'#34C759','파랑':'#0A84FF',
+  '주황':'#FF9500','분홍':'#FF375F','하늘':'#5AC8FA','민트':'#31E1C4','보라':'#BF5AF2','흰':'#FFFFFF'};
+
+function initHookChips(){
+  const box = $('hookColorChips');
+  if(!box || box.childElementCount) return;
+  for(const name in HOOK_COLORS){
+    const b = document.createElement('button');
+    b.className = 'ghost'; b.textContent = name;
+    b.style.cssText = 'padding:3px 8px;border-color:' + HOOK_COLORS[name] + ';color:' + HOOK_COLORS[name] + (name==='흰' ? ';color:#fff' : '');
+    b.onclick = (e) => wrapHookColor(e, name);
+    box.appendChild(b);
+  }
+}
+
+function wrapHookColor(ev, name){
+  ev.preventDefault();
+  const ta = $('editHook');
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  if(s === e){ alert('색을 입힐 글자를 먼저 드래그로 선택하세요'); ta.focus(); return; }
+  const v = ta.value;
+  ta.value = v.slice(0, s) + '[' + name + ']' + v.slice(s, e) + '[/]' + v.slice(e);
+  ta.focus(); renderHookPreview();
+}
+
+function clearHookMarkup(ev){
+  ev.preventDefault();
+  const re1 = new RegExp('[[](?:[가-힣A-Za-z]+|/[가-힣A-Za-z]*)[]]', 'g');
+  $('editHook').value = $('editHook').value.replace(re1, '');
+  renderHookPreview();
+}
+
+function hookLineHtml(line){
+  const esc = (x) => x.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let rest = line, out = '', hasMarkup = false;
+  const tagRe = new RegExp('[[]([가-힣A-Za-z]+)[]]');
+  while(rest){
+    const m = rest.match(tagRe);
+    const name = m ? m[1] : null;
+    const col = name && (HOOK_COLORS[name] || HOOK_COLORS[name.replace(/색$/,'')]);
+    if(!m || !col){
+      if(m && m.index !== undefined){ out += esc(rest.slice(0, m.index + m[0].length)); rest = rest.slice(m.index + m[0].length); continue; }
+      out += esc(rest); break;
+    }
+    hasMarkup = true;
+    out += esc(rest.slice(0, m.index));
+    rest = rest.slice(m.index + m[0].length);
+    const close = rest.search(new RegExp('[[]/[가-힣A-Za-z]*[]]'));
+    const next = rest.search(tagRe);
+    let end = rest.length;
+    if(close >= 0 && (next < 0 || close <= next)) end = close;
+    else if(next >= 0) end = next;
+    out += '<span style="color:' + col + '">' + esc(rest.slice(0, end)) + '</span>';
+    rest = (close >= 0 && close === end) ? rest.slice(end).replace(new RegExp('^[[]/[가-힣A-Za-z]*[]]'), '') : rest.slice(end);
+  }
+  if(!hasMarkup){
+    // 마크업 없으면: | 단어 강조 → 없으면 숫자 자동 강조 (렌더와 같은 규칙)
+    const bar = line.lastIndexOf('|');
+    if(bar > 0){
+      const word = line.slice(bar + 1).trim();
+      const body = line.slice(0, bar).trim();
+      out = esc(body).split(esc(word)).join('<span style="color:#FFD400">' + esc(word) + '</span>');
+    } else {
+      out = esc(line).replace(new RegExp('([0-9]+[가-힣%]*)', 'g'), '<span style="color:#FFD400">$1</span>');
+    }
+  }
+  return out;
+}
+
+function renderHookPreview(){
+  initHookChips();
+  const box = $('hookPreview');
+  const raw = $('editHook').value.trim();
+  if(!raw){ box.style.display = 'none'; return; }
+  const scale = +(($('hookSizeSel')||{}).value) || 1;
+  const px = Math.round(24 * scale);
+  box.style.display = 'block';
+  box.innerHTML = raw.split(new RegExp('[' + String.fromCharCode(10,13) + ']+')).map(l =>
+    '<div style="display:inline-block;background:rgba(10,10,14,.72);padding:4px 12px;margin:2px 0;' +
+    'font-weight:800;font-size:' + px + 'px;line-height:1.35;color:#fff;letter-spacing:-0.5px">' +
+    hookLineHtml(l) + '</div>').join('<br>');
+}
+
+async function analyzeAI(ev){
+  ev.preventDefault();
+  const btn = ev.target; const oldTxt = btn.textContent;
+  const key = ensureGeminiKey();
+  btn.disabled = true; btn.textContent = '🧠 분석 중…(장면 캡처+AI)';
+  try{
+    const data = await (await fetch('/api/analyze_ai', {method:'POST', body: JSON.stringify({
+      job_id: currentJob, gemini_key: key, save_key: true,
+    })})).json();
+    if(data.error){ alert(data.error); return; }
+    if(key) window._hasGeminiKey = true;
+    $('aiAnalyzeBox').classList.remove('hidden');
+    $('aiSummary').textContent = (data.stub ? '⚠ 제미나이 키가 없어 예시 추천입니다 — 키를 넣으면 영상 내용 기반으로 추천돼요. ' : '') + (data.summary || '');
+    const hooks = $('aiHooks'); hooks.innerHTML = '';
+    (data.hooks || []).forEach(h => {
+      const b = document.createElement('button');
+      b.textContent = h;
+      b.onclick = (e) => { e.preventDefault(); $('editHook').value = h; };
+      hooks.appendChild(b);
+    });
+    $('aiTitles').textContent = (data.titles || []).map((t2,i) => (i+1) + '. ' + t2).join('\\n');
+    $('aiScript').value = (data.script || []).join('\\n');
+    $('aiTags').textContent = (data.hashtags || []).map(h => '#' + h.replace(/^#/, '')).join(' ');
+  } finally { btn.disabled = false; btn.textContent = oldTxt; }
+}
+
+function applyAiScript(ev){
+  ev.preventDefault();
+  const lines = $('aiScript').value.split('\\n').map(s => s.trim()).filter(Boolean);
+  if(!lines.length){ alert('추천 대본이 없습니다'); return; }
+  if(!confirm('자막 텍스트를 추천 대본으로 교체할까요? (타이밍은 유지, 줄이 더 많으면 뒤에 추가)')) return;
+  $('bulkText').value = lines.join('\\n');
+  applyBulk(ev);
+}
+
+async function copyAiScript(ev){
+  ev.preventDefault();
+  try{ await navigator.clipboard.writeText($('aiScript').value); ev.target.textContent = '✓ 복사됨'; }
+  catch(e){ alert('복사 실패 — 직접 드래그해서 복사하세요'); }
+}
+
 async function refineSubs(ev){
   if(ev)ev.preventDefault();
   const idxs=[]; (window._subs||[]).forEach((s,i)=>{ if((s.text||'').trim()) idxs.push(i); });
@@ -2132,7 +2355,7 @@ async function renderEdited(){
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
   const quality=($('outQuality')||{}).value || 'standard';
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality})});
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
