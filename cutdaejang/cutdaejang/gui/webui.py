@@ -8,9 +8,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import threading
+import time
+from collections import deque
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -227,7 +230,6 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
         )
         _record_history(workdir, result, opts)
     except Exception as e:
-        import logging  # noqa: PLC0415
         import traceback  # noqa: PLC0415
 
         logging.getLogger("cutdaejang").error("작업 실패 %s\n%s", job_id, traceback.format_exc())
@@ -294,6 +296,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 Path(workdir) / "cache" / "stt",
                 language=params.get("language", "ko"),
             )
+        logging.getLogger("cutdaejang").info(
+            "편집 시작: %s (내레이션=%s, 자막만=%s, 완전자동=%s)",
+            Path(video).name, bool(narr_topic), bool(params.get('narr_subs_only')), bool(params.get("auto_edit")))
         _set_job(job_id, status="running", stage="analyze", frac=0.0, title=Path(video).stem)
         analysis = edit_mode.analyze_video(
             video, Path(workdir) / job_id, stt,
@@ -401,7 +406,6 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                             params.get("layout") or edit_cfg["layout"],
                             analysis.cut_video, workdir, denoise=denoise)
     except Exception as e:
-        import logging  # noqa: PLC0415
         import traceback  # noqa: PLC0415
 
         logging.getLogger("cutdaejang").error("편집 분석 실패 %s\n%s", job_id, traceback.format_exc())
@@ -485,9 +489,19 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             if want and used != want:
                 warn = "⚠ 내 목소리 합성에 실패해 다른 목소리로 대체했어요"
             elif used in ("windows", "stub") and narr_voice not in ("", "__mine__", "__sovits__"):
-                warn = ("⚠ 제미나이 키가 없거나 실패해 내장 음성으로 만들었어요 — "
-                        "보이스 선택은 제미나이 키가 있어야 적용됩니다")
+                low = (note or "").lower()
+                if os.environ.get("GEMINI_API_KEY") and any(
+                        k in low for k in ("429", "resource_exhausted", "quota", "exceed", "한도")):
+                    warn = ("⚠ 제미나이 무료 TTS 한도에 걸려 내장 음성으로 대체됐어요 — "
+                            "잠시 뒤(한도 리셋 후) 같은 설정으로 다시 만들면 이미 만든 문장은 "
+                            "재사용돼 이어서 완성됩니다. 문장 수를 줄이면 한도 안에 들어가요")
+                elif os.environ.get("GEMINI_API_KEY"):
+                    warn = "⚠ 제미나이 목소리 합성이 실패해 내장 음성으로 대체됐어요 (하단 🪵 로그 참고)"
+                else:
+                    warn = ("⚠ 제미나이 키가 없거나 실패해 내장 음성으로 만들었어요 — "
+                            "보이스 선택은 제미나이 키가 있어야 적용됩니다")
             if warn:
+                logging.getLogger("cutdaejang").warning("%s (사유: %s)", warn, (note or "")[:200])
                 note = f"{note} · {warn}" if note else warn
                 prev = (_get_job(job_id) or {}).get("tts_warn") or ""
                 _set_job(job_id, tts_warn=f"{prev} · {warn}" if prev else warn)  # 완료 화면 보존
@@ -518,6 +532,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
             progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
         )
+        logging.getLogger("cutdaejang").info(
+            "렌더 %s: %s", "완료" if result.ok else "부분 실패", out)
         _set_job(
             job_id,
             status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
@@ -528,7 +544,6 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             errors=result.errors,
         )
     except Exception as e:
-        import logging  # noqa: PLC0415
         import traceback  # noqa: PLC0415
 
         logging.getLogger("cutdaejang").error("편집 렌더 실패 %s\n%s", job_id, traceback.format_exc())
@@ -582,7 +597,6 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             mp4=outs[0] if outs else None, mp4s=outs, errors=errors,
         )
     except Exception as e:
-        import logging  # noqa: PLC0415
         import traceback  # noqa: PLC0415
 
         logging.getLogger("cutdaejang").error("분할 렌더 실패 %s\n%s", job_id, traceback.format_exc())
@@ -616,7 +630,6 @@ def _run_generate(job_id: str, params: dict, workdir: str) -> None:
                         "background_prompt": script.background_prompt},
             )
     except Exception as e:
-        import logging  # noqa: PLC0415
         import traceback  # noqa: PLC0415
 
         logging.getLogger("cutdaejang").error("작업 실패 %s\n%s", job_id, traceback.format_exc())
@@ -1051,6 +1064,7 @@ class _Handler(BaseHTTPRequestHandler):
             lines.append(f"ffmpeg: ✘ {e}")
         env = _env_check()
         lines.append(f"libass 폰트 동봉: {'OK' if env['font'] else '없음'}")
+        lines += ["", "── 최근 로그 (하단 🪵 패널과 동일) ──", *list(_LOG_BUF)[-150:]]
         try:
             lines.append(f"GPU 인코딩(nvenc): {'사용가능' if ff.nvenc_available() else '미감지(libx264)'}")
         except Exception as e:
@@ -1213,6 +1227,7 @@ class _Handler(BaseHTTPRequestHandler):
             "voices": GEMINI_VOICES,
             "styles": list(STYLE_INSTRUCTIONS),
             "stt_available": _stt_available(),
+            "logs": list(_LOG_BUF)[-120:],
         }
 
     # ---------- 영상 서빙 (Range 지원 — 브라우저 탐색바용) ----------
@@ -1288,8 +1303,29 @@ class _Handler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
 
+_LOG_BUF: deque = deque(maxlen=400)  # 🪵 UI 하단 로그 패널용 링버퍼
+
+
+class _UILogHandler(logging.Handler):
+    def emit(self, record):  # noqa: D102
+        try:
+            _LOG_BUF.append(
+                f"{time.strftime('%H:%M:%S')} [{record.levelname[0]}] {record.getMessage()}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _attach_ui_log() -> None:
+    lg = logging.getLogger("cutdaejang")
+    if not any(isinstance(h, _UILogHandler) for h in lg.handlers):
+        lg.addHandler(_UILogHandler())
+    if lg.level in (logging.NOTSET, logging.WARNING):
+        lg.setLevel(logging.INFO)
+
+
 def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
     Path(workdir).mkdir(parents=True, exist_ok=True)
+    _attach_ui_log()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     httpd.workdir = str(workdir)  # type: ignore[attr-defined]
     return httpd
@@ -1410,7 +1446,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.31)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.32)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1872,9 +1908,13 @@ _HTML = """<!doctype html>
     <button onclick="saveSettings()">설정 저장</button>
   </div>
 
-  <div style="text-align:center;margin-top:18px">
+  <details id="logPanel" style="margin-top:16px">
+    <summary class="hint" style="cursor:pointer">🪵 작업 로그 — 오류가 나면 펼쳐서 <b>[📋 복사]</b> 후 붙여넣어 주세요 <button class="ghost" style="padding:2px 8px;margin-left:6px" onclick="copyLogs(event)">📋 복사</button></summary>
+    <pre id="logBox" style="max-height:260px;overflow:auto;background:#0d0f14;border:1px solid #2c3350;border-radius:8px;padding:10px;font-size:12px;line-height:1.55;white-space:pre-wrap;margin-top:8px">(아직 로그 없음)</pre>
+  </details>
+  <div style="text-align:center;margin-top:12px">
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
-    <button class="ghost" onclick="diagnostic(event)">🩺 진단 리포트 저장</button>
+    <button class="ghost" onclick="diagnostic(event)">🩺 진단 리포트 저장 (로그 포함)</button>
   </div>
 </div>
 
@@ -2598,6 +2638,20 @@ async function diagnostic(ev){
 
 function toggleSettings(){ $('settingsCard').classList.toggle('hidden'); }
 
+function updateLogs(lines){
+  const box = $('logBox');
+  if(!box || !lines) return;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.textContent = (lines.length ? lines.join(String.fromCharCode(10)) : '(아직 로그 없음)');
+  if(atBottom) box.scrollTop = box.scrollHeight;
+}
+
+async function copyLogs(ev){
+  ev.preventDefault(); ev.stopPropagation();
+  try{ await navigator.clipboard.writeText($('logBox').textContent); ev.target.textContent = '✓ 복사됨'; }
+  catch(e){ alert('복사 실패 — 로그를 드래그해서 복사하세요'); }
+}
+
 function fillSettings(s){
   $('setFontSize').value = s.subtitle.font_size;
   $('setOutline').value = s.subtitle.outline;
@@ -2693,6 +2747,7 @@ async function poll(){
   $('envBanner').textContent = problems.join('  ');
 
   renderHistory(state.history);
+  updateLogs(state.logs);
   if(!currentJob) return;
   const job = state.jobs.find(j => j.id === currentJob);
   if(!job) return;

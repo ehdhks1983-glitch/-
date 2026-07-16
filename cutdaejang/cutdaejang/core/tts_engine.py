@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -31,6 +32,7 @@ from ..utils import ffmpeg as ff
 from ..utils.timefmt import US_PER_SECOND
 
 StatusCb = Optional[Callable[[str], None]]
+log = logging.getLogger("cutdaejang")
 
 
 class TTSError(RuntimeError):
@@ -674,15 +676,18 @@ def synth_with_fallback(
             provider = (providers or {}).get(name) or make_provider(name, settings)
         except TTSError as e:  # 키 없음 등 — 다음 제공자로
             reason = f"{name} 사용 불가: {e}"
+            log.warning("TTS %s", reason)
             if status_cb:
                 status_cb(reason)
             continue
         engine = TTSEngine(provider, Path(cache_root), settings=settings, status_cb=status_cb)
         try:
             paths = engine.synth_all(sentences, voice=voice, on_progress=on_progress)
+            log.info("TTS %s로 %d문장 합성 완료", name, len(sentences))
             return paths, name, reason
         except (TTSNonRetryable, TTSExhausted) as e:
             reason = f"{name} 실패 → 다음 제공자로 폴백: {str(e)[:200]}"
+            log.warning("TTS %s", reason)
             if status_cb:
                 status_cb(reason)
             continue
