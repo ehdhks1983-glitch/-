@@ -655,3 +655,73 @@ def test_spread_ranges_montage():
     for (a1, b1), (a2, b2) in zip(r, r[1:]):
         assert b1 <= a2                                   # 겹침 없음
     assert spread_ranges(20_000_000, 30_000_000) == [(0, 20_000_000)]  # 짧으면 그대로
+
+
+# ─────────── v0.33: 핵심 선별 — 앞 30초만 나오던 문제 ───────────
+
+
+def _flat_subs(n=30, dur_s=2.0):
+    # 후킹 요소가 없는 밋밋한 자막 n개 (동점 상황 재현)
+    return [{"text": f"그냥 평범한 설명 문장 {chr(0xAC00 + i)}", "start_us": int(i * dur_s * 1e6),
+             "end_us": int((i + 1) * dur_s * 1e6)} for i in range(n)]
+
+
+def test_heuristic_covers_whole_video_not_prefix():
+    from cutdaejang.core.script_generator import suggest_highlights_heuristic
+
+    subs = _flat_subs(30, 2.0)                      # 60초 영상, 목표 20초
+    keep = suggest_highlights_heuristic(subs, target_sec=20)["keep"]
+    assert keep != list(range(len(keep)))           # 0,1,2,… 접두 연속 금지
+    assert min(keep) < 10 and any(10 <= i < 20 for i in keep) and max(keep) >= 20
+    total = sum((subs[i]["end_us"] - subs[i]["start_us"]) / 1e6 for i in keep)
+    assert 18 <= total <= 26                        # 목표 근처
+
+
+def test_suggest_highlights_rejects_lazy_prefix(monkeypatch):
+    import json as _json
+
+    from cutdaejang.core import script_generator as sg
+
+    def fake_post(url, payload, headers, timeout=120.0):
+        return {"candidates": [{"content": {"parts": [{
+            "text": _json.dumps({"keep": list(range(12)), "reason": "앞부터"})}]}}]}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(sg, "_http_post_json", fake_post)
+    subs = _flat_subs(30, 2.5)                      # 75초 > 30×1.6
+    with pytest.raises(sg.ScriptError, match="앞부분만"):
+        sg.suggest_highlights(subs, target_sec=30)
+
+
+def test_suggest_highlights_accepts_scattered(monkeypatch):
+    import json as _json
+
+    from cutdaejang.core import script_generator as sg
+
+    picked = [0, 7, 13, 19, 24, 29]
+
+    def fake_post(url, payload, headers, timeout=120.0):
+        assert "[0:00]" in payload["contents"][0]["parts"][0]["text"]  # 시작시각 제공
+        return {"candidates": [{"content": {"parts": [{
+            "text": _json.dumps({"keep": picked, "reason": "고르게"})}]}}]}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(sg, "_http_post_json", fake_post)
+    out = sg.suggest_highlights(_flat_subs(30, 2.5), target_sec=30)
+    assert out["keep"] == picked
+
+
+def test_suggest_highlights_allows_prefix_on_short_video(monkeypatch):
+    # 영상이 목표와 비슷한 길이면 연속 선택도 정상 (자를 게 없음)
+    import json as _json
+
+    from cutdaejang.core import script_generator as sg
+
+    def fake_post(url, payload, headers, timeout=120.0):
+        return {"candidates": [{"content": {"parts": [{
+            "text": _json.dumps({"keep": [0, 1, 2, 3, 4, 5], "reason": "짧아서 다"})}]}}]}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(sg, "_http_post_json", fake_post)
+    subs = _flat_subs(8, 4.0)                       # 32초 영상, 목표 30초 → 1.6배 미만
+    assert sg.suggest_highlights(subs, target_sec=30)["keep"] == [0, 1, 2, 3, 4, 5]

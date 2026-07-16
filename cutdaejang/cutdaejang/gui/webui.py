@@ -382,9 +382,22 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             if subs_d and tgt > 0 and not narr_topic:
                 _set_job(job_id, note=f"핵심 구간 골라 {tgt}초 쇼츠 구성 중…")
                 try:
-                    keep = sg.suggest_highlights(subs_d, target_sec=tgt)["keep"]
-                except Exception:
-                    keep = sg.suggest_highlights_heuristic(subs_d, target_sec=tgt)["keep"]
+                    pick = sg.suggest_highlights(subs_d, target_sec=tgt)
+                    pick_src = "AI"
+                except Exception as pe:
+                    logging.getLogger("cutdaejang").warning(
+                        "AI 핵심 추천 무효/실패 → 후킹 점수 방식으로 대체: %s", pe)
+                    pick = sg.suggest_highlights_heuristic(subs_d, target_sec=tgt)
+                    pick_src = "후킹 점수"
+                keep = pick["keep"]
+                if keep:  # 어떤 구간을 골랐는지 투명하게 (로그 + 완료 화면)
+                    starts = [subs_d[i].get("start_us", 0) / 1e6 for i in keep]
+                    fmt = " · ".join(f"{int(x // 60)}:{int(x % 60):02d}" for x in starts)
+                    msg = f"✂️ 핵심 {len(keep)}구간({pick_src}): {fmt}"
+                    logging.getLogger("cutdaejang").info(
+                        "%s | 사유: %s", msg, pick.get("reason", ""))
+                    prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                    _set_job(job_id, tts_warn=f"{prev} · {msg}" if prev else msg)
             try:
                 auto_speed = float(params.get("speed") or 1.0)
             except (TypeError, ValueError):
@@ -1446,7 +1459,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.32)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.33)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">

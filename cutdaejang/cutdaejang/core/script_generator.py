@@ -174,10 +174,15 @@ def suggest_hooks(context: str, n: int = 5, model: str = "gemini-2.5-flash",
 
 HIGHLIGHT_PROMPT = """\
 역할: 유튜브 쇼츠 편집자
-아래는 긴 영상의 자막 목록이야. 각 줄 앞의 번호와 (길이)를 참고해.
-목표: 이 중에서 **가장 임팩트 있고 그 자체로 말이 되는** 자막만 골라 합치면
-약 {target}초짜리 쇼츠가 되게 해. 핵심만 짧고 굵게. 지루한 설명·군더더기는 버려.
-가능하면 도입 훅 → 핵심 → 마무리 흐름이 되도록.
+아래는 긴 영상의 자막 목록이야. 각 줄: 번호) [시작시각] (길이) 내용.
+목표: 골라 합치면 약 {target}초짜리 쇼츠가 되게, **영상 전체에서 가장 임팩트 있는
+순간만** 추려. 핵심만 짧고 굵게.
+반드시 지켜:
+- ⚠ 앞에서부터 순서대로 채우기 금지 — 0,1,2,3… 같은 연속 번호 나열은 실패다.
+- [시작시각]을 보고 영상의 앞·중간·뒷부분을 모두 훑어라. 뒷부분에도 핵심이 있다.
+- 서두 훅 1개 + 중간 핵심들 + 마무리(결론·반전) 1개 구조를 권장.
+- 숫자·질문·반전·이득·결론이 있는 문장 우선. 지루한 설명·군더더기·중복은 버려.
+- 고른 문장은 그 자체로 말이 돼야 한다.
 자막들:
 {lines}
 출력(JSON만): {{"keep":[고른 번호들], "reason":"왜 이렇게 골랐는지 한 줄"}}
@@ -188,7 +193,8 @@ def _fmt_sub_lines(subs: list) -> str:
     out = []
     for i, s in enumerate(subs):
         sec = max(0.1, (s.get("end_us", 0) - s.get("start_us", 0)) / 1e6)
-        out.append(f"{i}) ({sec:.1f}초) {s.get('text','')}")
+        at = int(s.get("start_us", 0) / 1e6)
+        out.append(f"{i}) [{at // 60}:{at % 60:02d}] ({sec:.1f}초) {s.get('text','')}")
     return "\n".join(out)
 
 
@@ -216,8 +222,19 @@ def suggest_highlights(subs: list, target_sec: int = 30,
         raise ScriptError(f"핵심 추천 응답 형식 예상 밖: {json.dumps(data)[:200]}") from e
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
     obj = json.loads(cleaned)
-    keep = [int(i) for i in obj.get("keep", []) if 0 <= int(i) < len(subs)]
-    return {"keep": sorted(set(keep)), "reason": str(obj.get("reason", ""))}
+    keep = sorted({int(i) for i in obj.get("keep", []) if 0 <= int(i) < len(subs)})
+    # 게으른 선택 가드: 영상이 목표보다 충분히 긴데 '0부터 연속 번호'거나 전부
+    # 앞 40%에 몰려 있으면 실패 취급 → 호출측이 후킹 점수 방식으로 폴백한다.
+    if keep and len(subs) >= 6:
+        video_end = max(s.get("end_us", 0) for s in subs) / 1e6
+        if video_end > target_sec * 1.6:
+            is_prefix = keep == list(range(len(keep)))
+            last_start = subs[keep[-1]].get("start_us", 0) / 1e6
+            front_only = video_end > 0 and last_start <= video_end * 0.4
+            if is_prefix or front_only:
+                raise ScriptError(
+                    "AI가 앞부분만 연속으로 골라(핵심 선별 실패) 무효 처리 — 후킹 점수 방식으로 대체")
+    return {"keep": keep, "reason": str(obj.get("reason", ""))}
 
 
 REFINE_PROMPT = """\
@@ -310,17 +327,35 @@ def suggest_highlights_heuristic(subs: list, target_sec: int = 30) -> dict:
     for i, s in enumerate(subs):
         dur = max(0.1, (s.get("end_us", 0) - s.get("start_us", 0)) / 1e6)
         scored.append((_hook_score(str(s.get("text") or ""), dur, i, n), i, dur))
-    scored.sort(key=lambda x: (-x[0], x[1]))           # 점수 높은 순
+    # 앞·중간·뒤 3등분 버킷에서 점수순으로 번갈아 뽑아 영상 전체를 커버
+    # (점수가 비슷할 때 앞 문장부터 연속으로 채워지던 문제 방지)
+    video_end = max(s.get("end_us", 0) for s in subs) or 1
+    buckets = [[], [], []]
+    for score, i, dur in scored:
+        b = min(2, int(3 * subs[i].get("start_us", 0) / video_end))
+        buckets[b].append((score, i, dur))
+    for b in buckets:
+        b.sort(key=lambda x: -x[0])
+    ptr = [0, 0, 0]
     keep, total = [], 0.0
-    for _score, i, dur in scored:
-        if total >= target_sec:
+    while total < target_sec:
+        progressed = False
+        for b in range(3):
+            if total >= target_sec:
+                break
+            if ptr[b] < len(buckets[b]):
+                _score, i, dur = buckets[b][ptr[b]]
+                ptr[b] += 1
+                keep.append(i)
+                total += dur
+                progressed = True
+        if not progressed:
             break
-        keep.append(i)
-        total += dur
     keep.sort()                                        # 영상 순서 유지
     return {"keep": keep,
-            "reason": (f"후킹 요소(숫자·질문·키워드)가 강한 {len(keep)}개 구간을 모아 "
-                       f"약 {int(total)}초 (대략치 — 제미나이 키를 넣으면 문맥까지 봐요)")}
+            "reason": (f"영상 앞·중간·뒤에서 후킹 요소(숫자·질문·키워드)가 강한 "
+                       f"{len(keep)}개 구간을 모아 약 {int(total)}초 "
+                       f"(대략치 — 제미나이 키를 넣으면 문맥까지 봐요)")}
 
 
 THUMB_PROMPT = """\
