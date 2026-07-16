@@ -286,7 +286,23 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             status_cb=lambda msg: _set_job(job_id, note=msg),
         )
         denoise = params.get("denoise") or False
+        # 발화 자막이 없는 영상(화면 녹화·b-roll)은 핵심 선별을 못 함 → 완전 자동 +
+        # 목표 초면 영상 전체에서 고르게 조각을 뽑아 목표 길이 몽타주로 먼저 자름
+        tgt_auto = int(params.get("auto_target_sec") or 0) if params.get("auto_edit") else 0
+        if (tgt_auto > 0 and not analysis.subtitles
+                and analysis.cut_us > (tgt_auto + 3) * 1_000_000):
+            from ..core import video_editor as ve  # noqa: PLC0415
+            _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {tgt_auto}초를 뽑는 중…")
+            ranges = edit_mode.spread_ranges(analysis.cut_us, tgt_auto * 1_000_000)
+            analysis.cut_video = ve.cut_and_concat(
+                analysis.cut_video, ranges,
+                str(Path(workdir) / job_id / "auto_montage.mp4"))
+            from ..utils import ffmpeg as ff  # noqa: PLC0415
+            analysis.cut_us = ff.probe_duration_us(analysis.cut_video)
+            _set_job(job_id, tts_warn=(
+                f"자막(발화)이 없어 영상 전체에서 고르게 {tgt_auto}초를 골라 담았어요"))
         review_subs = analysis.subtitles
+        narr_subs_only = bool(params.get("narr_subs_only"))
         if narr_topic:  # AI 내레이션: 대본 생성 → 컷 길이에 비례 배치 (검토에서 수정)
             _set_job(job_id, stage="script", note="AI 대본 작성 중…")
             try:
@@ -307,12 +323,14 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             job_id, cut_video=analysis.cut_video,
             edit_params={"layout": params.get("layout") or edit_cfg["layout"],
                          "hook": (params.get("hook") or "").strip(),
-                         "denoise": denoise, "narration": bool(narr_topic),
+                         # 자막만 모드면 대본은 쓰되 목소리(TTS)는 넣지 않음
+                         "denoise": denoise,
+                         "narration": bool(narr_topic) and not narr_subs_only,
                          "narr_voice": (params.get("narr_voice") or "").strip(),
                          "narr_style": (params.get("narr_style") or "").strip(),
-                         # 원본 소리: 내레이션을 얹으면 기본 무음 (원하면 폼에서 변경)
+                         # 원본 소리: 목소리를 얹을 때만 기본 무음 (자막만이면 유지)
                          "orig_audio": params.get("orig_audio")
-                         or ("mute" if narr_topic else "keep"),
+                         or ("mute" if narr_topic and not narr_subs_only else "keep"),
                          "bgm": (params.get("bgm") or "").strip(),
                          "bgm_db": params.get("bgm_db")},
             edit_summary=_edit_summary(analysis),
@@ -444,7 +462,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                         "보이스 선택은 제미나이 키가 있어야 적용됩니다")
             if warn:
                 note = f"{note} · {warn}" if note else warn
-                _set_job(job_id, tts_warn=warn)  # 완료 화면에도 남게 보존
+                prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                _set_job(job_id, tts_warn=f"{prev} · {warn}" if prev else warn)  # 완료 화면 보존
             from ..core import video_editor  # noqa: PLC0415
             from ..utils import ffmpeg as ff  # noqa: PLC0415
             cut_us = ff.probe_duration_us(cut_video)
@@ -1337,7 +1356,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.29)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.30)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1399,6 +1418,10 @@ _HTML = """<!doctype html>
         <div style="display:flex;align-items:flex-end">
           <button class="ghost" style="margin-bottom:1px" onclick="previewNarrVoice(event)">🔊 미리듣기</button>
         </div>
+      </div>
+      <div class="chk" style="margin-top:6px">
+        <input type="checkbox" id="narrSubsOnly" onchange="onNarrTopicInput()">
+        <span>🔇 목소리는 빼고 <b>자막만</b> 넣기 (AI가 쓴 대본을 하단 자막으로만)</span>
       </div>
       <div class="hint">넣으면 AI가 대본을 쓰고 목소리(제미나이 키 권장, 없으면 내장 음성)를 입혀요. 보이스·말투는 제미나이 키가 있을 때 적용(내장 음성은 목소리 고정). 대본은 검토 화면에서 수정 가능.</div>
       <details style="margin-top:8px">
@@ -1848,15 +1871,17 @@ async function startEdit(){
   const nv = ($('narrVoiceSel')||{}).value||'';
   let editKey = $('editGeminiKey').value;
   // 내레이션 보이스는 제미나이 키가 있어야 적용 — 없으면 여기서 물어봐 저장
-  if((($('narrTopic')||{}).value||'').trim() && nv && nv !== '__mine__' && nv !== '__sovits__'
-     && !window._hasGeminiKey && !editKey){
-    editKey = ensureGeminiKey();
-    if(!editKey && !confirm('제미나이 키가 없으면 보이스 선택 없이 내장 음성으로 만들어져요.\\n그래도 진행할까요?')) return;
+  const subsOnly = ($('narrSubsOnly')||{}).checked;
+  if((($('narrTopic')||{}).value||'').trim() && !window._hasGeminiKey && !editKey){
+    editKey = ensureGeminiKey();   // 대본 품질(+목소리)에 필요
+    if(!editKey && !subsOnly && nv && nv !== '__mine__' && nv !== '__sovits__'
+       && !confirm('제미나이 키가 없으면 보이스 선택 없이 내장 음성으로 만들어져요.\\n그래도 진행할까요?')) return;
   }
   const body = {
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
+    narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
     orig_audio: $('origAudioSel').value,
     bgm: $('bgmEditSel').value, bgm_db: +$('bgmVolSel').value,
@@ -2157,9 +2182,10 @@ async function previewVoice(ev){
 
 // ── 편집 모드 내레이션 (v0.26) ──
 function onNarrTopicInput(){
-  // AI 내레이션을 쓰면 원본 말소리는 보통 필요 없음 → 자동 무음 (직접 바꾸면 그 값 유지)
+  // AI '목소리'를 얹을 때만 원본 자동 무음 (자막만 모드는 원본 소리 유지)
   if(window._origTouched) return;
-  $('origAudioSel').value = $('narrTopic').value.trim() ? 'mute' : 'keep';
+  const voiceOn = $('narrTopic').value.trim() && !(($('narrSubsOnly')||{}).checked);
+  $('origAudioSel').value = voiceOn ? 'mute' : 'keep';
 }
 
 async function previewNarrVoice(ev){

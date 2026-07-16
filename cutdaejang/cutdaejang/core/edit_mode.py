@@ -494,6 +494,26 @@ def rebuild_from_keep(
     return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
 
 
+def spread_ranges(total_us: int, target_us: int, piece_us: int = 3_500_000) -> List[tuple]:
+    """긴 영상 전체에서 고르게 조각을 뽑아 목표 길이를 채우는 구간 목록.
+
+    자막(발화)이 없어 '핵심 선별'을 못 하는 영상(화면 녹화·b-roll)용 —
+    앞부분만 자르는 대신 처음~끝을 고르게 보여주는 몽타주 컷.
+    """
+    total_us, target_us = int(total_us), int(target_us)
+    if total_us <= target_us or target_us <= 0:
+        return [(0, total_us)]
+    n = max(1, round(target_us / piece_us))
+    seg = target_us // n
+    step = total_us / n
+    ranges = []
+    for i in range(n):
+        start = int(i * step + (step - seg) / 2)
+        start = max(0, min(start, total_us - seg))
+        ranges.append((start, start + seg))
+    return ranges
+
+
 def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_dir,
                      lead_us: int = 200_000, max_tempo: float = 1.25) -> tuple:
     """자막 타이밍을 TTS 클립 '실제 길이'에 맞춰 순차 재배치 → 목소리·자막 싱크 보장.

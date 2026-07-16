@@ -641,3 +641,17 @@ def test_edit_no_cut_keeps_full_length(talk_video, tmp_path):
     assert result.ok, result.errors
     assert result.removed_ratio == 0.0
     assert abs(result.cut_us - orig) < 200_000  # 원본 길이 유지
+
+
+def test_spread_ranges_montage():
+    # 자막 없는 긴 영상 → 전체에서 고르게 조각을 뽑아 목표 길이 (v0.30)
+    from cutdaejang.core.edit_mode import spread_ranges
+
+    r = spread_ranges(337_000_000, 30_000_000)
+    total = sum(b - a for a, b in r)
+    assert abs(total - 30_000_000) < 1_000_000
+    assert r == sorted(r) and r[0][0] >= 0 and r[-1][1] <= 337_000_000
+    assert r[0][0] < 337_000_000 * 0.2 and r[-1][1] > 337_000_000 * 0.8  # 앞~뒤 고르게
+    for (a1, b1), (a2, b2) in zip(r, r[1:]):
+        assert b1 <= a2                                   # 겹침 없음
+    assert spread_ranges(20_000_000, 30_000_000) == [(0, 20_000_000)]  # 짧으면 그대로
