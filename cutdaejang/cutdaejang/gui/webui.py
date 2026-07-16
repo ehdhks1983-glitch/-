@@ -434,6 +434,17 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 voice=voice,
                 on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
             )
+            # 고른 보이스가 반영 안 되는 폴백이면 이유를 사용자에게 알림
+            want = {"__mine__": "elevenlabs", "__sovits__": "sovits"}.get(narr_voice)
+            warn = ""
+            if want and used != want:
+                warn = "⚠ 내 목소리 합성에 실패해 다른 목소리로 대체했어요"
+            elif used in ("windows", "stub") and narr_voice not in ("", "__mine__", "__sovits__"):
+                warn = ("⚠ 제미나이 키가 없거나 실패해 내장 음성으로 만들었어요 — "
+                        "보이스 선택은 제미나이 키가 있어야 적용됩니다")
+            if warn:
+                note = f"{note} · {warn}" if note else warn
+                _set_job(job_id, tts_warn=warn)  # 완료 화면에도 남게 보존
             from ..core import video_editor  # noqa: PLC0415
             from ..utils import ffmpeg as ff  # noqa: PLC0415
             cut_us = ff.probe_duration_us(cut_video)
@@ -464,7 +475,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         _set_job(
             job_id,
             status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
-            stage="done", frac=1.0, note="",
+            stage="done", frac=1.0,
+            note=(_get_job(job_id) or {}).get("tts_warn") or "",
             job_dir=str(Path(workdir) / job_id),
             mp4=out if Path(out).exists() else None,
             errors=result.errors,
@@ -612,6 +624,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "썸네일 없음"}, 404)
         elif path.startswith("/preview/"):
             self._serve_preview(path.split("/", 2)[2])
+        elif path.startswith("/bgm/"):
+            self._serve_bgm(path.split("/", 2)[2])
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -1051,6 +1065,16 @@ class _Handler(BaseHTTPRequestHandler):
         except tts_engine.TTSError as e:
             self._send_json({"error": str(e)}, 400)
 
+    def _serve_bgm(self, name: str) -> None:
+        """BGM 미리듣기 — resources/bgm 폴더 안 음원 파일만 서빙."""
+        safe = Path(name).name
+        p = orchestrator.DEFAULT_BGM_DIR / safe
+        if (safe != name or not p.is_file()
+                or p.suffix.lower() not in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}):
+            self._send_json({"error": "not found"}, 404)
+            return
+        self._serve_file(str(p))
+
     def _serve_preview(self, name: str) -> None:
         if not (name.endswith(".wav") and name[:-4].isalnum()):  # 캐시 해시 파일만
             self._send_json({"error": "not found"}, 404)
@@ -1167,7 +1191,9 @@ class _Handler(BaseHTTPRequestHandler):
         length = end - start + 1
 
         ctype = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                 ".webp": "image/webp"}.get(Path(path).suffix.lower(), "video/mp4")
+                 ".webp": "image/webp", ".mp3": "audio/mpeg", ".wav": "audio/wav",
+                 ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".flac": "audio/flac",
+                 }.get(Path(path).suffix.lower(), "video/mp4")
         self.send_response(206 if range_header else 200)
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
@@ -1311,7 +1337,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.28.1)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.29)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1458,7 +1484,8 @@ _HTML = """<!doctype html>
         <option value="-14" selected>중간</option>
         <option value="-9">크게</option>
       </select>
-      <span class="hint">영상 길이만큼 반복+페이드. <b>windows\6_무료음원_받기.bat</b>로 유명 무료 BGM 14곡 자동 채우기 (또는 resources/bgm에 mp3 직접)</span>
+      <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'bgmEditSel','bgmVolSel')">▶ 미리듣기</button>
+      <span class="hint">영상 길이만큼 반복+페이드. <b>windows\6_무료음원_받기.bat</b>로 유명 무료 BGM 14곡 자동 채우기</span>
     </div>
     <div class="chk" style="gap:8px">
       <input type="checkbox" id="autoEditChk">
@@ -1542,8 +1569,11 @@ _HTML = """<!doctype html>
     <div class="row">
       <div>
         <label>배경음악 (BGM)</label>
-        <select id="bgmSel"><option value="">없음</option></select>
-        <div class="hint">resources/bgm 폴더에 음원을 넣으면 목록에 나타납니다. 저작권 확인된 음원만 사용하세요.</div>
+        <div style="display:flex;gap:6px">
+          <select id="bgmSel" style="flex:1"><option value="">없음</option></select>
+          <button class="ghost" style="white-space:nowrap" onclick="previewBgm(event,'bgmSel',null)">▶ 미리듣기</button>
+        </div>
+        <div class="hint">windows\6_무료음원_받기.bat로 유명 무료 BGM 자동 채우기. 저작권 확인된 음원만 사용하세요.</div>
       </div>
     </div>
 
@@ -1815,18 +1845,26 @@ function onScriptInput(){
 async function startEdit(){
   const video = $('editVideo').value.trim();
   if(!video){ alert('영상 파일을 선택하거나 경로를 입력하세요'); return; }
+  const nv = ($('narrVoiceSel')||{}).value||'';
+  let editKey = $('editGeminiKey').value;
+  // 내레이션 보이스는 제미나이 키가 있어야 적용 — 없으면 여기서 물어봐 저장
+  if((($('narrTopic')||{}).value||'').trim() && nv && nv !== '__mine__' && nv !== '__sovits__'
+     && !window._hasGeminiKey && !editKey){
+    editKey = ensureGeminiKey();
+    if(!editKey && !confirm('제미나이 키가 없으면 보이스 선택 없이 내장 음성으로 만들어져요.\\n그래도 진행할까요?')) return;
+  }
   const body = {
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
-    narr_voice: ($('narrVoiceSel')||{}).value||'', narr_style: ($('narrStyleSel')||{}).value||'',
+    narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
     orig_audio: $('origAudioSel').value,
     bgm: $('bgmEditSel').value, bgm_db: +$('bgmVolSel').value,
     speed: +$('editSpeedSel').value || 1,
     auto_edit: $('autoEditChk').checked, auto_target_sec: +$('autoTargetSec').value||0,
     script: $('editScript').value,
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
-    gemini_key: $('editGeminiKey').value, save_key: true,
+    gemini_key: editKey, save_key: true,
   };
   const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
   const data = await res.json();
@@ -2126,19 +2164,53 @@ function onNarrTopicInput(){
 
 async function previewNarrVoice(ev){
   ev.preventDefault();
+  const v = $('narrVoiceSel').value;
   let prov = window._hasGeminiKey ? 'gemini' : (window._isWin ? 'windows' : 'stub');
-  if($('narrVoiceSel').value === '__mine__') prov = 'elevenlabs';
-  if($('narrVoiceSel').value === '__sovits__') prov = 'sovits';
+  let key = '';
+  if(v === '__mine__') prov = 'elevenlabs';
+  else if(v === '__sovits__') prov = 'sovits';
+  else {
+    key = ensureGeminiKey();   // 보이스는 제미나이 키가 있어야 적용됨 — 없으면 물어봄
+    if(key || window._hasGeminiKey) prov = 'gemini';
+    else if(!confirm('제미나이 키가 없으면 보이스 선택이 적용되지 않아요 (내장 음성 하나로 고정).\\n키 없이 내장 음성으로 들어볼까요?')) return;
+  }
   const btn = ev.target;
   btn.disabled = true; btn.textContent = '합성 중...';
   try{
-    const v = $('narrVoiceSel').value;
     const res = await fetch('/api/preview', {method:'POST', body: JSON.stringify({
-      tts_provider: prov, voice: (v === '__mine__' || v === '__sovits__') ? '' : v, tts_style: $('narrStyleSel').value,
+      tts_provider: prov, voice: (v === '__mine__' || v === '__sovits__') ? '' : v,
+      tts_style: $('narrStyleSel').value, gemini_key: key, save_key: true,
     })});
     const data = await res.json();
-    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+    if(data.error){ alert(data.error); } else { if(key) window._hasGeminiKey = true; new Audio(data.url).play(); }
   } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
+}
+
+function previewBgm(ev, selId, volSelId){
+  ev.preventDefault();
+  const btn = ev.target;
+  // 재생 중이면 정지 (토글)
+  if(window._bgmAudio){
+    window._bgmAudio.pause(); window._bgmAudio = null;
+    if(window._bgmBtn) window._bgmBtn.textContent = '▶ 미리듣기';
+    if(window._bgmBtn === btn) return;   // 같은 버튼 = 정지만
+  }
+  let name = $(selId).value;
+  if(!name){ alert('먼저 배경음악을 선택하세요 (없음 상태)'); return; }
+  if(name === 'random'){
+    const files = window._bgmFiles || [];
+    if(!files.length){ alert('resources/bgm 폴더에 음원이 없습니다 — 6_무료음원_받기.bat를 실행해보세요'); return; }
+    name = files[Math.floor(Math.random() * files.length)];
+  }
+  const a = new Audio('/bgm/' + encodeURIComponent(name));
+  // 실제 믹스 볼륨 느낌으로 미리듣기 (목소리=1.0 대비)
+  const db = volSelId ? +$(volSelId).value : -14;
+  a.volume = Math.min(1, Math.pow(10, db / 20) * 2);
+  a.onended = () => { if(window._bgmBtn) window._bgmBtn.textContent = '▶ 미리듣기'; window._bgmAudio = null; };
+  a.onerror = () => alert('음원을 재생할 수 없습니다: ' + name);
+  a.play();
+  window._bgmAudio = a; window._bgmBtn = btn;
+  btn.textContent = '⏹ 정지';
 }
 
 async function cloneVoice(ev){
@@ -2348,6 +2420,7 @@ async function poll(){
     window._optsFilled = true;
     for(const v of state.voices || []){ $('voiceSel').add(new Option(v, v)); $('narrVoiceSel').add(new Option(v, v)); }
     for(const s of state.styles || []){ $('styleSel').add(new Option(s, s)); $('narrStyleSel').add(new Option(s, s)); }
+    window._bgmFiles = state.bgm_files || [];
     if((state.bgm_files || []).length){
       $('bgmSel').add(new Option('랜덤', 'random'));
       $('bgmEditSel').add(new Option('랜덤', 'random'));
