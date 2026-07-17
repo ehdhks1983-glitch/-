@@ -122,10 +122,11 @@ def _atempo_chain(speed: float) -> str:
 QUALITY_PRESETS = {
     "draft":    {"mult": 1.0, "crf": 23, "preset": "ultrafast", "sharpen": False},  # 초안·미리보기
     "standard": {"mult": 1.0, "crf": 20, "preset": "fast", "sharpen": False},
-    "high":     {"mult": 1.0, "crf": 17, "preset": "medium", "sharpen": True},
-    "ultra":    {"mult": 2.0, "crf": 19, "preset": "fast", "sharpen": True},  # 4K 업스케일
+    "high":     {"mult": 1.0, "crf": 17, "preset": "medium", "sharpen": "unsharp"},
+    # 4K 업스케일: 저압축(crf16) + CAS 적응형 선명화 — 업스케일 물러짐 보정 (v0.35)
+    "ultra":    {"mult": 2.0, "crf": 16, "preset": "fast", "sharpen": "cas"},
 }
-_SHARPEN = "unsharp=5:5:0.8:5:5:0.0"
+_SHARPEN = {"unsharp": "unsharp=5:5:0.8:5:5:0.0", "cas": "cas=0.55", True: "unsharp=5:5:0.8:5:5:0.0"}
 _MAX_DIM = 3840  # 과도한 업스케일 방지 캡
 # 잡음 제거(강도별): 저역 럼블 컷 + FFT 노이즈 리덕션 + 고역 히스 컷 (목소리 대역 보존)
 DENOISE_LEVELS = {
@@ -172,6 +173,7 @@ def render_edited(
     orig_audio: str = "keep",          # 원본 소리: keep(그대로) | low(작게) | mute(무음)
     bgm_path: Optional[str] = None,    # 배경음악 파일 (영상 길이만큼 루프 + 페이드)
     bgm_db: float = -16.0,             # BGM 볼륨(dB)
+    watermark: Optional[dict] = None,  # {path, pos(tr/tl/br/bl), scale, opacity} 로고 오버레이
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> str:
     """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다.
@@ -206,7 +208,25 @@ def render_edited(
         f"subtitles=filename={ff.escape_filter_value(str(ass_path))}"
         f":fontsdir={ff.escape_filter_value(str(fonts_dir))}"
     )
-    sharp = f",{_SHARPEN}" if sharpen else ""  # 전경만 선명화(자막·블러배경은 제외)
+    # 워터마크(로고) — 자막보다 아래, 쇼츠 UI 안전영역을 피한 구석 배치
+    wm = watermark if (watermark and watermark.get("path")
+                       and Path(str(watermark["path"])).is_file()) else None
+    wm_over = wm_pre = ""
+    if wm:
+        wm_w = max(2, int(canvas.w * float(wm.get("scale", 0.14)))) & ~1
+        op = max(0.05, min(1.0, float(wm.get("opacity", 0.85))))
+        mx = int(canvas.w * 0.03)
+        top_y = int(canvas.h * (0.135 if layout == "shorts" else 0.03))
+        bot_y = int(canvas.h * (0.235 if layout == "shorts" else 0.03))
+        pos = str(wm.get("pos", "tr"))
+        x = f"main_w-overlay_w-{mx}" if pos in ("tr", "br") else f"{mx}"
+        y = f"{top_y}" if pos in ("tr", "tl") else f"main_h-overlay_h-{bot_y}"
+        # 마지막 입력(영상[0], 내레이션?, BGM?, 워터마크) — 인덱스는 아래 _build_args와 동기
+        wm_idx = 1 + (1 if narration_wav else 0) + (1 if bgm_path else 0)
+        wm_pre = (f"[{wm_idx}:v]scale={wm_w}:-1,format=rgba,"
+                  f"colorchannelmixer=aa={op:.2f}[wmimg];")
+        wm_over = f"[wmimg]overlay={x}:{y}[wmk];[wmk]"
+    sharp = f",{_SHARPEN[sharpen]}" if sharpen else ""  # 전경만 선명화(자막·블러배경은 제외)
     if layout == "shorts":
         # 블러 커버 배경 + 원본 비율 유지 전경 오버레이 (가로영상도 세로로 자연스럽게)
         vf = (
@@ -215,10 +235,13 @@ def render_edited(
             f"crop={canvas.w}:{canvas.h},boxblur=24:2,eq=brightness=-0.1[bgb];"
             f"[fg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=decrease:flags=lanczos{sharp}[fgs];"
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2[comp];"
-            f"[comp]{subs_arg}[vc]"
         )
+        vf += (f"{wm_pre}[comp]{wm_over}{subs_arg}[vc]" if wm
+               else f"[comp]{subs_arg}[vc]")
     else:
-        vf = f"[0:v]scale={canvas.w}:{canvas.h}:flags=lanczos{sharp},{subs_arg}[vc]"
+        vf = f"[0:v]scale={canvas.w}:{canvas.h}:flags=lanczos{sharp}[base];"
+        vf += (f"{wm_pre}[base]{wm_over}{subs_arg}[vc]" if wm
+               else f"[base]{subs_arg}[vc]")
 
     slow = abs(speed - 1.0) > 1e-3
     if slow:  # 자막 구운 뒤 영상 배속 (오디오는 아래 atempo)
@@ -276,6 +299,8 @@ def render_edited(
             a += ["-i", str(narration_wav)]
         if bgm_path:
             a += ["-stream_loop", "-1", "-i", str(bgm_path)]  # 영상 길이만큼 루프
+        if wm:
+            a += ["-i", str(wm["path"])]  # 워터마크 이미지 (wm_idx와 순서 동기)
         a += [
             "-filter_complex", vf,
             "-map", vmap, "-map", amap,
@@ -700,6 +725,7 @@ def render_from_analysis(
     orig_audio: str = "keep",
     bgm_path: Optional[str] = None,
     bgm_db: float = -16.0,
+    watermark: Optional[dict] = None,
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
     """2단계: (수정된) 자막으로 최종 렌더. speed 배속, quality 화질, denoise 잡음 제거."""
@@ -716,7 +742,8 @@ def render_from_analysis(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
             speed=speed, quality=quality, denoise=denoise,
             narration_wav=narration_wav, orig_audio=orig_audio,
-            bgm_path=bgm_path, bgm_db=bgm_db, progress_cb=progress_cb,
+            bgm_path=bgm_path, bgm_db=bgm_db, watermark=watermark,
+            progress_cb=progress_cb,
         )
         if not _fits_us(ff.probe_duration_us(out_path), int(result.cut_us / speed), tol=200_000):
             result.errors.append("출력 길이가 예상과 다릅니다")

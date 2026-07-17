@@ -36,6 +36,12 @@ DEFAULTS: dict = {
         "edge_pad_ms": 30,            # 트림 후 앞뒤 무음 재부여
         "lufs": -16,
     },
+    "watermark": {                    # 워터마크(로고) — 편집 폼에서 넣으면 기억됨
+        "path": "",
+        "pos": "tr",                  # tr(우상)/tl(좌상)/br(우하)/bl(좌하)
+        "scale": 0.14,                # 캔버스 가로 대비 크기
+        "opacity": 0.85,
+    },
     "bgm": {
         "enabled": False,
         "file": "",

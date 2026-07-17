@@ -362,9 +362,17 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          or ("mute" if narr_topic and not narr_subs_only else "keep"),
                          "bgm": (params.get("bgm") or "").strip(),
                          "bgm_db": params.get("bgm_db"),
-                         "hook_scale": params.get("hook_scale")},
+                         "hook_scale": params.get("hook_scale"),
+                         "wm_path": (params.get("wm_path") or "").strip().strip('"'),
+                         "wm_pos": params.get("wm_pos") or "tr",
+                         "wm_scale": params.get("wm_scale") or 0.14},
             edit_summary=_edit_summary(analysis),
         )
+        wm_p = (params.get("wm_path") or "").strip().strip('"')
+        if wm_p and Path(wm_p).is_file():  # 다음에도 쓰게 기억 (브랜딩용)
+            config.save_settings({"watermark": {"path": wm_p,
+                                                "pos": params.get("wm_pos") or "tr",
+                                                "scale": params.get("wm_scale") or 0.14}})
         analysis.subtitles = review_subs
         if params.get("auto_edit"):  # 🤖 완전 자동: 검토 생략, (키 있으면) AI 다듬기+핵심 선별 → 렌더
             from ..core import script_generator as sg  # noqa: PLC0415
@@ -544,11 +552,21 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 clips, subs, cut_us, Path(workdir) / job_id / "narration.wav")
             if note:
                 _set_job(job_id, note=note)
+        watermark = None
+        if ep.get("wm_path"):
+            if Path(ep["wm_path"]).is_file():
+                watermark = {"path": ep["wm_path"], "pos": ep.get("wm_pos") or "tr",
+                             "scale": ep.get("wm_scale") or 0.14,
+                             "opacity": settings["watermark"].get("opacity", 0.85)}
+            else:
+                logging.getLogger("cutdaejang").warning(
+                    "워터마크 파일을 찾지 못해 없이 렌더: %s", ep["wm_path"])
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=style,
             layout=layout, hook=hook, speed=speed, quality=quality, denoise=denoise,
             narration_wav=narration_wav,
             orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
+            watermark=watermark,
             progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
         )
         logging.getLogger("cutdaejang").info(
@@ -1465,7 +1483,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.34)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.35)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1483,7 +1501,7 @@ _HTML = """<!doctype html>
     <label>상단 제목(훅) <span class="hint">— 줄바꿈 Enter · 숫자는 자동 강조 · <b>| 단어</b> 강조 · 여러 색 <b>[노랑]..[/] [빨강]..[/]</b></span></label>
     <textarea id="editHook" style="min-height:56px" oninput="renderHookPreview()" placeholder="예) [노랑]사진만 넣으면[/] 홍보글이 [초록]뚝딱![/]"></textarea>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px" id="hookStudio">
-      <span class="hint">글자를 <b>드래그로 선택</b>하고 색을 누르세요 →</span>
+      <span class="hint">단어에 <b>커서만 두고</b>(또는 드래그) 색을 누르세요 · 같은 색 다시 누르면 해제 →</span>
       <span id="hookColorChips"></span>
       <button class="ghost" style="padding:4px 8px" onclick="clearHookMarkup(event)">지우기</button>
       <span class="hint" style="margin-left:6px">· 크기</span>
@@ -1644,6 +1662,22 @@ _HTML = """<!doctype html>
       </select>
       <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'bgmEditSel','bgmVolSel')">▶ 미리듣기</button>
       <span class="hint">영상 길이만큼 반복+페이드. <b>windows\6_무료음원_받기.bat</b>로 유명 무료 BGM 14곡 자동 채우기</span>
+    </div>
+    <div class="chk" style="gap:8px">
+      <span>🏷️ 워터마크</span>
+      <input type="text" id="wmPath" style="flex:1;min-width:180px;padding:6px 8px" placeholder="로고 이미지 경로 (투명 PNG 권장) — 비우면 없음">
+      <select id="wmPos" style="width:auto;padding:6px 8px">
+        <option value="tr">우상단</option>
+        <option value="tl">좌상단</option>
+        <option value="br">우하단</option>
+        <option value="bl">좌하단</option>
+      </select>
+      <select id="wmScale" style="width:auto;padding:6px 8px">
+        <option value="0.10">작게</option>
+        <option value="0.14" selected>중간</option>
+        <option value="0.20">크게</option>
+      </select>
+      <span class="hint">한 번 넣으면 기억돼요. 쇼츠 UI 안전영역을 피해 배치됩니다</span>
     </div>
     <div class="chk" style="gap:8px">
       <input type="checkbox" id="autoEditChk">
@@ -2048,6 +2082,8 @@ async function startEdit(){
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
     orig_audio: $('origAudioSel').value,
     bgm: $('bgmEditSel').value, bgm_db: +$('bgmVolSel').value,
+    wm_path: ($('wmPath')||{}).value||'', wm_pos: ($('wmPos')||{}).value||'tr',
+    wm_scale: +(($('wmScale')||{}).value)||0.14,
     speed: +$('editSpeedSel').value || 1,
     auto_edit: $('autoEditChk').checked, auto_target_sec: +$('autoTargetSec').value||0,
     script: $('editScript').value,
@@ -2177,10 +2213,30 @@ function initHookChips(){
 function wrapHookColor(ev, name){
   ev.preventDefault();
   const ta = $('editHook');
-  const s = ta.selectionStart, e = ta.selectionEnd;
-  if(s === e){ alert('색을 입힐 글자를 먼저 드래그로 선택하세요'); ta.focus(); return; }
+  let s = ta.selectionStart, e = ta.selectionEnd;
   const v = ta.value;
-  ta.value = v.slice(0, s) + '[' + name + ']' + v.slice(s, e) + '[/]' + v.slice(e);
+  if(!v.trim()){ alert('먼저 상단 제목을 입력하세요'); ta.focus(); return; }
+  if(s === e){
+    // 드래그 없이도: 커서가 놓인 단어를 자동 선택 (공백·줄바꿈 경계)
+    const isSp = (ch) => ch === ' ' || ch === String.fromCharCode(10) || ch === String.fromCharCode(9);
+    if(s > 0 && (s >= v.length || isSp(v[s]))) s--;           // 단어 끝에 커서
+    while(s > 0 && !isSp(v[s-1]) && v[s-1] !== ']') s--;
+    e = s;
+    while(e < v.length && !isSp(v[e]) && v[e] !== '[') e++;
+    if(s === e){ alert('색을 입힐 단어에 커서를 두거나 드래그로 선택하세요'); ta.focus(); return; }
+  }
+  let mid = v.slice(s, e);
+  const tagRe = new RegExp('[[](?:[가-힣A-Za-z]+|/[가-힣A-Za-z]*)]', 'g');
+  const already = new RegExp('^[[]' + name + ']').test(mid) || (
+    v.slice(Math.max(0, s - name.length - 2), s) === '[' + name + ']');
+  mid = mid.replace(tagRe, '');                               // 선택 안 기존 색 제거(중첩 방지)
+  let before = v.slice(0, s), after = v.slice(e);
+  // 선택 바로 앞뒤의 여닫는 태그도 정리 ([노랑]단어[/] 전체를 다시 칠할 때)
+  before = before.replace(new RegExp('[[][가-힣A-Za-z]+]$'), '');
+  after = after.replace(new RegExp('^[[]/[가-힣A-Za-z]*]'), '');
+  // 같은 색을 다시 누르면 해제(토글), 다른 색이면 교체
+  ta.value = already ? (before + mid + after)
+                     : (before + '[' + name + ']' + mid + '[/]' + after);
   ta.focus(); renderHookPreview();
 }
 
@@ -2676,6 +2732,7 @@ function resetEditForm(ev){
   set('editScript',''); chk('autoSubChk',true); chk('cutSilenceChk',true);
   set('denoiseSel',''); window._origTouched = false; set('origAudioSel','keep');
   set('bgmEditSel',''); set('bgmVolSel','-14');
+  set('wmPath',''); set('wmPos','tr'); set('wmScale','0.14');
   chk('autoEditChk',false); set('autoTargetSec',30); set('editSpeedSel','1');
   const st = $('sttSel'); if(st && st.options.length) st.selectedIndex = 0;
   set('whisperModelSel','small');
@@ -2788,6 +2845,9 @@ async function poll(){
     initHookChips();
     const mv = ((state.settings || {}).tts || {});
     if(mv.voice_elevenlabs) addMyVoiceOption(mv.voice_elevenlabs_name || '내 목소리');
+    const wms = ((state.settings || {}).watermark || {});
+    if(wms.path){ $('wmPath').value = wms.path; $('wmPos').value = wms.pos || 'tr';
+                  $('wmScale').value = String(wms.scale || 0.14); }
     if(mv.sovits_ref_audio){
       addSovitsOption();
       $('sovitsRef').value = mv.sovits_ref_audio;

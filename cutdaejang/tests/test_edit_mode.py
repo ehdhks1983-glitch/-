@@ -755,3 +755,49 @@ def test_split_long_subtitles_handles_no_space_text():
 
     out = split_long_subtitles([Subtitle("가" * 70, 0, 7_000_000)], wrap_chars=16)
     assert all(len(p.text) <= 32 for p in out) and sum(len(p.text) for p in out) == 70
+
+
+# ─────────── v0.35: 워터마크 + 4K 화질 프리셋 ───────────
+
+
+def test_ultra_preset_upgraded():
+    from cutdaejang.core.edit_mode import _SHARPEN, QUALITY_PRESETS
+
+    u = QUALITY_PRESETS["ultra"]
+    assert u["crf"] <= 16 and u["mult"] == 2.0          # 저압축 + 4K 업스케일
+    assert _SHARPEN[u["sharpen"]].startswith("cas")     # 적응형 선명화
+
+
+@requires_ffmpeg
+def test_render_watermark_overlay(tmp_path):
+    import re
+    import subprocess
+
+    from cutdaejang.core.edit_mode import render_from_analysis
+
+    v = tmp_path / "v.mp4"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+            "-i", "color=c=black:s=640x360:r=30:d=2",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:d=2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(v)])
+    wm = tmp_path / "logo.png"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+            "-i", "color=c=white:s=200x80:d=0.1", "-frames:v", "1", str(wm)])
+    out = str(tmp_path / "o.mp4")
+    r = render_from_analysis(str(v), [], out, layout="keep", quality="draft",
+                             watermark={"path": str(wm), "pos": "tr", "scale": 0.14, "opacity": 1.0})
+    assert r.ok, r.errors
+
+    def yavg(x, y):
+        p = subprocess.run([ff.ffmpeg_bin(), "-i", out,
+                            "-vf", f"crop=80:40:{x}:{y},signalstats,metadata=print",
+                            "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+        m = re.search(r"YAVG=([0-9.]+)", p.stderr)
+        return float(m.group(1)) if m else -1
+
+    assert yavg(540, 12) > 100          # 우상단에 로고가 밝게 찍힘
+    assert yavg(280, 160) < 40          # 중앙 배경은 그대로 검정
+    # 없는 파일이면 조용히 생략(렌더는 성공)
+    r2 = render_from_analysis(str(v), [], str(tmp_path / "o2.mp4"), layout="keep",
+                              quality="draft", watermark={"path": "없는파일.png"})
+    assert r2.ok
