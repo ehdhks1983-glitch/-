@@ -20,6 +20,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Optional, Protocol
 
@@ -125,7 +126,8 @@ class GeminiSTT:
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
         except (KeyError, IndexError):
-            return ""  # 무음/인식 실패 → 빈 자막 (구간은 유지)
+            # 200이지만 candidates 없음(안전 차단·쿼터) — 빈 자막이 캐시에 박히지 않게 오류로
+            raise STTError(f"Gemini STT 빈 응답: {json.dumps(data)[:200]}") from None  # 무음/인식 실패 → 빈 자막 (구간은 유지)
 
 
 class OpenAISTT:
@@ -140,7 +142,7 @@ class OpenAISTT:
             raise STTError("OPENAI_API_KEY가 설정되어 있지 않습니다")
 
     def transcribe(self, audio_path: str, language: str = "ko") -> str:
-        boundary = "----cutdaejangSTTboundary"
+        boundary = f"----cutdaejangSTT{uuid.uuid4().hex}"
         audio = Path(audio_path).read_bytes()
         parts = []
         for name, value in (("model", self.model), ("language", language),
@@ -250,7 +252,8 @@ class STTEngine:
         if is_hallucination(text):
             self.stats["hallucinations"] = self.stats.get("hallucinations", 0) + 1
             text = ""
-        cache.write_text(text, encoding="utf-8")
+        if text.strip():  # 빈 결과는 캐시하지 않음 — 일시 오류가 영구 빈 자막이 되지 않게
+            cache.write_text(text, encoding="utf-8")
         return text
 
 

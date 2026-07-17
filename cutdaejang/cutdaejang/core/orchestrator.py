@@ -217,15 +217,18 @@ def run_job(
         # ⑥ 출력 (A/B 독립 — 한쪽 실패가 다른 쪽을 막지 않음)
         if "mp4" in opts.outputs:
             report("render", 0.0)
-            result.mp4 = render_engine.render(
-                spec,
-                job_dir / "render",
-                out_path=str(job_dir / f"{safe_filename(script.title)}.mp4"),
-                opts=opts.render,
-                progress_cb=lambda f: report("render", f),
-            )
-            if not result.mp4.ok:
-                result.errors += [f"렌더 자가검증 실패: {e}" for e in result.mp4.errors]
+            try:
+                result.mp4 = render_engine.render(
+                    spec,
+                    job_dir / "render",
+                    out_path=str(job_dir / f"{safe_filename(script.title)}.mp4"),
+                    opts=opts.render,
+                    progress_cb=lambda f: report("render", f),
+                )
+                if not result.mp4.ok:
+                    result.errors += [f"렌더 자가검증 실패: {e}" for e in result.mp4.errors]
+            except Exception as e:  # noqa: BLE001 — A/B 독립: mp4 실패가 draft를 막지 않게
+                result.errors.append(f"mp4 렌더 실패: {e}")
 
         if "draft" in opts.outputs:
             report("draft", 0.0)
@@ -268,7 +271,12 @@ def run_topic(
 ) -> JobResult:
     """주제 → 완성까지. 자동 모드가 아니면 대본 생성 후 검토 대기 상태로 반환 (§1.3)."""
     opts = opts or JobOptions()
-    script = generate_script(script_provider, topic, opts)
+    try:
+        script = generate_script(script_provider, topic, opts)
+    except Exception as e:  # noqa: BLE001 — CLI에서도 스택트레이스 대신 실패 결과로
+        r = JobResult(job_id=new_job_id(topic or "topic"), status="failed")
+        r.errors.append(f"대본 생성 실패: {e}")
+        return r
 
     if not opts.auto_mode:
         job_id = new_job_id(script.title)

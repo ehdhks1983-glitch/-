@@ -606,7 +606,7 @@ class TTSEngine:
         if out.exists():
             self.stats["cache_hits"] += 1
             return out
-        raw = out.with_suffix(".raw.wav")
+        raw = out.with_suffix(f".{uuid.uuid4().hex[:8]}.raw.wav")  # 동시 잡 경쟁 방지
         try:
             self._synth_raw_with_retry(text, voice, str(raw))
             raw_us, final_us = postprocess_clip(str(raw), str(out), self.settings["audio"])

@@ -100,6 +100,7 @@ def render(
         problems = verify_output(spec, out)
         if not problems:
             result.ok = True
+            result.errors = []  # 이전 시도(GPU 등)의 오류는 성공했으니 지움
             break
         result.errors = problems
 

@@ -70,7 +70,10 @@ def probe_duration_us(path: str) -> int:
     dur = info.get("format", {}).get("duration")
     if dur is None:
         raise FFmpegError(f"길이를 읽을 수 없음: {path}")
-    return seconds_to_us(float(dur))
+    try:
+        return seconds_to_us(float(dur))
+    except (TypeError, ValueError) as e:  # 일부 컨테이너는 "N/A"를 줌
+        raise FFmpegError(f"길이를 읽을 수 없음({dur!r}): {path}") from e
 
 
 def probe_video_size(path: str) -> tuple:
@@ -134,7 +137,7 @@ def run_with_progress(
     import threading  # noqa: PLC0415
 
     cmd = [
-        ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-nostats",
+        ffmpeg_bin(), "-hide_banner", "-nostdin", "-loglevel", "error", "-nostats",
         "-progress", "pipe:1", *map(str, args),
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -151,13 +154,17 @@ def run_with_progress(
 
     for raw in proc.stdout:
         line = raw.decode("utf-8", "replace").strip()
-        if progress_cb and line.startswith("out_time_us=") and total_us > 0:
+        # out_time_ms는 이름과 달리 값이 µs인 빌드가 있어 동일 취급 (out_time_us 없는 구빌드 폴백)
+        if progress_cb and line.startswith(("out_time_us=", "out_time_ms=")) and total_us > 0:
             try:
                 progress_cb(min(1.0, int(line.split("=", 1)[1]) / total_us))
-            except ValueError:
+            except (ValueError, Exception):  # 콜백 예외로 ffmpeg가 고아가 되지 않게
                 pass
         elif progress_cb and line == "progress=end":
-            progress_cb(1.0)
+            try:
+                progress_cb(1.0)
+            except Exception:  # noqa: BLE001
+                pass
 
     proc.wait()
     err_thread.join(timeout=5)

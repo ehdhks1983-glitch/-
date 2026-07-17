@@ -197,6 +197,8 @@ def build_draft(spec: TimelineSpec, drafts_dir: str, draft_name: str) -> DraftRe
 
 def _hex_to_rgb01(hex_rgb: str) -> tuple:
     rgb = hex_rgb.lstrip("#")
+    if len(rgb) != 6:  # 비표준 색(#FFF 등)은 흰색으로 폴백 — draft 조립을 막지 않음
+        return (1.0, 1.0, 1.0)
     return tuple(int(rgb[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 

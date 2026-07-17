@@ -100,9 +100,19 @@ def load_settings(path: Optional[str] = None) -> dict:
             try:
                 user = json.loads(Path(candidate).read_text(encoding="utf-8"))
                 return deep_merge(DEFAULTS, user)
-            except (OSError, json.JSONDecodeError):
+            except (OSError, json.JSONDecodeError) as e:
+                import logging  # noqa: PLC0415
+                logging.getLogger("cutdaejang").warning(
+                    "settings.json을 읽지 못해 기본값을 사용합니다 (%s): %s", candidate, e)
                 continue  # 손상된 설정 파일은 무시하고 다음 후보/기본값
     return copy.deepcopy(DEFAULTS)
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """임시 파일에 쓰고 교체 — 저장 중 크래시로 파일이 잘리는 것 방지."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def save_settings(overrides: dict, path: Optional[str] = None) -> str:
@@ -114,9 +124,7 @@ def save_settings(overrides: dict, path: Optional[str] = None) -> str:
             break
     target = target or (project_root() / "settings.json")
     merged = deep_merge(load_settings(str(target) if target.is_file() else None), overrides)
-    target.write_text(
-        json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    _atomic_write(target, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
     return str(target)
 
 
@@ -156,7 +164,7 @@ def save_api_key(provider: str, key: str) -> None:
         except (OSError, json.JSONDecodeError):
             keys = {}
     keys[provider] = key
-    path.write_text(json.dumps(keys, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write(path, json.dumps(keys, ensure_ascii=False, indent=2))
 
 
 def clear_api_keys() -> None:

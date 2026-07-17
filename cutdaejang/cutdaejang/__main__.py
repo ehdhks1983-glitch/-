@@ -27,6 +27,15 @@ from .spec import TimelineSpec
 from .utils import ffmpeg as ff
 
 
+
+def _read_script_file(path: str) -> str:
+    """대본 txt 읽기 — 메모장 ANSI(cp949) 저장 파일도 지원."""
+    p = Path(path)
+    try:
+        return p.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return p.read_text(encoding="cp949")
+
 def _progress_printer(stage: str, frac: float) -> None:
     sys.stdout.write(f"\r[{stage:>10}] {frac * 100:5.1f}%")
     sys.stdout.flush()
@@ -109,7 +118,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         sys.stdout.flush()
 
     if args.script_file:
-        script = Script.from_json_text(Path(args.script_file).read_text(encoding="utf-8"))
+        script = Script.from_json_text(_read_script_file(args.script_file))
         result = orchestrator.run_job(
             args.workdir, script, opts=opts, settings=settings,
             progress_cb=_progress_printer, status_cb=status_note,
@@ -194,7 +203,7 @@ def cmd_edit(args: argparse.Namespace) -> int:
     # 대본 파일이 있으면 STT 대신 그 대본을 씀 (오인식·비용 0)
     script_lines = None
     if getattr(args, "script_file", None):
-        script_lines = Path(args.script_file).read_text(encoding="utf-8").splitlines()
+        script_lines = _read_script_file(args.script_file).splitlines()
     use_stt = not args.no_subtitle and not script_lines
     stt = None
     if use_stt:

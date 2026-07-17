@@ -163,35 +163,48 @@ def remap_to_cut_timeline(segments: List[Tuple[int, int]]) -> List[Tuple[int, in
 def cut_and_concat(
     video_path: str, segments: List[Tuple[int, int]], out_path: str, fps: int = 30
 ) -> str:
-    """발화 구간만 잘라 이어붙인 영상(오디오 포함) 생성. trim+concat 재인코딩."""
+    """발화 구간만 잘라 이어붙인 영상 생성. trim+concat 재인코딩.
+
+    오디오 트랙이 없는 영상(마이크 없는 화면 녹화)은 영상만 잘라 붙인다 —
+    이후 렌더 단계가 무음 트랙을 알아서 붙이므로 결과는 동일.
+    """
     if not segments:
         raise ValueError("자를 발화 구간이 없습니다")
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    has_audio = ff.has_audio_stream(str(video_path))
 
     parts = []
     labels = []
     for i, (s, e) in enumerate(segments):
         ss, se = us_to_seconds_str(s), us_to_seconds_str(e)
-        parts.append(
-            f"[0:v]trim=start={ss}:end={se},setpts=PTS-STARTPTS[v{i}];"
-            f"[0:a]atrim=start={ss}:end={se},asetpts=PTS-STARTPTS[a{i}]"
-        )
-        labels.append(f"[v{i}][a{i}]")
-    concat = "".join(labels) + f"concat=n={len(segments)}:v=1:a=1[v][a]"
+        seg = f"[0:v]trim=start={ss}:end={se},setpts=PTS-STARTPTS[v{i}]"
+        if has_audio:
+            seg += f";[0:a]atrim=start={ss}:end={se},asetpts=PTS-STARTPTS[a{i}]"
+        parts.append(seg)
+        labels.append(f"[v{i}][a{i}]" if has_audio else f"[v{i}]")
+    av = "v=1:a=1[v][a]" if has_audio else "v=1:a=0[v]"
+    concat = "".join(labels) + f"concat=n={len(segments)}:{av}"
     filtergraph = ";".join(parts) + ";" + concat
 
     # 중간 산출물(최종 렌더에서 다시 인코딩됨) → ultrafast + 저손실 crf18로 속도 우선
-    ff.run(
-        [
-            ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(video_path),
-            "-filter_complex", filtergraph,
-            "-map", "[v]", "-map", "[a]",
-            "-r", str(fps),
-            "-c:v", "libx264", "-crf", "18", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
-            str(out_path),
-        ]
-    )
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(video_path)]
+    if len(segments) > 60:  # 구간이 아주 많으면 명령줄 길이 한계(Windows 32K) 회피
+        script = Path(out_path).with_suffix(".filter.txt")
+        script.write_text(filtergraph, encoding="utf-8")
+        args += ["-filter_complex_script", str(script)]
+    else:
+        args += ["-filter_complex", filtergraph]
+    args += ["-map", "[v]"]
+    if has_audio:
+        args += ["-map", "[a]"]
+    args += [
+        "-r", str(fps),
+        "-c:v", "libx264", "-crf", "18", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+    ]
+    if has_audio:
+        args += ["-c:a", "aac", "-b:a", "192k"]
+    args += ["-movflags", "+faststart", str(out_path)]
+    ff.run(args)
     return str(out_path)
 
 
@@ -227,7 +240,11 @@ def resolve_photo_inputs(path_str: str) -> List[str]:
         if not str(p).strip():
             continue
         if p.is_dir():
-            out += [str(f) for f in sorted(p.iterdir())
+            def natkey(f):
+                # 1.jpg, 2.jpg, …, 10.jpg 가 숫자순이 되게 (사전식이면 1,10,2 순서가 됨)
+                return [int(tok) if tok.isdigit() else tok.lower()
+                        for tok in re.split(r"(\d+)", f.name)]
+            out += [str(f) for f in sorted(p.iterdir(), key=natkey)
                     if f.is_file() and f.suffix.lower() in IMAGE_EXTS]
         elif p.is_file() and p.suffix.lower() in IMAGE_EXTS:
             out.append(str(p))
@@ -247,8 +264,19 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
     """
     if not images:
         raise ValueError("사진이 없습니다")
+    total_s_req = total_us / 1e6
+    min_per = 0.35  # 장당 최소 표시 시간 — 이보다 짧으면 눈에 안 들어옴
+    max_photos = max(1, int(total_s_req / min_per))
+    if len(images) > max_photos:  # 전체 길이 약속을 지키기 위해 고르게 추림
+        step = len(images) / max_photos
+        picked = [images[int(i * step)] for i in range(max_photos)]
+        import logging  # noqa: PLC0415
+        logging.getLogger("cutdaejang").warning(
+            "사진 %d장은 %d초에 다 못 담아 %d장만 고르게 사용합니다",
+            len(images), int(total_s_req), len(picked))
+        images = picked
     w, h = size
-    per_s = max(0.5, (total_us / 1e6) / len(images))
+    per_s = total_s_req / len(images)
     args = [ff.ffmpeg_bin(), "-y", "-v", "error"]
     parts = []
     for i, img in enumerate(images):
