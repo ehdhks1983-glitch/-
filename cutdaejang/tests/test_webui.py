@@ -107,6 +107,39 @@ def test_my_voice_card_structure(server):
     # 방법별 미리듣기
     assert "previewMyVoice(event,'sovits')" in html
     assert "previewMyVoice(event,'elevenlabs')" in html
+    # v0.38: 완전 자동 — 여러 개 나누기 + 화질 + 세팅 기억 복원
+    assert 'id="autoMultiSel"' in html and 'id="autoQualitySel"' in html
+    assert "applyEditLast" in html
+
+
+def test_auto_multi_split_and_settings_remembered(server, tmp_path):
+    """v0.38: 완전 자동 '여러 개로 나누기'(자막 없음 → 시간 균등 분할) + 폼 세팅 기억."""
+    import os
+    from pathlib import Path
+
+    video = _make_talk_video(tmp_path / "long.mp4")  # 5.5초 → 2초 단위 = 쇼츠 2~3개
+    data = _post(server, "/api/edit", {
+        "video_path": video, "layout": "shorts",
+        "auto_subtitle": False, "cut_silence": False,
+        "auto_edit": True, "auto_multi": True, "auto_target_sec": 2,
+        "speed": 1, "quality": "draft", "orig_audio": "keep",
+        "denoise": "", "bgm": "", "bgm_db": -14, "hook_scale": 1.2,
+    })
+    job = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert job["status"] == "ok", job.get("errors")
+    outs = job.get("mp4s") or []
+    assert len(outs) >= 2 and all(o.endswith(".mp4") for o in outs)
+    assert "쇼츠" in (job.get("note") or "")
+    # 폼 세팅이 기억됐는지 (다음 실행 때 화면 자동 복원용)
+    saved = json.loads(Path(os.environ["CUTDAEJANG_SETTINGS"]).read_text(encoding="utf-8"))
+    last = saved.get("ui", {}).get("edit_last", {})
+    assert last.get("auto_edit") is True and last.get("auto_multi") is True
+    assert last.get("auto_target_sec") == 2 and last.get("quality") == "draft"
+    # 작업별 입력·키는 기억하지 않음
+    assert "video_path" not in last and "gemini_key" not in last and "hook" not in last
+    # /api/state 로도 노출 (브라우저가 이걸 읽어 폼을 채움)
+    state = json.loads(_get(server, "/api/state").read())
+    assert state["settings"]["ui"]["edit_last"]["auto_multi"] is True
 
 
 _SHARED = {}

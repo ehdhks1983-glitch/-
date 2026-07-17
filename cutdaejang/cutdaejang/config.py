@@ -42,6 +42,9 @@ DEFAULTS: dict = {
         "scale": 0.14,                # 캔버스 가로 대비 크기
         "opacity": 0.85,
     },
+    "ui": {                           # 화면이 기억하는 것들
+        "edit_last": {},              # 마지막 편집 폼 세팅 — 다음 실행 때 자동 복원 (v0.38)
+    },
     "bgm": {
         "enabled": False,
         "file": "",

@@ -30,6 +30,14 @@ from ..core.tts_engine import GEMINI_VOICES, STYLE_INSTRUCTIONS
 _JOBS: dict = {}
 _LOCK = threading.Lock()
 
+# 편집 폼에서 "기억해 두는" 세팅 키 — 경로·주제·대본·API 키 같은 작업별 입력은 제외
+_EDIT_LAST_KEYS = (
+    "layout", "auto_subtitle", "cut_silence", "denoise", "orig_audio",
+    "bgm", "bgm_db", "hook_scale", "narr_voice", "narr_style", "narr_subs_only",
+    "stt_provider", "whisper_model", "speed", "quality",
+    "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
+)
+
 
 def _set_job(job_id: str, **fields) -> None:
     with _LOCK:
@@ -318,7 +326,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         # 발화 자막이 없는 영상(화면 녹화·b-roll)은 핵심 선별을 못 함 → 완전 자동 +
         # 목표 초면 영상 전체에서 고르게 조각을 뽑아 목표 길이 몽타주로 먼저 자름
         tgt_auto = int(params.get("auto_target_sec") or 0) if params.get("auto_edit") else 0
+        # '여러 개로 나누기'면 몽타주로 미리 줄이지 않음 — 전체를 그대로 나눠야 하니까
         if (tgt_auto > 0 and not analysis.subtitles and not photo_path
+                and not params.get("auto_multi")
                 and analysis.cut_us > (tgt_auto + 3) * 1_000_000):
             from ..core import video_editor as ve  # noqa: PLC0415
             _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {tgt_auto}초를 뽑는 중…")
@@ -389,6 +399,22 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                     pass
             keep = None
             tgt = int(params.get("auto_target_sec") or 0)
+            try:
+                auto_speed = float(params.get("speed") or 1.0)
+            except (TypeError, ValueError):
+                auto_speed = 1.0
+            multi = bool(params.get("auto_multi")) and not photo_path
+            if multi and narr_topic:  # 내레이션 대본은 영상 전체 기준 → 분할과 배타
+                multi = False
+                prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                w = "ℹ 내레이션과 '여러 개로 나누기'는 함께 쓸 수 없어 1개로 만들었어요"
+                _set_job(job_id, tts_warn=f"{prev} · {w}" if prev else w)
+            if multi and tgt > 0:  # 🎬 영상 전체를 목표 길이 단위 쇼츠 여러 개로 (v0.38)
+                _do_edit_split(job_id, subs_d, (params.get("hook") or "").strip(),
+                               params.get("layout") or edit_cfg["layout"],
+                               analysis.cut_video, workdir, float(tgt), auto_speed,
+                               params.get("quality") or "standard", denoise)
+                return
             # 내레이션 대본은 이미 목표 길이로 새로 쓴 글 → 핵심 선별로 또 자르지 않음
             if subs_d and tgt > 0 and not narr_topic:
                 _set_job(job_id, note=f"핵심 구간 골라 {tgt}초 쇼츠 구성 중…")
@@ -409,10 +435,6 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                         "%s | 사유: %s", msg, pick.get("reason", ""))
                     prev = (_get_job(job_id) or {}).get("tts_warn") or ""
                     _set_job(job_id, tts_warn=f"{prev} · {msg}" if prev else msg)
-            try:
-                auto_speed = float(params.get("speed") or 1.0)
-            except (TypeError, ValueError):
-                auto_speed = 1.0
             _do_edit_render(job_id, subs_d, (params.get("hook") or "").strip(),
                             params.get("layout") or edit_cfg["layout"],
                             analysis.cut_video, workdir, keep, auto_speed,
@@ -588,37 +610,87 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                  errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
+_SPLIT_MAX = 30  # 분할 쇼츠 상한 — 초장편 영상이 수백 개 렌더로 폭주하지 않게
+
+
 def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                    cut_video: str, workdir: str, target_sec: float = 30.0,
                    speed: float = 1.0, quality: str = "standard",
                    denoise=False) -> None:
-    """긴 영상을 목표 길이 단위 쇼츠 여러 개로 분할 렌더 (edited_1..N.mp4)."""
+    """긴 영상을 목표 길이 단위 쇼츠 여러 개로 분할 렌더 (edited_1..N.mp4).
+
+    자막이 있으면 자막 흐름 단위로, 없으면 시간 기준 균등 분할(v0.38 완전 자동용).
+    편집 폼에서 정한 원본 소리·BGM·워터마크도 각 쇼츠에 그대로 적용된다.
+    """
     try:
-        from ..core import edit_mode  # noqa: PLC0415
+        from ..core import edit_mode, video_editor  # noqa: PLC0415
         from ..core.orchestrator import build_style  # noqa: PLC0415
+        from ..utils import ffmpeg as ff  # noqa: PLC0415
 
         settings = config.load_settings()
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         groups = edit_mode.split_into_clips(subs, target_sec=target_sec)
-        if not groups:
-            _set_job(job_id, status="failed", errors=["나눌 자막이 없습니다"])
-            return
+        plan: list = [("subs", g) for g in groups]
+        if not plan:  # 자막 없음 → 시간 기준 균등 분할
+            total_us = ff.probe_duration_us(cut_video)
+            tgt_us = max(3_000_000, int(target_sec * 1e6))
+            if total_us < int(tgt_us * 1.5):
+                _set_job(job_id, status="failed",
+                         errors=["나눌 자막이 없고 영상도 1개당 길이보다 짧아 나눌 수 없습니다 "
+                                 "(여러 개로 나누려면 영상이 목표의 1.5배 이상이어야 해요)"])
+                return
+            ranges = [(s, min(s + tgt_us, total_us)) for s in range(0, total_us, tgt_us)]
+            if len(ranges) > 1 and (ranges[-1][1] - ranges[-1][0]) < int(tgt_us * 0.4):
+                last = ranges.pop()  # 꼬리가 너무 짧으면 앞 쇼츠에 합침
+                ranges[-1] = (ranges[-1][0], last[1])
+            plan = [("time", r) for r in ranges]
+        note_extra = ""
+        if len(plan) > _SPLIT_MAX:
+            note_extra = f" (앞에서부터 {_SPLIT_MAX}개까지만 — 원본이 아주 길어요)"
+            plan = plan[:_SPLIT_MAX]
+        # 편집 폼 소리·브랜딩 옵션을 각 쇼츠에도 동일 적용
+        ep = (_get_job(job_id) or {}).get("edit_params") or {}
+        orig_audio = ep.get("orig_audio") or "keep"
+        bgm_path = None
+        if ep.get("bgm"):
+            b = orchestrator.resolve_bgm(ep["bgm"], settings)
+            bgm_path = b.path if b else None
+        try:
+            bgm_db = float(ep.get("bgm_db"))
+        except (TypeError, ValueError):
+            bgm_db = float(settings["bgm"].get("volume_db", -16))
+        watermark = None
+        if ep.get("wm_path") and Path(ep["wm_path"]).is_file():
+            watermark = {"path": ep["wm_path"], "pos": ep.get("wm_pos") or "tr",
+                         "scale": ep.get("wm_scale") or 0.14,
+                         "opacity": settings["watermark"].get("opacity", 0.85)}
         job_dir = Path(workdir) / job_id
         outs, errors = [], []
         style = build_style(settings)
-        for gi, idxs in enumerate(groups, 1):
-            _set_job(job_id, status="running", stage="render", frac=0.0,
-                     note=f"쇼츠 {gi}/{len(groups)} 만드는 중…")
+        try:
+            style.hook_scale = float(ep.get("hook_scale") or 1.0)
+        except (TypeError, ValueError):
+            style.hook_scale = 1.0
+        for gi, (kind, item) in enumerate(plan, 1):
+            _set_job(job_id, status="running", stage="render", frac=(gi - 1) / len(plan),
+                     note=f"쇼츠 {gi}/{len(plan)} 만드는 중…{note_extra}")
             try:
-                clip_video, clip_subs = edit_mode.rebuild_from_keep(
-                    cut_video, subs, idxs, str(job_dir / f"short_{gi}.mp4"),
-                )
+                if kind == "subs":
+                    clip_video, clip_subs = edit_mode.rebuild_from_keep(
+                        cut_video, subs, item, str(job_dir / f"short_{gi}.mp4"),
+                    )
+                else:  # 시간 구간 분할 (자막 없음)
+                    clip_video = video_editor.cut_and_concat(
+                        cut_video, [item], str(job_dir / f"short_{gi}.mp4"))
+                    clip_subs = []
                 out = str(job_dir / f"edited_{gi}.mp4")
-                base = (gi - 1) / len(groups)
+                base = (gi - 1) / len(plan)
                 r = edit_mode.render_from_analysis(
                     clip_video, clip_subs, out, style=style, layout=layout,
                     hook=hook, speed=speed, quality=quality, denoise=denoise,
-                    progress_cb=lambda f, b=base, n=len(groups): _set_job(
+                    orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
+                    watermark=watermark,
+                    progress_cb=lambda f, b=base, n=len(plan): _set_job(
                         job_id, stage="render", frac=b + f / n),
                 )
                 if Path(out).exists():
@@ -630,7 +702,7 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             job_id,
             status="ok" if outs and not errors else "partial" if outs else "failed",
             stage="done", frac=1.0, job_dir=str(job_dir),
-            note=f"쇼츠 {len(outs)}개 완성" if outs else "",
+            note=f"쇼츠 {len(outs)}개 완성{note_extra}" if outs else "",
             mp4=outs[0] if outs else None, mp4s=outs, errors=errors,
         )
     except Exception as e:
@@ -783,6 +855,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if not video:
                 video = "사진영상"  # 사진 모드 — 제목용
+            try:  # 이 폼 세팅을 기억 → 다음 실행 때 그대로 복원 (영상만 바꿔 반복하는 자동화)
+                config.save_settings({"ui": {"edit_last": {
+                    k: params[k] for k in _EDIT_LAST_KEYS if k in params}}})
+            except Exception:
+                pass  # 세팅 기억 실패는 작업에 영향 없음
             job_id = orchestrator.new_job_id(Path(video).stem or "edit")
             _set_job(job_id, status="running", stage="analyze", frac=0.0,
                      title=Path(video).stem, params=params)
@@ -1516,7 +1593,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.37)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.38)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -1581,22 +1658,40 @@ _HTML = """<!doctype html>
       <label><input type="radio" name="editFinish" value="auto" onchange="onFinishChange()"><span>🤖 완전 자동 (끝까지 알아서)</span></label>
     </div>
     <div class="hint" id="finishHint">중간에 자막을 확인하는 화면이 한 번 나와요 — 오타만 고치고 [완성]을 누르면 됩니다.</div>
-    <div id="autoOptRow" class="chk hidden" style="gap:8px">
-      <span>완성 길이</span>
-      <select id="autoTargetPreset" style="width:auto;padding:6px 8px" onchange="applyTargetPreset()">
-        <option value="30" selected>쇼츠 30초 — 핵심만 자동 선별</option>
-        <option value="60">쇼츠 60초</option>
-        <option value="0">원본 길이 그대로</option>
-        <option value="custom">직접 입력…</option>
-      </select>
-      <input type="number" id="autoTargetSec" value="30" min="0" max="90" style="width:64px;padding:6px" class="hidden">
-      <span class="hint">· 재생 속도</span>
-      <select id="editSpeedSel" style="width:auto;padding:6px 8px">
-        <option value="1">1배</option>
-        <option value="1.25">1.25배</option>
-        <option value="1.5">1.5배</option>
-        <option value="2">2배</option>
-      </select>
+    <div id="autoOptRow" class="hidden">
+      <div class="chk" style="gap:8px;margin-top:6px">
+        <span>만들기</span>
+        <select id="autoMultiSel" style="width:auto;padding:6px 8px" onchange="onAutoMultiChange()">
+          <option value="one" selected>쇼츠 1개 — 핵심 장면만 뽑아서</option>
+          <option value="multi">여러 개로 나누기 — 영상 전체를 쇼츠 여러 개로</option>
+        </select>
+        <span class="hint" id="autoMultiHint"></span>
+      </div>
+      <div class="chk" style="gap:8px">
+        <span id="autoLenLabel">완성 길이</span>
+        <select id="autoTargetPreset" style="width:auto;padding:6px 8px" onchange="applyTargetPreset()">
+          <option value="30" selected>쇼츠 30초 — 핵심만 자동 선별</option>
+          <option value="60">쇼츠 60초</option>
+          <option value="0">원본 길이 그대로</option>
+          <option value="custom">직접 입력…</option>
+        </select>
+        <input type="number" id="autoTargetSec" value="30" min="0" max="90" style="width:64px;padding:6px" class="hidden">
+        <span class="hint">· 재생 속도</span>
+        <select id="editSpeedSel" style="width:auto;padding:6px 8px">
+          <option value="1">1배</option>
+          <option value="1.25">1.25배</option>
+          <option value="1.5">1.5배</option>
+          <option value="2">2배</option>
+        </select>
+        <span class="hint">· 화질</span>
+        <select id="autoQualitySel" style="width:auto;padding:6px 8px">
+          <option value="draft">빠름 (초안)</option>
+          <option value="standard" selected>표준 (1080p)</option>
+          <option value="high">고화질</option>
+          <option value="ultra">초고화질 (4K)</option>
+        </select>
+      </div>
+      <div class="hint" style="margin-top:4px">💾 여기서 정한 세팅은 자동으로 기억돼요 — 다음부터는 영상만 바꿔 넣고 [만들기 시작]만 누르면 같은 방식으로 만들어집니다.</div>
     </div>
 
     <div class="steplabel" style="margin-top:20px"><span class="stepnum">3</span>꾸미기 <span class="hint">— 전부 선택사항. 필요한 줄만 눌러서 펼치세요</span></div>
@@ -2205,6 +2300,41 @@ function applyTargetPreset(){
   n.classList.toggle('hidden', p !== 'custom');
   if(p !== 'custom') n.value = p;
 }
+function onAutoMultiChange(){
+  const multi = $('autoMultiSel').value === 'multi';
+  $('autoLenLabel').textContent = multi ? '쇼츠 1개당 길이' : '완성 길이';
+  $('autoMultiHint').textContent = multi
+    ? '예) 10분 영상 ÷ 60초 = 약 10개 (edited_1.mp4, edited_2.mp4 …)' : '';
+  const p = $('autoTargetPreset');
+  if(multi && p.value === '0'){ p.value = '60'; applyTargetPreset(); }  // 나누기엔 길이 필수
+}
+// 지난번 편집 세팅 복원 (v0.38) — 경로·주제·대본만 빼고 전부 이어받아 "영상만 바꿔 반복"
+function applyEditLast(el){
+  if(!el || !Object.keys(el).length) return;
+  const set = (id, v) => { const e = $(id); if(e && v !== undefined && v !== null) e.value = String(v); };
+  const chk = (id, v) => { const e = $(id); if(e && v !== undefined && v !== null) e.checked = !!v; };
+  set('editSpeedSel', el.speed); set('autoQualitySel', el.quality);
+  set('denoiseSel', el.denoise); set('origAudioSel', el.orig_audio);
+  if(el.orig_audio && el.orig_audio !== 'keep') window._origTouched = true;  // 복원값 보호
+  set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
+  set('hookSizeSel', el.hook_scale); set('photoSec', el.photo_sec);
+  set('narrStyleSel', el.narr_style); chk('narrSubsOnly', el.narr_subs_only);
+  if(el.narr_voice && [...$('narrVoiceSel').options].some(o => o.value === el.narr_voice))
+    $('narrVoiceSel').value = el.narr_voice;
+  chk('autoSubChk', el.auto_subtitle); chk('cutSilenceChk', el.cut_silence);
+  set('whisperModelSel', el.whisper_model);
+  window._wantStt = el.stt_provider || '';   // STT 목록은 늦게 채워짐 → loadStt에서 적용
+  const lay = document.querySelector('input[name=editLayout][value="' + (el.layout || 'shorts') + '"]');
+  if(lay) lay.checked = true;
+  const fin = document.querySelector('input[name=editFinish][value="' + (el.auto_edit ? 'auto' : 'review') + '"]');
+  if(fin) fin.checked = true;
+  if($('autoMultiSel')) $('autoMultiSel').value = el.auto_multi ? 'multi' : 'one';
+  const t = String(el.auto_target_sec !== undefined && el.auto_target_sec !== null ? el.auto_target_sec : 30);
+  $('autoTargetPreset').value = ['30','60','0'].includes(t) ? t : 'custom';
+  applyTargetPreset();
+  if($('autoTargetPreset').value === 'custom') $('autoTargetSec').value = t;
+  onFinishChange(); onAutoMultiChange(); toggleAutoSub();
+}
 
 const STT_KO = {whisper:'내장 Whisper (무료·오프라인)', gemini:'Gemini (내 키)', openai:'OpenAI (내 키)'};
 async function loadStt(){
@@ -2217,6 +2347,9 @@ async function loadStt(){
   if(!any){
     sel.add(new Option('Gemini (키 입력 필요)', 'gemini'));
   }
+  // 지난번 세팅 복원 — 목록에 있는 값이면 그대로
+  if(window._wantStt && [...sel.options].some(o => o.value === window._wantStt))
+    sel.value = window._wantStt;
   window._sttFilled = true;
   updateSttHint();
   sel.onchange = updateSttHint;
@@ -2266,6 +2399,10 @@ async function startEdit(){
   const photos = kind === 'photo' ? (($('photoPath')||{}).value||'').trim() : '';
   if(kind === 'photo' && !photos){ alert('사진 폴더(또는 사진 파일들) 경로를 넣어주세요'); return; }
   if(kind !== 'photo' && !video){ alert('편집할 영상을 먼저 골라주세요 — [📁 영상 선택] 버튼을 눌러보세요'); return; }
+  if(pick('editFinish') === 'auto' && ($('autoMultiSel')||{}).value === 'multi'
+     && !(+$('autoTargetSec').value)){
+    alert('여러 개로 나누려면 쇼츠 1개당 길이를 정해주세요 (예: 60초)'); return;
+  }
   const nv = ($('narrVoiceSel')||{}).value||'';
   let editKey = $('editGeminiKey').value;
   // 내레이션 보이스는 제미나이 키가 있어야 적용 — 없으면 여기서 물어봐 저장
@@ -2288,7 +2425,9 @@ async function startEdit(){
     wm_path: ($('wmPath')||{}).value||'', wm_pos: ($('wmPos')||{}).value||'tr',
     wm_scale: +(($('wmScale')||{}).value)||0.14,
     speed: +$('editSpeedSel').value || 1,
+    quality: (($('autoQualitySel')||{}).value)||'standard',
     auto_edit: pick('editFinish') === 'auto', auto_target_sec: +$('autoTargetSec').value||0,
+    auto_multi: (($('autoMultiSel')||{}).value) === 'multi',
     script: $('editScript').value,
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
     gemini_key: editKey, save_key: true,
@@ -2926,7 +3065,7 @@ function toggleSettings(){ $('settingsCard').classList.toggle('hidden'); }
 
 function resetEditForm(ev){
   ev.preventDefault();
-  if(!confirm('편집 폼의 모든 입력을 기본값으로 되돌릴까요? (저장된 키·설정은 그대로)')) return;
+  if(!confirm('편집 폼의 모든 입력을 기본값으로 되돌릴까요?\\n(기억된 편집 세팅도 기본값으로 — 저장된 키·내 목소리는 그대로)')) return;
   const set = (id, v) => { const el = $(id); if(el) el.value = v; };
   const chk = (id, v) => { const el = $(id); if(el) el.checked = v; };
   set('editVideo',''); set('photoPath',''); set('photoSec',15);
@@ -2940,11 +3079,19 @@ function resetEditForm(ev){
   set('wmPath',''); set('wmPos','tr'); set('wmScale','0.14');
   const rf = document.querySelector('input[name=editFinish][value=review]'); if(rf) rf.checked = true;
   set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1');
-  onFinishChange(); applyTargetPreset();
+  set('autoMultiSel','one'); set('autoQualitySel','standard');
+  onFinishChange(); applyTargetPreset(); onAutoMultiChange();
   const st = $('sttSel'); if(st && st.options.length) st.selectedIndex = 0;
-  set('whisperModelSel','small');
+  set('whisperModelSel','small'); window._wantStt = '';
   renderHookPreview(); onNarrTopicInput();
   if(typeof toggleAutoSub === 'function') toggleAutoSub();
+  // 기억된 편집 세팅도 기본값으로 덮어써 저장 (다음 실행에 옛 세팅이 되살아나지 않게)
+  fetch('/api/settings', {method:'POST', body: JSON.stringify({settings:{ui:{edit_last:{
+    layout:'shorts', auto_subtitle:true, cut_silence:true, denoise:'', orig_audio:'keep',
+    bgm:'', bgm_db:-14, hook_scale:1, narr_voice:'', narr_style:'', narr_subs_only:false,
+    stt_provider:'', whisper_model:'small', speed:1, quality:'standard',
+    auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
+    wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
 }
 
 function resetGenForm(ev){
@@ -3060,6 +3207,8 @@ async function poll(){
       $('sovitsRef').value = mv.sovits_ref_audio;
       $('sovitsRefText').value = mv.sovits_ref_text || '';
     }
+    // 지난번 편집 세팅 복원 — 내 목소리 옵션이 추가된 뒤에 (보이스 복원 가능하도록)
+    applyEditLast(((state.settings || {}).ui || {}).edit_last || {});
   }
   $('keySaved').classList.toggle('hidden', !state.keys.gemini);
   $('startGuide').classList.toggle('hidden', !!state.keys.gemini);  // 처음 사용자 안내
