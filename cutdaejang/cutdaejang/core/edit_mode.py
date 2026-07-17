@@ -494,6 +494,55 @@ def rebuild_from_keep(
     return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
 
 
+def split_long_subtitles(subs: List[Subtitle], wrap_chars: int = 16,
+                         max_lines: int = 2) -> List[Subtitle]:
+    """2줄(wrap_chars×max_lines자)을 넘는 자막을 여러 개의 짧은 자막으로 자동 분할.
+
+    쇼츠 화면을 3~4줄 자막이 덮는 것 방지 — 단어 경계로 쪼개고 시간은 글자 수
+    비례로 배분해 말 흐름과 싱크를 유지한다. 강조어는 그 단어가 든 조각에만 남긴다.
+    """
+    if wrap_chars <= 0 or max_lines <= 0:
+        return list(subs)
+    limit = wrap_chars * max_lines
+    out: List[Subtitle] = []
+    for s in subs:
+        text = (s.text or "").strip()
+        if len(text) <= limit:
+            out.append(s)
+            continue
+        chunks: List[str] = []
+        cur = ""
+        for w in text.split():
+            cand = f"{cur} {w}".strip()
+            if len(cand) > limit and cur:
+                chunks.append(cur)
+                cur = w
+            else:
+                cur = cand
+        if cur:
+            chunks.append(cur)
+        # 공백 없는 초장문(연속 문자열)은 단어 분할이 안 됨 → 글자 단위로 강제 분할
+        fixed: List[str] = []
+        for c in chunks:
+            while len(c) > limit:
+                fixed.append(c[:limit])
+                c = c[limit:]
+            fixed.append(c)
+        chunks = [c for c in fixed if c]
+        span = max(1, s.end_us - s.start_us)
+        total_chars = sum(len(c) for c in chunks) or 1
+        t = s.start_us
+        for i, c in enumerate(chunks):
+            if i == len(chunks) - 1:
+                end = s.end_us
+            else:
+                end = min(t + max(span * len(c) // total_chars, 400_000), s.end_us)
+            hl = s.highlight if s.highlight and s.highlight in c else ""
+            out.append(Subtitle(text=c, start_us=t, end_us=max(end, t + 200_000), highlight=hl))
+            t = out[-1].end_us
+    return out
+
+
 def extract_frames_b64(video: str, n: int = 4, width: int = 480) -> List[str]:
     """영상에서 고르게 n장 캡처 → base64 JPEG 목록 (AI 영상 분석 입력용)."""
     import base64

@@ -724,3 +724,34 @@ def test_suggest_highlights_allows_prefix_on_short_video(monkeypatch):
     monkeypatch.setattr(sg, "_http_post_json", fake_post)
     subs = _flat_subs(8, 4.0)                       # 32초 영상, 목표 30초 → 1.6배 미만
     assert sg.suggest_highlights(subs, target_sec=30)["keep"] == [0, 1, 2, 3, 4, 5]
+
+
+# ─────────── v0.34: 자막 2줄 초과 자동 분할 ───────────
+
+
+def test_split_long_subtitles_divides_and_keeps_sync():
+    from cutdaejang.core.edit_mode import split_long_subtitles
+    from cutdaejang.spec import Subtitle
+
+    long_text = "이 문장은 아주 길어서 화면에서 네 줄로 표시되던 그 문제의 자막을 재현하기 위한 예시 문장입니다"
+    subs = [Subtitle("짧은 자막", 0, 2_000_000),
+            Subtitle(long_text, 2_000_000, 10_000_000, highlight="네 줄")]
+    out = split_long_subtitles(subs, wrap_chars=16)
+    assert out[0].text == "짧은 자막"                     # 짧으면 그대로
+    parts = out[1:]
+    assert len(parts) >= 2                                # 긴 자막은 여러 개로
+    assert all(len(p.text) <= 32 for p in parts)          # 각각 2줄(32자) 이내
+    assert " ".join(p.text for p in parts) == long_text   # 내용 손실 없음
+    assert parts[0].start_us == 2_000_000 and parts[-1].end_us == 10_000_000
+    for a, b in zip(parts, parts[1:]):                    # 이어지고 겹치지 않음
+        assert a.end_us == b.start_us and a.end_us > a.start_us
+    hl = [p for p in parts if p.highlight]
+    assert len(hl) == 1 and "네 줄" in hl[0].text          # 강조어는 해당 조각에만
+
+
+def test_split_long_subtitles_handles_no_space_text():
+    from cutdaejang.core.edit_mode import split_long_subtitles
+    from cutdaejang.spec import Subtitle
+
+    out = split_long_subtitles([Subtitle("가" * 70, 0, 7_000_000)], wrap_chars=16)
+    assert all(len(p.text) <= 32 for p in out) and sum(len(p.text) for p in out) == 70

@@ -311,6 +311,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             progress_cb=lambda stage, frac: _set_job(job_id, stage=stage, frac=frac),
             status_cb=lambda msg: _set_job(job_id, note=msg),
         )
+        # 2줄(기본 32자) 넘는 자막은 화면을 덮음 → 여러 개의 짧은 자막으로 자동 분할
+        analysis.subtitles = edit_mode.split_long_subtitles(
+            analysis.subtitles, settings["subtitle"].get("wrap_chars", 16))
         denoise = params.get("denoise") or False
         # 발화 자막이 없는 영상(화면 녹화·b-roll)은 핵심 선별을 못 함 → 완전 자동 +
         # 목표 초면 영상 전체에서 고르게 조각을 뽑아 목표 길이 몽타주로 먼저 자름
@@ -442,6 +445,9 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         out = str(Path(workdir) / job_id / "edited.mp4")
         job = _get_job(job_id) or {}
         ep = job.get("edit_params") or {}
+        if not ep.get("narration"):  # 검토에서 길게 고친 줄도 2줄 초과면 분할 (내레이션은 문장=클립 유지)
+            subs = edit_mode.split_long_subtitles(
+                subs, settings["subtitle"].get("wrap_chars", 16))
         style = build_style(settings)
         try:  # 상단 제목 크기 배수 (훅 스튜디오)
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
@@ -1459,7 +1465,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.33.1)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.34)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -1658,7 +1664,10 @@ _HTML = """<!doctype html>
       <input type="password" id="editGeminiKey" placeholder="AIza...">
     </div>
     <div class="hint" style="margin-top:8px">말 안 하는 빈 구간을 잘라내고, 말한 내용을 자동으로 자막으로 붙입니다. 가로 영상은 세로 쇼츠로 자동 배치돼요.</div>
-    <button id="editBtn" onclick="startEdit()">✂️ 편집 시작</button>
+    <div style="display:flex;gap:8px">
+      <button id="editBtn" style="flex:1" onclick="startEdit()">✂️ 편집 시작</button>
+      <button class="ghost" style="white-space:nowrap" onclick="resetEditForm(event)" title="편집 폼의 모든 입력을 기본값으로 되돌립니다">↺ 초기화</button>
+    </div>
   </div>
 
   <div class="card" id="formCard">
@@ -1738,7 +1747,10 @@ _HTML = """<!doctype html>
       <input type="text" id="draftsDir" placeholder="자동 감지 실패 시 직접 입력">
     </div>
 
-    <button id="goBtn" onclick="generate()">생성 시작</button>
+    <div style="display:flex;gap:8px">
+      <button id="goBtn" style="flex:1" onclick="generate()">생성 시작</button>
+      <button class="ghost" style="white-space:nowrap" onclick="resetGenForm(event)" title="생성 폼의 입력을 기본값으로 되돌립니다">↺ 초기화</button>
+    </div>
   </div>
 
   <div class="card hidden" id="statusCard">
@@ -2650,6 +2662,36 @@ async function diagnostic(ev){
 }
 
 function toggleSettings(){ $('settingsCard').classList.toggle('hidden'); }
+
+function resetEditForm(ev){
+  ev.preventDefault();
+  if(!confirm('편집 폼의 모든 입력을 기본값으로 되돌릴까요? (저장된 키·설정은 그대로)')) return;
+  const set = (id, v) => { const el = $(id); if(el) el.value = v; };
+  const chk = (id, v) => { const el = $(id); if(el) el.checked = v; };
+  set('editVideo',''); set('photoPath',''); set('photoSec',15);
+  set('editHook',''); set('hookSizeSel','1'); set('editHookTopic','');
+  const hc = $('editHookCands'); if(hc) hc.innerHTML='';
+  set('narrTopic',''); chk('narrSubsOnly',false); set('narrStyleSel','정보형');
+  const nv = $('narrVoiceSel'); if(nv && nv.options.length) nv.selectedIndex = 0;
+  set('editScript',''); chk('autoSubChk',true); chk('cutSilenceChk',true);
+  set('denoiseSel',''); window._origTouched = false; set('origAudioSel','keep');
+  set('bgmEditSel',''); set('bgmVolSel','-14');
+  chk('autoEditChk',false); set('autoTargetSec',30); set('editSpeedSel','1');
+  const st = $('sttSel'); if(st && st.options.length) st.selectedIndex = 0;
+  set('whisperModelSel','small');
+  renderHookPreview(); onNarrTopicInput();
+  if(typeof toggleAutoSub === 'function') toggleAutoSub();
+}
+
+function resetGenForm(ev){
+  ev.preventDefault();
+  if(!confirm('생성 폼의 입력을 기본값으로 되돌릴까요?')) return;
+  const set = (id, v) => { const el = $(id); if(el) el.value = v; };
+  set('topic','하루 10분 정리 습관'); set('genHook','');
+  const hc = $('genHookCands'); if(hc) hc.innerHTML='';
+  set('bgmSel',''); set('voiceSel', ($('voiceSel').options[0]||{}).value || '');
+  set('styleSel', ($('styleSel').options[0]||{}).value || '');
+}
 
 function updateLogs(lines){
   const box = $('logBox');
