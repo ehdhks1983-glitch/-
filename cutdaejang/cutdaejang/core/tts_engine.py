@@ -272,6 +272,11 @@ class GPTSoVITSTTS:
         if not self.ref_audio:
             raise TTSError("내 목소리 참조 녹음이 설정되지 않았습니다 — [🎤 내 목소리 등록]에서 저장하세요")
 
+    @property
+    def cache_extra(self) -> str:
+        """참조 녹음/대사가 바뀌면 목소리가 달라짐 → 캐시 키 구분자."""
+        return f"{self.ref_audio}|{self.ref_text}"
+
     def synthesize(self, text: str, voice: str, out_path: str) -> str:
         payload = {
             "text": text, "text_lang": "ko",
@@ -500,6 +505,10 @@ class TTSEngine:
     def _cache_key(self, text: str, voice: str) -> str:
         model = getattr(self.provider, "model", "")
         raw = f"{self.provider.name}|{model}|{voice}|{self.style_preset}|{text}"
+        # 참조 기반 제공자(SoVITS 등)는 참조가 바뀌면 다른 목소리 → 키에 반영
+        extra = getattr(self.provider, "cache_extra", "")
+        if extra:
+            raw += f"|{extra}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def cache_path(self, text: str, voice: str) -> Path:

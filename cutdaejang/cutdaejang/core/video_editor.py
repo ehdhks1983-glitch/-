@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from ..utils import ffmpeg as ff
-from ..utils.timefmt import US_PER_SECOND, seconds_to_us, us_to_seconds_str
+from ..utils.timefmt import seconds_to_us, us_to_seconds_str
 
 
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv", ".flv",

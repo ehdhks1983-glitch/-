@@ -500,3 +500,20 @@ def test_sovits_empty_response_is_nonretryable(tmp_path):
             p.synthesize("문장", "", str(tmp_path / "o.wav"))
     finally:
         srv.shutdown()
+
+
+def test_sovits_cache_key_changes_with_reference(tmp_path, monkeypatch):
+    # 참조 녹음을 바꾸면 다른 목소리 → 캐시 키도 달라져야 한다 (v0.33.1)
+    settings = config.load_settings()
+    e1 = TTSEngine(tts_engine.GPTSoVITSTTS(ref_audio="a.wav", ref_text="안녕"), tmp_path,
+                   settings=settings)
+    e2 = TTSEngine(tts_engine.GPTSoVITSTTS(ref_audio="b.wav", ref_text="안녕"), tmp_path,
+                   settings=settings)
+    e3 = TTSEngine(tts_engine.GPTSoVITSTTS(ref_audio="a.wav", ref_text="안녕"), tmp_path,
+                   settings=settings)
+    k1, k2, k3 = (e.cache_path("같은 문장", "") for e in (e1, e2, e3))
+    assert k1 != k2          # 참조 다름 → 키 다름
+    assert k1 == k3          # 참조 같음 → 키 재사용
+    # 기존 제공자(cache_extra 없음)는 키 형식이 그대로라 기존 캐시 유지
+    g = TTSEngine(StubTTS(), tmp_path, settings=settings)
+    assert g.cache_path("같은 문장", "") == g.cache_path("같은 문장", "")

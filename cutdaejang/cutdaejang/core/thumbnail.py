@@ -7,7 +7,6 @@ AI 이미지 생성 없이도 되도록 배경은 '영상에서 뽑은 프레임
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 from pathlib import Path
 from typing import Optional

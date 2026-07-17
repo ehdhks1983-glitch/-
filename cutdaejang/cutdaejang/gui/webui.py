@@ -315,7 +315,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         # 발화 자막이 없는 영상(화면 녹화·b-roll)은 핵심 선별을 못 함 → 완전 자동 +
         # 목표 초면 영상 전체에서 고르게 조각을 뽑아 목표 길이 몽타주로 먼저 자름
         tgt_auto = int(params.get("auto_target_sec") or 0) if params.get("auto_edit") else 0
-        if (tgt_auto > 0 and not analysis.subtitles
+        if (tgt_auto > 0 and not analysis.subtitles and not photo_path
                 and analysis.cut_us > (tgt_auto + 3) * 1_000_000):
             from ..core import video_editor as ve  # noqa: PLC0415
             _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {tgt_auto}초를 뽑는 중…")
@@ -1459,7 +1459,7 @@ _HTML = """<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.33)</small></h1>
+  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.33.1)</small></h1>
   <div class="banner hidden" id="envBanner"></div>
 
   <div class="toggle" style="margin-top:16px">
@@ -2174,7 +2174,7 @@ function wrapHookColor(ev, name){
 
 function clearHookMarkup(ev){
   ev.preventDefault();
-  const re1 = new RegExp('[[](?:[가-힣A-Za-z]+|/[가-힣A-Za-z]*)[]]', 'g');
+  const re1 = new RegExp('[[](?:[가-힣A-Za-z]+|/[가-힣A-Za-z]*)]', 'g');
   $('editHook').value = $('editHook').value.replace(re1, '');
   renderHookPreview();
 }
@@ -2182,7 +2182,7 @@ function clearHookMarkup(ev){
 function hookLineHtml(line){
   const esc = (x) => x.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   let rest = line, out = '', hasMarkup = false;
-  const tagRe = new RegExp('[[]([가-힣A-Za-z]+)[]]');
+  const tagRe = new RegExp('[[]([가-힣A-Za-z]+)]');
   while(rest){
     const m = rest.match(tagRe);
     const name = m ? m[1] : null;
@@ -2194,13 +2194,13 @@ function hookLineHtml(line){
     hasMarkup = true;
     out += esc(rest.slice(0, m.index));
     rest = rest.slice(m.index + m[0].length);
-    const close = rest.search(new RegExp('[[]/[가-힣A-Za-z]*[]]'));
+    const close = rest.search(new RegExp('[[]/[가-힣A-Za-z]*]'));
     const next = rest.search(tagRe);
     let end = rest.length;
     if(close >= 0 && (next < 0 || close <= next)) end = close;
     else if(next >= 0) end = next;
     out += '<span style="color:' + col + '">' + esc(rest.slice(0, end)) + '</span>';
-    rest = (close >= 0 && close === end) ? rest.slice(end).replace(new RegExp('^[[]/[가-힣A-Za-z]*[]]'), '') : rest.slice(end);
+    rest = (close >= 0 && close === end) ? rest.slice(end).replace(new RegExp('^[[]/[가-힣A-Za-z]*]'), '') : rest.slice(end);
   }
   if(!hasMarkup){
     // 마크업 없으면: | 단어 강조 → 없으면 숫자 자동 강조 (렌더와 같은 규칙)
@@ -2743,6 +2743,7 @@ async function poll(){
       for(const f of state.bgm_files){ $('bgmSel').add(new Option(f, f)); $('bgmEditSel').add(new Option(f, f)); }
     }
     if(state.settings) fillSettings(state.settings);
+    initHookChips();
     const mv = ((state.settings || {}).tts || {});
     if(mv.voice_elevenlabs) addMyVoiceOption(mv.voice_elevenlabs_name || '내 목소리');
     if(mv.sovits_ref_audio){

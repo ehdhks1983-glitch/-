@@ -6,7 +6,6 @@ import pytest
 
 from cutdaejang.core import edit_mode
 from cutdaejang.core.stt_engine import STTEngine, StubSTT, make_provider
-from cutdaejang.core.video_editor import SilenceOptions
 from cutdaejang.utils import ffmpeg as ff
 from tests.conftest import requires_ffmpeg
 

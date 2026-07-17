@@ -21,7 +21,7 @@ import re
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import List, Optional, Protocol
+from typing import Optional, Protocol
 
 from ..utils import ffmpeg as ff
 

@@ -7,7 +7,6 @@ from cutdaejang.core import render_engine, timeline_calculator
 from cutdaejang.core.render_engine.ffmpeg_composer import RenderOptions
 from cutdaejang.core.tts_engine import StubTTS, TTSEngine
 from cutdaejang.spec import Background
-from cutdaejang.utils import ffmpeg as ff
 from cutdaejang.utils.png import vertical_gradient_png
 from tests.conftest import requires_ffmpeg
 
