@@ -1516,7 +1516,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.36)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.37)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -1537,6 +1537,11 @@ _HTML = """<!doctype html>
         <span class="mc-emoji">📸</span><span class="mc-title">사진으로 영상</span>
         <span class="mc-desc">사진 몇 장이면<br>내레이션 넣은 영상 완성</span>
       </button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
+      <button class="ghost" onclick="openVoice(event)">🎤 내 목소리 등록</button>
+      <span class="hint">녹음 파일 하나로 <b>나만의 AI 목소리</b>를 만들어 내레이션에 쓸 수 있어요</span>
+      <b class="hint" id="homeVoiceState" style="color:#5dd39e"></b>
     </div>
     <div class="guide hidden" id="startGuide">💡 <b>처음 오셨나요? — 준비물 1개 (1분)</b><br>
       AI 대본·자막·좋은 목소리는 <b>무료 Gemini 키</b>가 있어야 해요.
@@ -1641,45 +1646,11 @@ _HTML = """<!doctype html>
         <span>🔇 목소리는 빼고 <b>자막만</b> 넣기 (AI가 쓴 대본을 하단 자막으로만)</span>
       </div>
       <div class="hint">넣으면 AI가 대본을 쓰고 목소리(제미나이 키 권장, 없으면 내장 음성)를 입혀요. 보이스·말투는 제미나이 키가 있을 때 적용(내장 음성은 목소리 고정). 대본은 검토 화면에서 수정 가능.</div>
-      <details style="margin-top:8px">
-        <summary class="hint" style="cursor:pointer">🎤 내 목소리 등록 — 녹음 파일로 내 목소리를 만들어 내레이션에 사용 <b id="myVoiceState"></b></summary>
-        <div style="margin-top:8px;padding:8px 10px;border:1px solid #2c3350;border-radius:8px">
-          <b style="font-size:13px">방법 A — 무료·내 PC (GPT-SoVITS)</b>
-          <span class="hint">프로그램 설치 후 켜두면 무제한 무료. 설치법은 카페가이드 Q12</span>
-          <div class="row" style="margin-top:6px">
-            <div>
-              <label>참조 녹음 (5~10초, 깨끗하게)</label>
-              <input type="text" id="sovitsRef" placeholder="예) C:\\Users\\me\\참조녹음.wav">
-            </div>
-            <div>
-              <label>그 녹음에서 말한 문장</label>
-              <input type="text" id="sovitsRefText" placeholder="예) 안녕하세요 곰대리입니다 오늘도 좋은 하루 보내세요">
-            </div>
-            <div style="display:flex;align-items:flex-end">
-              <button class="ghost" style="margin-bottom:1px" onclick="saveSovits(event)">저장</button>
-            </div>
-          </div>
-          <div class="hint">GPT-SoVITS 통합패키지의 API 서버(api_v2, 127.0.0.1:9880)를 켜두면 학습 없이(zero-shot) 바로 내 목소리가 나와요. 더 똑같이 만들고 싶으면 GPT-SoVITS에서 한 번만 학습하면 됩니다.</div>
-        </div>
-        <div style="margin-top:8px;padding:8px 10px;border:1px solid #2c3350;border-radius:8px">
-        <b style="font-size:13px">방법 B — 유료·간편 (ElevenLabs, 월 $5)</b>
-        <div class="row" style="margin-top:8px">
-          <div>
-            <label>녹음 파일 (1~3분 낭독, mp3/wav/m4a)</label>
-            <input type="text" id="cloneFile" placeholder="예) C:\\Users\\me\\내녹음.mp3">
-          </div>
-          <div>
-            <label>ElevenLabs API 키</label>
-            <input type="password" id="elevenKey" placeholder="elevenlabs.io 발급 키">
-          </div>
-          <div style="display:flex;align-items:flex-end">
-            <button class="ghost" style="margin-bottom:1px" onclick="cloneVoice(event)">등록</button>
-          </div>
-        </div>
-        <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장됩니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $5)</b>부터 지원.</div>
-        </div>
-        <div class="hint" style="margin-top:6px">등록하면 위 보이스 목록에 「🎤 내 목소리」가 생겨요. ⚠ 어떤 방식이든 꼭 <b>본인 목소리</b>만 등록하세요 (타인 목소리 무단 클로닝 금지).</div>
-      </details>
+      <div class="chk" style="gap:8px">
+        <span class="hint">내 목소리로 읽게 하고 싶다면 →</span>
+        <button class="ghost" style="padding:5px 10px" onclick="openVoice(event)">🎤 내 목소리 등록</button>
+        <b class="hint" id="myVoiceStateNarr"></b>
+      </div>
     </details>
 
     <details class="opt" id="optSound">
@@ -1792,6 +1763,64 @@ _HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="card hidden" id="voiceCard">
+    <div class="backrow">
+      <button class="ghost" onclick="closeVoice(event)">← 돌아가기</button>
+      <b>🎤 내 목소리 등록 <span class="hint" id="myVoiceState"></span></b>
+    </div>
+    <div class="hint" style="margin-top:10px;font-size:13px;color:#cdd3e0">
+      내 목소리를 녹음한 파일로 <b>"나만의 AI 목소리"</b>를 만들어요. 한 번 등록하면
+      🤖 AI 영상 만들기의 목소리와 🎙️ AI 내레이션의 보이스 목록에 <b>「🎤 내 목소리」</b>가 생기고,
+      그걸 고르면 AI가 쓴 대본을 <b>내 목소리로</b> 읽어줍니다. 두 가지 방법 중 하나만 하면 돼요.
+    </div>
+
+    <div style="margin-top:12px;padding:10px 12px;border:1px solid #2c3350;border-radius:10px">
+      <b style="font-size:14px">방법 A — 무료 · 내 PC에서 (GPT-SoVITS)</b>
+      <span class="hint">5~10초 녹음이면 시작. 프로그램을 켜두면 무제한 무료. 설치법은 카페가이드 Q12</span>
+      <div class="row" style="margin-top:6px">
+        <div>
+          <label>참조 녹음 (5~10초, 깨끗하게)</label>
+          <input type="text" id="sovitsRef" placeholder="예) C:\\Users\\me\\참조녹음.wav">
+        </div>
+        <div>
+          <label>그 녹음에서 말한 문장</label>
+          <input type="text" id="sovitsRefText" placeholder="예) 안녕하세요 곰대리입니다 오늘도 좋은 하루 보내세요">
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:6px">
+          <button class="ghost" style="margin-bottom:1px" onclick="saveSovits(event)">등록(저장)</button>
+          <button class="ghost" style="margin-bottom:1px" onclick="previewMyVoice(event,'sovits')">🔊 미리듣기</button>
+        </div>
+      </div>
+      <div class="hint">GPT-SoVITS 통합패키지의 API 서버(api_v2, 127.0.0.1:9880)를 켜두면 학습 없이(zero-shot) 바로 내 목소리가 나와요. 더 똑같이 만들고 싶으면 GPT-SoVITS에서 한 번만 학습하면 됩니다.</div>
+    </div>
+
+    <div style="margin-top:10px;padding:10px 12px;border:1px solid #2c3350;border-radius:10px">
+      <b style="font-size:14px">방법 B — 유료 · 간편 (ElevenLabs, 월 $5)</b>
+      <span class="hint">설치 없이 인터넷만 있으면 됨. 품질 안정적</span>
+      <div class="row" style="margin-top:6px">
+        <div>
+          <label>녹음 파일 (1~3분 낭독, mp3/wav/m4a)</label>
+          <input type="text" id="cloneFile" placeholder="예) C:\\Users\\me\\내녹음.mp3">
+        </div>
+        <div>
+          <label>ElevenLabs API 키</label>
+          <input type="password" id="elevenKey" placeholder="elevenlabs.io 발급 키">
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:6px">
+          <button class="ghost" style="margin-bottom:1px" onclick="cloneVoice(event)">등록</button>
+          <button class="ghost" style="margin-bottom:1px" onclick="previewMyVoice(event,'elevenlabs')">🔊 미리듣기</button>
+        </div>
+      </div>
+      <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장됩니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $5)</b>부터 지원.</div>
+    </div>
+
+    <div class="guide" style="margin-top:10px">📌 <b>등록 후 사용법</b> — 영상 만들 때 목소리(보이스)에서 「🎤 내 목소리」만 고르면 끝!<br>
+      · 🤖 AI 영상 만들기 → ② 목소리 고르기에 「🎤 내 목소리」 버튼이 생겨요<br>
+      · ✂️ 내 영상 편집 / 📸 사진으로 영상 → ③ 꾸미기 → 🎙️ AI 내레이션의 보이스 맨 위에 생겨요<br>
+      · 방법 A는 만들 때 GPT-SoVITS 서버가 켜져 있어야 하고, 꺼져 있으면 자동으로 다른 목소리로 대체돼요</div>
+    <div class="hint" style="margin-top:8px">⚠ 어떤 방식이든 꼭 <b>본인 목소리</b>만 등록하세요 (타인 목소리 무단 클로닝 금지).</div>
+  </div>
+
   <div class="card hidden" id="formCard">
     <div class="backrow">
       <button class="ghost" onclick="showHome(event)">← 처음으로</button>
@@ -1811,6 +1840,10 @@ _HTML = """<!doctype html>
       <label><input type="radio" name="prov" value="stub" checked><span>🔧 테스트 톤</span></label>
     </div>
     <div class="hint">🌟 AI 성우 = 성우급 목소리 + <b>진짜 AI 대본</b>(무료 Gemini 키 필요) · 내장 음성 = Windows 한국어 음성(키·인터넷 불필요) · 테스트 톤 = "삐-" 소리(기계 점검용)</div>
+    <div class="chk" style="gap:8px">
+      <span class="hint">내 목소리(녹음으로 만든 AI 목소리)로 만들고 싶다면 →</span>
+      <button class="ghost" style="padding:5px 10px" onclick="openVoice(event)">🎤 내 목소리 등록</button>
+    </div>
 
     <div id="keyRow" class="hidden">
       <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
@@ -2098,6 +2131,7 @@ function pick(name){ return document.querySelector(`input[name=${name}]:checked`
 function openMode(kind){
   window._view = kind;                       // 'gen' | 'edit' | 'photo'
   $('homeCard').classList.add('hidden');
+  $('voiceCard').classList.add('hidden');
   $('formCard').classList.toggle('hidden', kind !== 'gen');
   $('editCard').classList.toggle('hidden', kind === 'gen');
   if(kind !== 'gen'){
@@ -2116,6 +2150,47 @@ function showHome(ev){
   $('homeCard').classList.remove('hidden');
   $('formCard').classList.add('hidden');
   $('editCard').classList.add('hidden');
+  $('voiceCard').classList.add('hidden');
+}
+// ── 🎤 내 목소리 등록 전용 화면 (v0.37) — 어디서 열었든 [← 돌아가기]로 복귀 ──
+function openVoice(ev){
+  if(ev) ev.preventDefault();
+  window._voiceReturn = window._view || 'home';
+  $('homeCard').classList.add('hidden');
+  $('formCard').classList.add('hidden');
+  $('editCard').classList.add('hidden');
+  $('voiceCard').classList.remove('hidden');
+  window._view = 'voice';
+}
+function closeVoice(ev){
+  if(ev) ev.preventDefault();
+  $('voiceCard').classList.add('hidden');
+  const r = window._voiceReturn;
+  if(r === 'gen' || r === 'edit' || r === 'photo') openMode(r); else showHome();
+}
+function markMyVoice(){
+  for(const id of ['myVoiceState', 'myVoiceStateNarr', 'homeVoiceState']){
+    const el = $(id); if(el) el.textContent = '✅ 등록됨';
+  }
+}
+async function previewMyVoice(ev, prov){
+  ev.preventDefault();
+  if(prov === 'sovits' && !$('sovitsRef').value.trim()){
+    alert('먼저 참조 녹음과 문장을 넣고 [등록(저장)]을 눌러주세요'); return;
+  }
+  if(prov === 'elevenlabs' && !window._hasElevenKey && !$('elevenKey').value.trim()){
+    alert('먼저 녹음 파일과 ElevenLabs 키를 넣고 [등록]을 눌러주세요'); return;
+  }
+  const btn = ev.target; const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '합성 중...';
+  try{
+    const body = {tts_provider: prov, text: '안녕하세요, 내 목소리 미리듣기입니다.'};
+    if(prov === 'elevenlabs' && $('elevenKey').value.trim()){
+      body.elevenlabs_key = $('elevenKey').value.trim(); body.save_key = true;
+    }
+    const data = await (await fetch('/api/preview', {method:'POST', body: JSON.stringify(body)})).json();
+    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+  } finally { btn.disabled = false; btn.textContent = old; }
 }
 function onFinishChange(){
   const auto = pick('editFinish') === 'auto';
@@ -2728,7 +2803,7 @@ async function cloneVoice(ev){
     window._hasElevenKey = true;
     addMyVoiceOption(data.name || '내 목소리');
     $('narrVoiceSel').value = '__mine__';
-    alert('✅ 내 목소리 등록 완료! 보이스 목록에서 「🎤 내 목소리」가 선택됐어요. 🔊 미리듣기로 확인해보세요.');
+    alert('✅ 내 목소리 등록 완료!\\n\\n옆의 🔊 미리듣기로 확인해보세요.\\n이제 영상 만들 때 목소리에서 「🎤 내 목소리」를 고르면 됩니다.');
   } finally { btn.disabled = false; btn.textContent = '등록'; }
 }
 
@@ -2745,7 +2820,7 @@ async function saveSovits(ev){
     if(data.error){ alert(data.error); return; }
     addSovitsOption();
     $('narrVoiceSel').value = '__sovits__';
-    alert('✅ 저장 완료! GPT-SoVITS API 서버(127.0.0.1:9880)를 켜둔 상태에서 🔊 미리듣기로 확인해보세요.');
+    alert('✅ 등록 완료!\\n\\nGPT-SoVITS API 서버(127.0.0.1:9880)를 켜둔 상태에서 옆의 🔊 미리듣기로 확인해보세요.\\n이제 영상 만들 때 목소리에서 「🎤 내 목소리 (무료·내 PC)」를 고르면 됩니다.');
   } finally { btn.disabled = false; btn.textContent = '저장'; }
 }
 
@@ -2753,14 +2828,14 @@ function addSovitsOption(){
   if(![...$('narrVoiceSel').options].some(o => o.value === '__sovits__'))
     $('narrVoiceSel').add(new Option('🎤 내 목소리 (무료·내 PC)', '__sovits__'), 0);
   $('provSovitsLabel').classList.remove('hidden');
-  $('myVoiceState').textContent = '— ✅ 등록됨';
+  markMyVoice();
 }
 
 function addMyVoiceOption(name){
   if(![...$('narrVoiceSel').options].some(o => o.value === '__mine__'))
     $('narrVoiceSel').add(new Option('🎤 내 목소리 (' + name + ')', '__mine__'), 0);
   $('provMineLabel').classList.remove('hidden');
-  $('myVoiceState').textContent = '— ✅ 등록됨';
+  markMyVoice();
 }
 
 function showErrors(errs){

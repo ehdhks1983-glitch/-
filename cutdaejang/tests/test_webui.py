@@ -92,6 +92,23 @@ def test_beginner_ui_structure(server):
     assert 'id="videoBlock"' in html and 'id="photoBlock"' in html
 
 
+def test_my_voice_card_structure(server):
+    """v0.37 내 목소리 전용 화면: 진입 3경로(홈/생성 폼/내레이션) + 등록 폼 + 상태 표시."""
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="voiceCard"' in html
+    # 등록 UI는 전용 화면 한 곳에만 (sovits/clone 입력이 중복되면 id 충돌)
+    for fid in ("sovitsRef", "sovitsRefText", "cloneFile", "elevenKey"):
+        assert html.count(f'id="{fid}"') == 1, fid
+    # 바로가기 버튼 3곳: 홈 + AI 생성 폼 + 내레이션 그룹
+    assert html.count("openVoice(event)") >= 3
+    # 등록 상태 표시 3곳
+    for sid in ("myVoiceState", "myVoiceStateNarr", "homeVoiceState"):
+        assert f'id="{sid}"' in html, sid
+    # 방법별 미리듣기
+    assert "previewMyVoice(event,'sovits')" in html
+    assert "previewMyVoice(event,'elevenlabs')" in html
+
+
 _SHARED = {}
 
 
