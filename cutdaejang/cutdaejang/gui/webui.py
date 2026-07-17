@@ -1479,85 +1479,149 @@ _HTML = """<!doctype html>
   .subrow.dropped input[type=text] { text-decoration:line-through; }
   .hidden { display:none !important; }
   code { background:#0f1117; padding:2px 6px; border-radius:4px; font-size:12px; }
+  /* v0.36 초보자 UI — 첫 화면 카드·단계 번호·접는 옵션 그룹 */
+  .topbar { display:flex; align-items:center; gap:8px; }
+  .topbar h1 { flex:1; }
+  .topbar button { width:auto; margin:0; }
+  .home-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(216px,1fr));
+                gap:12px; margin-top:14px; }
+  .modecard { background:#171a23; border:1px solid #2c3347; border-radius:14px;
+              padding:22px 14px; text-align:center; cursor:pointer; margin:0; font-weight:400; }
+  .modecard:hover { border-color:#4266d5; background:#1a2030; }
+  .modecard .mc-emoji { font-size:34px; display:block; }
+  .modecard .mc-title { font-size:16px; font-weight:800; display:block; margin-top:8px; color:#fff; }
+  .modecard .mc-desc { font-size:12px; color:#8b93a7; display:block; margin-top:6px; line-height:1.5; }
+  .backrow { display:flex; align-items:center; gap:10px; }
+  .backrow b { font-size:16px; }
+  .backrow button { margin:0; }
+  .stepnum { display:inline-flex; width:22px; height:22px; border-radius:50%; background:#4266d5;
+             color:#fff; font-size:13px; font-weight:700; align-items:center; justify-content:center;
+             margin-right:7px; flex:none; }
+  .steplabel { display:flex; align-items:center; flex-wrap:wrap; font-size:14px; color:#e8eaf0;
+               font-weight:700; margin:18px 0 6px; }
+  .steplabel .hint { font-weight:400; margin-left:8px; margin-top:0; }
+  details.opt { border:1px solid #262b3a; border-radius:10px; padding:0 12px; margin-top:8px;
+                background:#141722; }
+  details.opt > summary { cursor:pointer; padding:11px 0; font-size:14px; color:#cdd3e0;
+                          list-style:none; }
+  details.opt > summary::-webkit-details-marker { display:none; }
+  details.opt > summary::before { content:'▸  '; color:#6b7387; }
+  details.opt[open] > summary::before { content:'▾  '; }
+  details.opt[open] { padding-bottom:12px; }
+  .guide { background:#14233c; border:1px solid #2c4a7a; color:#cfe0ff; border-radius:10px;
+           padding:12px 14px; margin-top:14px; font-size:13px; line-height:1.7; }
+  .guide a { color:#8ab4ff; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>컷대장 <small>쇼츠 자동 조립 — 확인용 UI (v0.35)</small></h1>
+  <div class="topbar">
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.36)</small></h1>
+    <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
+  </div>
   <div class="banner hidden" id="envBanner"></div>
 
-  <div class="toggle" style="margin-top:16px">
-    <label><input type="radio" name="appmode" value="ai" checked onchange="switchAppMode()"><span>🎬 주제로 AI 영상 만들기</span></label>
-    <label><input type="radio" name="appmode" value="edit" onchange="switchAppMode()"><span>✂️ 내 영상 편집 (무음컷+자동자막)</span></label>
+  <div class="card" id="homeCard">
+    <div style="font-size:17px;font-weight:800">무엇을 만들까요?</div>
+    <div class="hint" style="margin-top:4px">카드를 누르면 시작돼요. 꼭 필요한 것만 물어보고, 나머지는 컷대장이 알아서 합니다.</div>
+    <div class="home-cards">
+      <button class="modecard" onclick="openMode('gen')">
+        <span class="mc-emoji">🤖</span><span class="mc-title">AI 영상 만들기</span>
+        <span class="mc-desc">주제 한 줄만 쓰면<br>대본·목소리·자막·배경까지 자동</span>
+      </button>
+      <button class="modecard" onclick="openMode('edit')">
+        <span class="mc-emoji">✂️</span><span class="mc-title">내 영상 편집</span>
+        <span class="mc-desc">내 영상을 넣으면 무음 컷·자막을<br>자동으로, 쇼츠로도 줄여줘요</span>
+      </button>
+      <button class="modecard" onclick="openMode('photo')">
+        <span class="mc-emoji">📸</span><span class="mc-title">사진으로 영상</span>
+        <span class="mc-desc">사진 몇 장이면<br>내레이션 넣은 영상 완성</span>
+      </button>
+    </div>
+    <div class="guide hidden" id="startGuide">💡 <b>처음 오셨나요? — 준비물 1개 (1분)</b><br>
+      AI 대본·자막·좋은 목소리는 <b>무료 Gemini 키</b>가 있어야 해요.
+      <a href="https://aistudio.google.com/apikey" target="_blank">여기서 무료 발급</a>받고,
+      만들기를 시작할 때 나오는 창에 붙여넣으면 끝 — 한 번 넣으면 저장돼서 다시 안 물어봐요.</div>
   </div>
 
   <div class="card hidden" id="editCard">
-    <label>영상 파일</label>
-    <div style="display:flex; gap:8px">
-      <input type="text" id="editVideo" style="flex:1" placeholder="[📁 영상 선택] 을 누르거나 경로를 붙여넣기">
-      <button class="ghost" style="white-space:nowrap" onclick="pickFile(event)">📁 영상 선택</button>
+    <div class="backrow">
+      <button class="ghost" onclick="showHome(event)">← 처음으로</button>
+      <b id="editTitleLabel">✂️ 내 영상 편집</b>
     </div>
-    <div class="hint">버튼을 누르면 파일 탐색기가 열립니다. (폴더 경로만 넣으면 그 안의 최신 영상을 씁니다)</div>
-    <label>상단 제목(훅) <span class="hint">— 줄바꿈 Enter · 숫자는 자동 강조 · <b>| 단어</b> 강조 · 여러 색 <b>[노랑]..[/] [빨강]..[/]</b></span></label>
-    <textarea id="editHook" style="min-height:56px" oninput="renderHookPreview()" placeholder="예) [노랑]사진만 넣으면[/] 홍보글이 [초록]뚝딱![/]"></textarea>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px" id="hookStudio">
-      <span class="hint">단어에 <b>커서만 두고</b>(또는 드래그) 색을 누르세요 · 같은 색 다시 누르면 해제 →</span>
-      <span id="hookColorChips"></span>
-      <button class="ghost" style="padding:4px 8px" onclick="clearHookMarkup(event)">지우기</button>
-      <span class="hint" style="margin-left:6px">· 크기</span>
-      <select id="hookSizeSel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
-        <option value="0.85">작게</option>
-        <option value="1" selected>기본</option>
-        <option value="1.2">크게</option>
-        <option value="1.4">아주 크게</option>
+
+    <div id="videoBlock">
+      <div class="steplabel"><span class="stepnum">1</span>편집할 영상 고르기</div>
+      <div style="display:flex; gap:8px">
+        <input type="text" id="editVideo" style="flex:1" placeholder="[📁 영상 선택] 버튼을 누르거나, 영상 파일 경로를 붙여넣기">
+        <button class="ghost" style="white-space:nowrap" onclick="pickFile(event)">📁 영상 선택</button>
+      </div>
+      <div class="hint">버튼을 누르면 파일 탐색기가 열려요. 폴더 경로를 넣으면 그 안의 최신 영상을 씁니다.</div>
+    </div>
+
+    <div id="photoBlock" class="hidden">
+      <div class="steplabel"><span class="stepnum">1</span>사진 고르기</div>
+      <input type="text" id="photoPath" placeholder="사진이 들어 있는 폴더 경로를 붙여넣기 (안의 사진 전부, 이름 순서대로)">
+      <div class="hint">파일 경로 여러 개를 줄바꿈/세미콜론으로 넣어도 돼요. 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
+      <div class="chk" style="gap:8px">
+        <span>영상 전체 길이</span>
+        <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px">
+        <span class="hint">초 — 예) 사진 5장 + 15초 = 한 장당 3초씩</span>
+      </div>
+    </div>
+
+    <div class="steplabel"><span class="stepnum">2</span>어떻게 완성할까요?</div>
+    <div class="toggle">
+      <label><input type="radio" name="editFinish" value="review" checked onchange="onFinishChange()"><span>✋ 자막 확인 후 완성 (추천)</span></label>
+      <label><input type="radio" name="editFinish" value="auto" onchange="onFinishChange()"><span>🤖 완전 자동 (끝까지 알아서)</span></label>
+    </div>
+    <div class="hint" id="finishHint">중간에 자막을 확인하는 화면이 한 번 나와요 — 오타만 고치고 [완성]을 누르면 됩니다.</div>
+    <div id="autoOptRow" class="chk hidden" style="gap:8px">
+      <span>완성 길이</span>
+      <select id="autoTargetPreset" style="width:auto;padding:6px 8px" onchange="applyTargetPreset()">
+        <option value="30" selected>쇼츠 30초 — 핵심만 자동 선별</option>
+        <option value="60">쇼츠 60초</option>
+        <option value="0">원본 길이 그대로</option>
+        <option value="custom">직접 입력…</option>
+      </select>
+      <input type="number" id="autoTargetSec" value="30" min="0" max="90" style="width:64px;padding:6px" class="hidden">
+      <span class="hint">· 재생 속도</span>
+      <select id="editSpeedSel" style="width:auto;padding:6px 8px">
+        <option value="1">1배</option>
+        <option value="1.25">1.25배</option>
+        <option value="1.5">1.5배</option>
+        <option value="2">2배</option>
       </select>
     </div>
-    <div id="hookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
-    <div style="display:flex;gap:6px;margin-top:6px">
-      <input type="text" id="editHookTopic" style="flex:1" placeholder="영상 주제 키워드 (예: 블로그 자동화)">
-      <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ 제목 추천</button>
-    </div>
-    <div id="editHookCands" class="hookcands"></div>
-    <div class="row">
-      <div>
-        <label>출력 형태</label>
-        <div class="toggle">
-          <label><input type="radio" name="editLayout" value="shorts" checked><span>쇼츠 (세로 9:16)</span></label>
-          <label><input type="radio" name="editLayout" value="keep"><span>원본 비율 유지</span></label>
-        </div>
+
+    <div class="steplabel" style="margin-top:20px"><span class="stepnum">3</span>꾸미기 <span class="hint">— 전부 선택사항. 필요한 줄만 눌러서 펼치세요</span></div>
+
+    <details class="opt" id="optHook">
+      <summary>🪝 상단 제목 넣기 <span class="hint">— 화면 위에 크게 박히는 한 줄 (색·크기·미리보기)</span></summary>
+      <textarea id="editHook" style="min-height:56px" oninput="renderHookPreview()" placeholder="예) 사진만 넣으면 홍보글이 뚝딱!   (줄바꿈은 Enter)"></textarea>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px" id="hookStudio">
+        <span class="hint">색 넣기: 단어에 <b>커서만 두고</b> 색을 누르세요 (다시 누르면 해제) →</span>
+        <span id="hookColorChips"></span>
+        <button class="ghost" style="padding:4px 8px" onclick="clearHookMarkup(event)">색 지우기</button>
+        <span class="hint" style="margin-left:6px">· 크기</span>
+        <select id="hookSizeSel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
+          <option value="0.85">작게</option>
+          <option value="1" selected>기본</option>
+          <option value="1.2">크게</option>
+          <option value="1.4">아주 크게</option>
+        </select>
       </div>
-      <div>
-        <label>음성 인식</label>
-        <select id="sttSel"></select>
-        <div class="hint" id="sttHint"></div>
-        <div id="whisperModelRow" class="hidden" style="margin-top:6px">
-          <label style="margin-top:0">정확도(Whisper 모델)</label>
-          <select id="whisperModelSel">
-            <option value="tiny">tiny — 가장 빠름·정확도 낮음</option>
-            <option value="base">base — 빠름</option>
-            <option value="small" selected>small — 기본(권장)</option>
-            <option value="medium">medium — 느림·정확도↑</option>
-            <option value="large-v3">large-v3 — 가장 느림·최고 정확도</option>
-          </select>
-          <div class="hint">클수록 정확하지만 느리고, 첫 사용 시 모델 다운로드가 큽니다.</div>
-        </div>
+      <div id="hookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input type="text" id="editHookTopic" style="flex:1" placeholder="뭐라고 쓸지 모르겠다면 → 주제 키워드 입력 (예: 블로그 자동화)">
+        <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ AI 제목 추천</button>
       </div>
-    </div>
-    <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
-      <label style="margin-top:0">📸 사진으로 영상 만들기 <span class="hint">(선택 — 영상 대신 사진들로)</span></label>
-      <div class="row">
-        <div style="flex:2">
-          <input type="text" id="photoPath" placeholder="사진 폴더 경로 (안의 사진 전부, 이름순) 또는 파일 경로 여러 개(줄바꿈/세미콜론)">
-        </div>
-        <div>
-          <label class="hint" style="margin:0 0 4px">전체 길이(초)</label>
-          <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px">
-        </div>
-      </div>
-      <div class="hint">예) 사진 5장 + 15초 → 한 장당 3초씩. 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게. 여기에 AI 내레이션(또는 자막만)·배경음악·상단 제목을 그대로 얹을 수 있어요. 사진을 넣으면 위 영상 경로는 무시됩니다.</div>
-    </div>
-    <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
-      <label style="margin-top:0">🎙️ AI 내레이션 추가 <span class="hint">(선택 — 말 없는 영상에 AI 대본+목소리+자막)</span></label>
+      <div id="editHookCands" class="hookcands"></div>
+      <div class="hint">숫자는 자동으로 노랗게 강조돼요. 직접 표시하려면 <b>| 단어</b>(강조)나 <b>[노랑]글자[/]</b>(색)도 됩니다.</div>
+    </details>
+
+    <details class="opt" id="optNarr">
+      <summary>🎙️ AI 내레이션 <span class="hint">— 주제만 쓰면 대본+목소리+자막을 자동으로 얹어요 (내 목소리 등록도 여기)</span></summary>
       <input type="text" id="narrTopic" oninput="onNarrTopicInput()" placeholder="영상 주제/내용 입력 (예: 동네 라멘 맛집 소개) — 비우면 사용 안 함">
       <div class="row" style="margin-top:8px">
         <div>
@@ -1616,122 +1680,137 @@ _HTML = """<!doctype html>
         </div>
         <div class="hint" style="margin-top:6px">등록하면 위 보이스 목록에 「🎤 내 목소리」가 생겨요. ⚠ 어떤 방식이든 꼭 <b>본인 목소리</b>만 등록하세요 (타인 목소리 무단 클로닝 금지).</div>
       </details>
-    </div>
-    <div style="margin-top:12px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
-      <label style="margin-top:0">📝 대본 직접 입력 <span class="hint">(선택 — 이미 대본이 있을 때)</span></label>
+    </details>
+
+    <details class="opt" id="optSound">
+      <summary>🎵 소리·배경음악 <span class="hint">— 원본 소리 조절 · BGM 넣기 · 잡음 제거</span></summary>
+      <div class="chk" style="gap:8px;margin-top:4px">
+        <span>🔈 원본 소리</span>
+        <select id="origAudioSel" style="width:auto;padding:6px 8px" onchange="window._origTouched=true">
+          <option value="keep">그대로</option>
+          <option value="low">작게 (배경으로)</option>
+          <option value="mute">무음 (소리 제거)</option>
+        </select>
+        <span class="hint">영상 속 말소리·소음을 뺄 때 '무음' — AI 내레이션을 넣으면 자동으로 무음이 돼요</span>
+      </div>
+      <div class="chk" style="gap:8px">
+        <span>🎵 배경음악</span>
+        <select id="bgmEditSel" style="width:auto;max-width:220px;padding:6px 8px">
+          <option value="">없음</option>
+        </select>
+        <select id="bgmVolSel" style="width:auto;padding:6px 8px">
+          <option value="-20">은은하게</option>
+          <option value="-14" selected>중간</option>
+          <option value="-9">크게</option>
+        </select>
+        <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'bgmEditSel','bgmVolSel')">▶ 미리듣기</button>
+        <span class="hint">영상 길이만큼 반복+페이드. <b>windows\\6_무료음원_받기.bat</b>로 유명 무료 BGM 14곡 자동 채우기</span>
+      </div>
+      <div class="chk" style="gap:8px">
+        <span>🔇 잡음 제거</span>
+        <select id="denoiseSel" style="width:auto;padding:6px 8px">
+          <option value="">끔</option>
+          <option value="low">약하게</option>
+          <option value="mid">중간 (권장)</option>
+          <option value="high">강하게</option>
+        </select>
+        <span class="hint">배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
+      </div>
+    </details>
+
+    <details class="opt" id="optWm">
+      <summary>🏷️ 워터마크(로고) <span class="hint">— 내 채널 로고를 화면 구석에</span></summary>
+      <div class="chk" style="gap:8px;margin-top:4px">
+        <input type="text" id="wmPath" style="flex:1;min-width:180px;padding:6px 8px" placeholder="로고 이미지 경로 (투명 PNG 권장) — 비우면 없음">
+        <select id="wmPos" style="width:auto;padding:6px 8px">
+          <option value="tr">우상단</option>
+          <option value="tl">좌상단</option>
+          <option value="br">우하단</option>
+          <option value="bl">좌하단</option>
+        </select>
+        <select id="wmScale" style="width:auto;padding:6px 8px">
+          <option value="0.10">작게</option>
+          <option value="0.14" selected>중간</option>
+          <option value="0.20">크게</option>
+        </select>
+      </div>
+      <div class="hint">한 번 넣으면 기억돼요. 쇼츠 UI 안전영역을 피해 배치됩니다.</div>
+    </details>
+
+    <details class="opt" id="optScript">
+      <summary>📝 대본 직접 넣기 <span class="hint">— 써둔 대본이 있으면 음성 인식 없이 그대로 자막으로</span></summary>
       <textarea id="editScript" oninput="onScriptInput()" style="min-height:64px"
         placeholder="대본이 있으면 여기 붙여넣기 (한 줄 = 자막 한 줄)&#10;예)&#10;오늘은 라멘 맛집을 소개합니다&#10;가격은 육천구백원이에요&#10;&#10;비우면 영상 소리에서 자동으로 자막을 인식합니다"></textarea>
       <div class="hint" id="scriptHint">붙여넣으면 <b>음성 인식을 건너뛰고</b> 이 대본을 영상 타이밍에 맞춰 자막으로 넣어요 (오인식·비용 없음). 내레이션 없는 영상에도 쓸 수 있어요.</div>
-    </div>
-    <div class="chk" style="margin-top:10px">
-      <input type="checkbox" id="autoSubChk" checked onchange="toggleAutoSub()">
-      <span>자동 자막 만들기 (말한 내용을 자막으로) — <b>내레이션 없는 영상은 체크 해제</b></span>
-    </div>
-    <div class="chk">
-      <input type="checkbox" id="cutSilenceChk" checked>
-      <span>무음(빈) 구간 자동 컷 — 끄면 원본 길이 그대로</span>
-    </div>
-    <div class="chk" style="gap:8px">
-      <span>🔇 잡음 제거</span>
-      <select id="denoiseSel" style="width:auto;padding:6px 8px">
-        <option value="">끔</option>
-        <option value="low">약하게</option>
-        <option value="mid">중간 (권장)</option>
-        <option value="high">강하게</option>
-      </select>
-      <span class="hint">배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
-    </div>
-    <div class="chk" style="gap:8px">
-      <span>🔈 원본 소리</span>
-      <select id="origAudioSel" style="width:auto;padding:6px 8px" onchange="window._origTouched=true">
-        <option value="keep">그대로</option>
-        <option value="low">작게 (배경으로)</option>
-        <option value="mute">무음 (소리 제거)</option>
-      </select>
-      <span class="hint">영상에 있는 말소리·소음을 뺄 때 '무음' — AI 내레이션을 넣으면 자동으로 무음이 돼요</span>
-    </div>
-    <div class="chk" style="gap:8px">
-      <span>🎵 배경음악</span>
-      <select id="bgmEditSel" style="width:auto;max-width:220px;padding:6px 8px">
-        <option value="">없음</option>
-      </select>
-      <select id="bgmVolSel" style="width:auto;padding:6px 8px">
-        <option value="-20">은은하게</option>
-        <option value="-14" selected>중간</option>
-        <option value="-9">크게</option>
-      </select>
-      <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'bgmEditSel','bgmVolSel')">▶ 미리듣기</button>
-      <span class="hint">영상 길이만큼 반복+페이드. <b>windows\6_무료음원_받기.bat</b>로 유명 무료 BGM 14곡 자동 채우기</span>
-    </div>
-    <div class="chk" style="gap:8px">
-      <span>🏷️ 워터마크</span>
-      <input type="text" id="wmPath" style="flex:1;min-width:180px;padding:6px 8px" placeholder="로고 이미지 경로 (투명 PNG 권장) — 비우면 없음">
-      <select id="wmPos" style="width:auto;padding:6px 8px">
-        <option value="tr">우상단</option>
-        <option value="tl">좌상단</option>
-        <option value="br">우하단</option>
-        <option value="bl">좌하단</option>
-      </select>
-      <select id="wmScale" style="width:auto;padding:6px 8px">
-        <option value="0.10">작게</option>
-        <option value="0.14" selected>중간</option>
-        <option value="0.20">크게</option>
-      </select>
-      <span class="hint">한 번 넣으면 기억돼요. 쇼츠 UI 안전영역을 피해 배치됩니다</span>
-    </div>
-    <div class="chk" style="gap:8px">
-      <input type="checkbox" id="autoEditChk">
-      <span>🤖 완전 자동 — 검토 없이 바로 완성</span>
-      <span class="hint">목표</span>
-      <input type="number" id="autoTargetSec" value="30" min="0" max="90" style="width:64px;padding:6px">
-      <span class="hint">초 (0=전체 유지 · 30=핵심만 모아 30초 쇼츠. 키 있으면 AI가 다듬고 골라요)</span>
-      <span class="hint">· 재생 속도</span>
-      <select id="editSpeedSel" style="width:auto;padding:6px 8px">
-        <option value="1">1배</option>
-        <option value="1.25">1.25배</option>
-        <option value="1.5">1.5배</option>
-        <option value="2">2배</option>
-      </select>
-    </div>
-    <div id="editKeyRow" class="hidden">
-      <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
-      <input type="password" id="editGeminiKey" placeholder="AIza...">
-    </div>
-    <div class="hint" style="margin-top:8px">말 안 하는 빈 구간을 잘라내고, 말한 내용을 자동으로 자막으로 붙입니다. 가로 영상은 세로 쇼츠로 자동 배치돼요.</div>
+    </details>
+
+    <details class="opt" id="optAdv">
+      <summary>⚙️ 세부 설정 <span class="hint">— 화면 비율 · 자동 자막/무음 컷 · 음성 인식 엔진</span></summary>
+      <div class="row" style="margin-top:4px">
+        <div>
+          <label>출력 형태</label>
+          <div class="toggle">
+            <label><input type="radio" name="editLayout" value="shorts" checked><span>쇼츠 (세로 9:16)</span></label>
+            <label><input type="radio" name="editLayout" value="keep"><span>원본 비율 유지</span></label>
+          </div>
+        </div>
+        <div>
+          <label>음성 인식 엔진</label>
+          <select id="sttSel"></select>
+          <div class="hint" id="sttHint"></div>
+          <div id="whisperModelRow" class="hidden" style="margin-top:6px">
+            <label style="margin-top:0">정확도(Whisper 모델)</label>
+            <select id="whisperModelSel">
+              <option value="tiny">tiny — 가장 빠름·정확도 낮음</option>
+              <option value="base">base — 빠름</option>
+              <option value="small" selected>small — 기본(권장)</option>
+              <option value="medium">medium — 느림·정확도↑</option>
+              <option value="large-v3">large-v3 — 가장 느림·최고 정확도</option>
+            </select>
+            <div class="hint">클수록 정확하지만 느리고, 첫 사용 시 모델 다운로드가 큽니다.</div>
+          </div>
+        </div>
+      </div>
+      <div class="chk" style="margin-top:10px">
+        <input type="checkbox" id="autoSubChk" checked onchange="toggleAutoSub()">
+        <span>자동 자막 만들기 (말한 내용을 자막으로) — <b>내레이션 없는 영상은 체크 해제</b></span>
+      </div>
+      <div class="chk">
+        <input type="checkbox" id="cutSilenceChk" checked>
+        <span>무음(빈) 구간 자동 컷 — 끄면 원본 길이 그대로</span>
+      </div>
+      <div id="editKeyRow" class="hidden">
+        <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
+        <input type="password" id="editGeminiKey" placeholder="AIza...">
+      </div>
+    </details>
+
+    <div class="hint" style="margin-top:14px">그냥 [만들기 시작]만 눌러도 충분해요 — 빈(무음) 구간을 잘라내고, 말한 내용을 자막으로 붙이고, 가로 영상은 세로 쇼츠로 자동 배치합니다.</div>
     <div style="display:flex;gap:8px">
-      <button id="editBtn" style="flex:1" onclick="startEdit()">✂️ 편집 시작</button>
+      <button id="editBtn" style="flex:1" onclick="startEdit()">✂️ 만들기 시작</button>
       <button class="ghost" style="white-space:nowrap" onclick="resetEditForm(event)" title="편집 폼의 모든 입력을 기본값으로 되돌립니다">↺ 초기화</button>
     </div>
   </div>
 
-  <div class="card" id="formCard">
-    <label>쇼츠 주제</label>
-    <input type="text" id="topic" placeholder="예) 하루 10분 정리 습관" value="하루 10분 정리 습관">
-    <label>상단 제목(훅) <span class="hint">— 비우면 대본 제목이 자동으로 위에 크게 표시됩니다</span></label>
-    <textarea id="genHook" style="min-height:52px" placeholder="비워두면 AI가 만든 제목을 사용 / 직접 쓰려면 여기에 (줄바꿈 Enter)"></textarea>
-    <button class="ghost" style="margin-top:6px" onclick="suggestHooks(event,'topic','genHook')">✨ AI 제목 추천받기</button>
-    <div id="genHookCands" class="hookcands"></div>
-
-    <div class="row">
-      <div>
-        <label>모드</label>
-        <div class="toggle">
-          <label><input type="radio" name="mode" value="auto" checked><span>자동 (한 번에 완성)</span></label>
-          <label><input type="radio" name="mode" value="review"><span>검토 (대본 확인 후)</span></label>
-        </div>
-      </div>
-      <div>
-        <label>목소리</label>
-        <div class="toggle">
-          <label id="provWinLabel" class="hidden"><input type="radio" name="prov" value="windows" id="provWin"><span>내장 음성 (무료)</span></label>
-          <label id="provMineLabel" class="hidden"><input type="radio" name="prov" value="elevenlabs" id="provMine"><span>🎤 내 목소리</span></label>
-          <label id="provSovitsLabel" class="hidden"><input type="radio" name="prov" value="sovits" id="provSovits"><span>🎤 내 목소리 (무료·내 PC)</span></label>
-          <label><input type="radio" name="prov" value="gemini"><span>Gemini (실전 품질)</span></label>
-          <label><input type="radio" name="prov" value="stub" checked><span>테스트 톤</span></label>
-        </div>
-        <div class="hint">내장 음성 = Windows 한국어 음성(키·인터넷 불필요) · Gemini = 성우급 + <b>진짜 대본 생성</b> · 테스트 톤 = "삐-" 소리(기계 점검용)</div>
-      </div>
+  <div class="card hidden" id="formCard">
+    <div class="backrow">
+      <button class="ghost" onclick="showHome(event)">← 처음으로</button>
+      <b>🤖 AI 영상 만들기</b>
     </div>
+
+    <div class="steplabel"><span class="stepnum">1</span>영상 주제 쓰기</div>
+    <input type="text" id="topic" placeholder="예) 하루 10분 정리 습관" value="하루 10분 정리 습관">
+    <div class="hint">이 주제로 AI가 대본을 쓰고 자막·배경·목소리까지 자동으로 만듭니다.</div>
+
+    <div class="steplabel"><span class="stepnum">2</span>목소리 고르기</div>
+    <div class="toggle">
+      <label><input type="radio" name="prov" value="gemini"><span>🌟 AI 성우 (추천)</span></label>
+      <label id="provWinLabel" class="hidden"><input type="radio" name="prov" value="windows" id="provWin"><span>내장 음성 (무료)</span></label>
+      <label id="provMineLabel" class="hidden"><input type="radio" name="prov" value="elevenlabs" id="provMine"><span>🎤 내 목소리</span></label>
+      <label id="provSovitsLabel" class="hidden"><input type="radio" name="prov" value="sovits" id="provSovits"><span>🎤 내 목소리 (무료·내 PC)</span></label>
+      <label><input type="radio" name="prov" value="stub" checked><span>🔧 테스트 톤</span></label>
+    </div>
+    <div class="hint">🌟 AI 성우 = 성우급 목소리 + <b>진짜 AI 대본</b>(무료 Gemini 키 필요) · 내장 음성 = Windows 한국어 음성(키·인터넷 불필요) · 테스트 톤 = "삐-" 소리(기계 점검용)</div>
 
     <div id="keyRow" class="hidden">
       <label>Gemini API 키 <span class="hint">(<a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급</a>)</span></label>
@@ -1761,28 +1840,44 @@ _HTML = """<!doctype html>
       </div>
     </div>
 
-    <div class="row">
-      <div>
-        <label>배경음악 (BGM)</label>
-        <div style="display:flex;gap:6px">
-          <select id="bgmSel" style="flex:1"><option value="">없음</option></select>
-          <button class="ghost" style="white-space:nowrap" onclick="previewBgm(event,'bgmSel',null)">▶ 미리듣기</button>
-        </div>
-        <div class="hint">windows\6_무료음원_받기.bat로 유명 무료 BGM 자동 채우기. 저작권 확인된 음원만 사용하세요.</div>
+    <div class="steplabel" style="margin-top:20px"><span class="stepnum">3</span>꾸미기 <span class="hint">— 전부 선택사항. 필요한 줄만 눌러서 펼치세요</span></div>
+
+    <details class="opt">
+      <summary>🪝 상단 제목 넣기 <span class="hint">— 비우면 AI가 만든 제목이 자동으로 크게 들어가요</span></summary>
+      <textarea id="genHook" style="min-height:52px" placeholder="비워두면 AI가 만든 제목을 사용 / 직접 쓰려면 여기에 (줄바꿈 Enter)"></textarea>
+      <button class="ghost" style="margin-top:6px" onclick="suggestHooks(event,'topic','genHook')">✨ AI 제목 추천받기</button>
+      <div id="genHookCands" class="hookcands"></div>
+    </details>
+
+    <details class="opt">
+      <summary>🎵 배경음악 <span class="hint">— 영상에 깔릴 음악 고르기</span></summary>
+      <div style="display:flex;gap:6px;margin-top:4px">
+        <select id="bgmSel" style="flex:1"><option value="">없음</option></select>
+        <button class="ghost" style="white-space:nowrap" onclick="previewBgm(event,'bgmSel',null)">▶ 미리듣기</button>
       </div>
-    </div>
+      <div class="hint"><b>windows\\6_무료음원_받기.bat</b>로 유명 무료 BGM 자동 채우기. 저작권 확인된 음원만 사용하세요.</div>
+    </details>
 
-    <div class="chk">
-      <input type="checkbox" id="draftChk">
-      <span>캡컷 draft도 생성 (출력 A — 캡컷 설치 PC)</span>
-    </div>
-    <div id="draftRow" class="hidden">
-      <label>캡컷 Drafts 폴더</label>
-      <input type="text" id="draftsDir" placeholder="자동 감지 실패 시 직접 입력">
-    </div>
+    <details class="opt">
+      <summary>⚙️ 세부 설정 <span class="hint">— 대본 미리 확인 · 캡컷 연동</span></summary>
+      <label style="margin-top:4px">완성 방식</label>
+      <div class="toggle">
+        <label><input type="radio" name="mode" value="auto" checked><span>자동 (한 번에 완성)</span></label>
+        <label><input type="radio" name="mode" value="review"><span>검토 (대본 확인 후)</span></label>
+      </div>
+      <div class="chk">
+        <input type="checkbox" id="draftChk">
+        <span>캡컷 draft도 생성 (출력 A — 캡컷 설치 PC)</span>
+      </div>
+      <div id="draftRow" class="hidden">
+        <label>캡컷 Drafts 폴더</label>
+        <input type="text" id="draftsDir" placeholder="자동 감지 실패 시 직접 입력">
+      </div>
+    </details>
 
+    <div class="hint" style="margin-top:14px">주제와 목소리만 고르고 [생성 시작]을 누르면 끝 — 완성까지 보통 몇 분 걸려요.</div>
     <div style="display:flex;gap:8px">
-      <button id="goBtn" style="flex:1" onclick="generate()">생성 시작</button>
+      <button id="goBtn" style="flex:1" onclick="generate()">🎬 생성 시작</button>
       <button class="ghost" style="white-space:nowrap" onclick="resetGenForm(event)" title="생성 폼의 입력을 기본값으로 되돌립니다">↺ 초기화</button>
     </div>
   </div>
@@ -1806,9 +1901,9 @@ _HTML = """<!doctype html>
     </div>
 
     <div id="subEditBox" class="hidden">
-      <div style="font-weight:700;margin-bottom:4px">✏️ 자막 검토·수정</div>
-      <div class="hint">틀린 자막을 고치세요. 자막 칸을 누르면 <b>영상이 자동으로 멈춥니다</b>. <b>스페이스바</b>=재생/정지, 각 줄 <b>▶</b>=그 지점부터 듣기, <b>✂</b>=줄 나누기. (자막 없이 완성하려면 전부 비우고 완성)</div>
-      <div class="hint">💛 강조(노란 글씨): 문장 끝에 <b>| 단어</b> · 🌈 여러 색: <b>[노랑]...[/] [빨강]...[/] [초록]...[/]</b> — 예: <code>[노랑]월급 3배[/] 밥값은 [빨강]절반?![/]</code></div>
+      <div style="font-weight:700;margin-bottom:4px">✏️ 자막 확인하고 완성하기</div>
+      <div class="hint" style="font-size:13px;color:#cdd3e0">① 아래 자막에서 <b>틀린 글자만 고치세요</b> (칸을 누르면 영상이 멈춰요) → ② 쇼츠로 줄이려면 ✂️ 줄에서 구간을 고르거나 [✨ AI 핵심 추천] → ③ 맨 아래 <b>[✅ 완성]</b> 버튼</div>
+      <div class="hint">각 줄 <b>▶</b>=그 지점부터 듣기 · <b>✂</b>=줄 나누기 · <b>스페이스바</b>=재생/정지 · 💛 강조는 문장 끝에 <b>| 단어</b>, 색은 <b>[노랑]글자[/]</b></div>
       <div class="playbar">
         <video id="cutPlayer" controls playsinline></video>
         <div class="playrow">
@@ -1841,14 +1936,19 @@ _HTML = """<!doctype html>
       <div class="hint" id="hlReason" style="margin-top:4px"></div>
       <div id="subList" class="subList-scroll" style="margin-top:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-        <button class="ghost" onclick="analyzeAI(event)" title="장면 캡처+자막을 AI가 보고 제목·훅·대본을 추천 (제미나이 키 권장)">🧠 AI 영상 분석 (제목·대본)</button>
         <button class="ghost" onclick="refineSubs(event)" title="발음 오인식을 문맥에 맞게 자연스럽게 자동 교정 (제미나이 키 필요)">🪄 AI로 대본 다듬기</button>
         <button class="ghost" onclick="addSubRow(event)">+ 자막 줄 추가</button>
-        <button class="ghost" onclick="pronounceSubs(event)">숫자·영어 → 한글</button>
-        <button class="ghost" onclick="toggleBulk(event)">📋 대본 일괄 붙여넣기</button>
-        <button class="ghost" onclick="downloadScript(event,'txt')">📥 대본 저장(.txt)</button>
-        <button class="ghost" onclick="downloadScript(event,'srt')">📥 자막 저장(.srt)</button>
       </div>
+      <details class="opt" style="margin-top:8px">
+        <summary>🧰 더 많은 도구 <span class="hint">— AI 영상 분석 · 대본 저장 · 일괄 붙여넣기 · 발음 변환</span></summary>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <button class="ghost" onclick="analyzeAI(event)" title="장면 캡처+자막을 AI가 보고 제목·훅·대본을 추천 (제미나이 키 권장)">🧠 AI 영상 분석 (제목·대본)</button>
+          <button class="ghost" onclick="pronounceSubs(event)">숫자·영어 → 한글 발음</button>
+          <button class="ghost" onclick="toggleBulk(event)">📋 대본 일괄 붙여넣기</button>
+          <button class="ghost" onclick="downloadScript(event,'txt')">📥 대본 저장(.txt)</button>
+          <button class="ghost" onclick="downloadScript(event,'srt')">📥 자막 저장(.srt)</button>
+        </div>
+      </details>
       <div id="aiAnalyzeBox" class="hidden" style="margin-top:8px;padding:10px 12px;border:1px solid #2c3350;border-radius:10px">
         <div class="hint" id="aiSummary" style="margin-bottom:6px"></div>
         <b style="font-size:13px">🪝 상단 훅 추천 (클릭하면 채워져요)</b>
@@ -1890,6 +1990,7 @@ _HTML = """<!doctype html>
     </div>
 
     <div id="doneBox" class="hidden">
+      <div style="font-weight:800;font-size:16px;margin-top:8px">🎉 영상 완성!</div>
       <div class="stage" id="providerBadge"></div>
       <video id="player" controls playsinline></video>
       <div class="stage" id="outPaths"></div>
@@ -1925,7 +2026,7 @@ _HTML = """<!doctype html>
       <summary class="hint" style="cursor:pointer">자세히 (원본 오류)</summary>
       <pre class="err" id="rawErrText" style="overflow-x:auto"></pre>
     </details>
-    <button class="ghost" style="margin-top:14px" onclick="resetForm()">+ 새 작업</button>
+    <button class="ghost" style="margin-top:14px" onclick="resetForm()">🏠 처음으로 (새 작업)</button>
   </div>
 
   <div class="card">
@@ -1972,8 +2073,7 @@ _HTML = """<!doctype html>
     <pre id="logBox" style="max-height:260px;overflow:auto;background:#0d0f14;border:1px solid #2c3350;border-radius:8px;padding:10px;font-size:12px;line-height:1.55;white-space:pre-wrap;margin-top:8px">(아직 로그 없음)</pre>
   </details>
   <div style="text-align:center;margin-top:12px">
-    <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
-    <button class="ghost" onclick="diagnostic(event)">🩺 진단 리포트 저장 (로그 포함)</button>
+    <button class="ghost" onclick="diagnostic(event)">🩺 진단 리포트 저장 (문의할 때 첨부)</button>
   </div>
 </div>
 
@@ -1994,15 +2094,41 @@ $('draftChk').onchange = () => $('draftRow').classList.toggle('hidden', !$('draf
 
 function pick(name){ return document.querySelector(`input[name=${name}]:checked`).value; }
 
-function switchAppMode(){
-  const edit = pick('appmode') === 'edit';
-  $('editCard').classList.toggle('hidden', !edit);
-  $('formCard').classList.toggle('hidden', edit);
-  // 진행/완료 상태 카드는 그 작업을 시작한 모드에서만 보이게 (모드 간 섞임 방지)
-  const mismatch = currentJob && window._jobMode &&
-    ((edit && window._jobMode !== 'edit') || (!edit && window._jobMode !== 'gen'));
-  if(currentJob) $('statusCard').classList.toggle('hidden', !!mismatch);
-  if(edit && !window._sttFilled) loadStt();
+// ── 첫 화면(홈) ↔ 만들기 폼 전환 (v0.36 초보자 UI) ──
+function openMode(kind){
+  window._view = kind;                       // 'gen' | 'edit' | 'photo'
+  $('homeCard').classList.add('hidden');
+  $('formCard').classList.toggle('hidden', kind !== 'gen');
+  $('editCard').classList.toggle('hidden', kind === 'gen');
+  if(kind !== 'gen'){
+    window._editKind = kind;
+    $('videoBlock').classList.toggle('hidden', kind === 'photo');
+    $('photoBlock').classList.toggle('hidden', kind !== 'photo');
+    // 사진 모드엔 음성 인식·무음 컷이 없음 → 세부 설정을 숨겨 화면 단순화
+    $('optAdv').classList.toggle('hidden', kind === 'photo');
+    $('editTitleLabel').textContent = kind === 'photo' ? '📸 사진으로 영상 만들기' : '✂️ 내 영상 편집';
+    if(!window._sttFilled) loadStt();
+  }
+}
+function showHome(ev){
+  if(ev) ev.preventDefault();
+  window._view = 'home';
+  $('homeCard').classList.remove('hidden');
+  $('formCard').classList.add('hidden');
+  $('editCard').classList.add('hidden');
+}
+function onFinishChange(){
+  const auto = pick('editFinish') === 'auto';
+  $('autoOptRow').classList.toggle('hidden', !auto);
+  $('finishHint').textContent = auto
+    ? '검토 없이 끝까지 자동으로 만들어요. Gemini 키가 있으면 AI가 자막을 다듬고 핵심 구간까지 골라줍니다.'
+    : '중간에 자막을 확인하는 화면이 한 번 나와요 — 오타만 고치고 [완성]을 누르면 됩니다.';
+}
+function applyTargetPreset(){
+  const p = $('autoTargetPreset').value;
+  const n = $('autoTargetSec');
+  n.classList.toggle('hidden', p !== 'custom');
+  if(p !== 'custom') n.value = p;
 }
 
 const STT_KO = {whisper:'내장 Whisper (무료·오프라인)', gemini:'Gemini (내 키)', openai:'OpenAI (내 키)'};
@@ -2060,9 +2186,11 @@ function onScriptInput(){
 }
 
 async function startEdit(){
-  const video = $('editVideo').value.trim();
-  const photos = ($('photoPath')||{}).value||'';
-  if(!video && !photos.trim()){ alert('영상 파일(또는 📸 사진 폴더) 경로를 입력하세요'); return; }
+  const kind = window._editKind || 'edit';
+  const video = kind === 'photo' ? '' : $('editVideo').value.trim();
+  const photos = kind === 'photo' ? (($('photoPath')||{}).value||'').trim() : '';
+  if(kind === 'photo' && !photos){ alert('사진 폴더(또는 사진 파일들) 경로를 넣어주세요'); return; }
+  if(kind !== 'photo' && !video){ alert('편집할 영상을 먼저 골라주세요 — [📁 영상 선택] 버튼을 눌러보세요'); return; }
   const nv = ($('narrVoiceSel')||{}).value||'';
   let editKey = $('editGeminiKey').value;
   // 내레이션 보이스는 제미나이 키가 있어야 적용 — 없으면 여기서 물어봐 저장
@@ -2075,7 +2203,7 @@ async function startEdit(){
   const body = {
     video_path: video, layout: pick('editLayout'), hook: $('editHook').value,
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
-    photo_path: ($('photoPath')||{}).value||'', photo_sec: +(($('photoSec')||{}).value)||15,
+    photo_path: photos, photo_sec: +(($('photoSec')||{}).value)||15,
     hook_scale: +(($('hookSizeSel')||{}).value)||1,
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
@@ -2085,7 +2213,7 @@ async function startEdit(){
     wm_path: ($('wmPath')||{}).value||'', wm_pos: ($('wmPos')||{}).value||'tr',
     wm_scale: +(($('wmScale')||{}).value)||0.14,
     speed: +$('editSpeedSel').value || 1,
-    auto_edit: $('autoEditChk').checked, auto_target_sec: +$('autoTargetSec').value||0,
+    auto_edit: pick('editFinish') === 'auto', auto_target_sec: +$('autoTargetSec').value||0,
     script: $('editScript').value,
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
     gemini_key: editKey, save_key: true,
@@ -2097,6 +2225,7 @@ async function startEdit(){
   window._jobMode = 'edit';
   window._subLoaded = false;
   $('editBtn').disabled = true;
+  $('editCard').classList.add('hidden');   // 진행 화면에 집중 (🏠 처음으로 로 복귀)
   $('statusCard').classList.remove('hidden');
   $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
   $('subEditBox').classList.add('hidden');
@@ -2503,6 +2632,7 @@ async function generate(){
   currentJob = data.job_id;
   window._jobMode = 'gen';
   $('goBtn').disabled = true;
+  $('formCard').classList.add('hidden');   // 진행 화면에 집중 (🏠 처음으로 로 복귀)
   $('statusCard').classList.remove('hidden');
   $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
   $('rawErr').classList.add('hidden'); $('noteText').textContent='';
@@ -2733,7 +2863,9 @@ function resetEditForm(ev){
   set('denoiseSel',''); window._origTouched = false; set('origAudioSel','keep');
   set('bgmEditSel',''); set('bgmVolSel','-14');
   set('wmPath',''); set('wmPos','tr'); set('wmScale','0.14');
-  chk('autoEditChk',false); set('autoTargetSec',30); set('editSpeedSel','1');
+  const rf = document.querySelector('input[name=editFinish][value=review]'); if(rf) rf.checked = true;
+  set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1');
+  onFinishChange(); applyTargetPreset();
   const st = $('sttSel'); if(st && st.options.length) st.selectedIndex = 0;
   set('whisperModelSel','small');
   renderHookPreview(); onNarrTopicInput();
@@ -2855,6 +2987,7 @@ async function poll(){
     }
   }
   $('keySaved').classList.toggle('hidden', !state.keys.gemini);
+  $('startGuide').classList.toggle('hidden', !!state.keys.gemini);  // 처음 사용자 안내
   const env = state.env || {};
   const problems = [];
   if(env.ffmpeg === false) problems.push('⚠ FFmpeg가 없습니다 — windows 폴더의 1_설치.bat 을 먼저 실행한 뒤 이 화면을 새로고침하세요.');
@@ -2982,6 +3115,7 @@ function resetForm(){
   if($('thumbBox')){ $('thumbBox').classList.add('hidden'); $('thumbResult').classList.add('hidden');
     $('thumbTitle').value=''; $('thumbCands').innerHTML=''; }
   $('goBtn').disabled = false; $('editBtn').disabled = false;
+  showHome();
 }
 
 // 스페이스바 = 재생/정지 (자막 검토 화면에서만, 입력창 포커스 땐 제외 — 브루식 단축키)

@@ -76,6 +76,22 @@ def test_index_and_state(server):
     assert "jobs" in state and "keys" in state
 
 
+def test_beginner_ui_structure(server):
+    """v0.36 초보자 UI: 홈 카드 3개 + 단계형 폼 + 접는 옵션 그룹 (옛 토글 잔재 없음)."""
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="homeCard"' in html
+    assert html.count('class="modecard"') == 3  # AI 영상/내 영상 편집/사진
+    # 완전 자동은 이제 라디오(editFinish) + 길이 프리셋으로
+    assert 'name="editFinish"' in html and 'id="autoTargetPreset"' in html
+    # 꾸미기 그룹: 훅·내레이션·소리·워터마크·대본·세부설정
+    for gid in ("optHook", "optNarr", "optSound", "optWm", "optScript", "optAdv"):
+        assert f'id="{gid}"' in html, gid
+    # 이전 UI 잔재가 남아 있으면 안 됨 (appmode 라디오·완전자동 체크박스)
+    assert "appmode" not in html and "autoEditChk" not in html
+    # 사진 모드 블록 분리
+    assert 'id="videoBlock"' in html and 'id="photoBlock"' in html
+
+
 _SHARED = {}
 
 
