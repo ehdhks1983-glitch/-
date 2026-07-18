@@ -142,6 +142,45 @@ def test_auto_multi_split_and_settings_remembered(server, tmp_path):
     assert state["settings"]["ui"]["edit_last"]["auto_multi"] is True
 
 
+def test_upload_kit_stub_and_file(server, tmp_path):
+    """v0.39 업로드 키트: 키 없이 스텁 생성 + 업로드킷.txt 저장 + 체크리스트/구성 검증."""
+    from pathlib import Path
+
+    video = _make_talk_video(tmp_path / "kit.mp4")
+    data = _post(server, "/api/edit", {
+        "video_path": video, "layout": "shorts",
+        "auto_subtitle": False, "cut_silence": False,
+        "auto_edit": True, "auto_target_sec": 0,
+        "script": "업로드 키트 테스트 문장입니다\n두 번째 문장입니다",
+        "bgm": "", "hook": "테스트 훅 제목",
+    })
+    job = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert job["status"] == "ok", job.get("errors")
+
+    kit_res = _post(server, "/api/upload_kit", {"job_id": data["job_id"]})
+    assert kit_res.get("stub") is True  # 키 없음 → 예시 문구
+    kit = kit_res["kit"]
+    assert len(kit["titles"]) >= 3 and kit["description"].strip()
+    assert len(kit["keywords"]) == 10 and len(kit["hashtags"]) == 3
+    assert kit["category"]  # 카테고리 항상 존재
+    assert any("쇼츠" in c or "세로" in c for c in kit["checklist"])  # 쇼츠 자동 인식 안내
+    # 파일 저장 확인
+    assert kit_res["path"].endswith("업로드킷.txt")
+    saved = Path(kit_res["path"]).read_text(encoding="utf-8")
+    assert "제목 후보" in saved and "태그" in saved and "카테고리" in saved
+
+
+def test_upload_kit_requires_finished_video(server):
+    import urllib.error
+
+    req = urllib.request.Request(
+        server + "/api/upload_kit",
+        data=json.dumps({"job_id": "없는작업"}).encode(), method="POST")
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req, timeout=10)
+    assert exc.value.code == 400
+
+
 _SHARED = {}
 
 

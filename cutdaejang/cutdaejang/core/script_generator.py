@@ -513,3 +513,98 @@ def suggest_from_video_stub(frames_b64: list, transcript: str = "") -> dict:
                    "마지막으로 결과를 확인합니다.", "구독과 좋아요 부탁드려요!"],
         "hashtags": ["쇼츠", "꿀팁", "자동화", "정리", "요약"],
     }
+
+
+# ── 📦 업로드 키트 (v0.39) — 유튜브 업로드 문구 일괄 생성 ──
+
+YT_CATEGORIES = (
+    "인물/블로그", "코미디", "교육", "엔터테인먼트", "노하우/스타일", "게임",
+    "음악", "뉴스/정치", "과학기술", "스포츠", "여행/이벤트", "영화/애니메이션",
+    "자동차", "반려동물/동물",
+)
+
+UPLOAD_KIT_PROMPT = """너는 한국 유튜브 SEO·업로드 전문가다. 아래 영상의 장면 캡처{with_tr}를 보고,
+유튜브 스튜디오에 그대로 붙여넣을 업로드 문구를 만든다.
+{channel}
+[영상 정보] 길이 {dur}초 · 형태: {shape}{hook}
+{transcript}
+
+규칙:
+- 제목: 3~5개, 각 45자 이내. 검색어가 앞쪽에, 궁금증 유발. 낚시(내용에 없는 과장) 금지.
+- 설명문: 첫 줄은 검색·클릭을 부르는 한 문장(가장 중요), 이어서 내용 요약 2~3문장,
+  마지막 줄에 해시태그 3개. 전체 500자 이내. 이모지는 1~3개만.
+- 태그: 15~20개, 구체적 검색어 위주(단어·짧은 구), 전체 400자 이내.
+- 키워드: 이 영상의 핵심 검색 키워드 정확히 10개.
+- 해시태그: 설명문에 넣을 3개 (＃ 없이 단어만).
+- 카테고리: 다음 중 정확히 하나만 — {cats}
+JSON만 출력:
+{{"titles": ["..."], "description": "...", "tags": ["..."], "keywords": ["..."],
+  "hashtags": ["..."], "category": "...", "category_reason": "한 문장"}}"""
+
+
+def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: int = 0,
+                       is_shorts: bool = True, hook: str = "", channel: Optional[dict] = None,
+                       model: str = "gemini-2.5-flash", api_key=None) -> dict:
+    """장면 캡처+대본으로 유튜브 업로드 문구(제목·설명·태그·키워드·카테고리) 생성."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 업로드 키트 AI 생성을 쓸 수 없습니다")
+    ch = ""
+    if channel and any((channel or {}).values()):
+        ch = ("[채널 정보 — 이 채널 톤에 맞출 것] "
+              f"채널명: {channel.get('name') or '-'} / 주제: {channel.get('topic') or '-'} / "
+              f"타깃 시청자: {channel.get('audience') or '-'}")
+    tr = f"[영상 속 대사]\n{transcript.strip()[:3500]}" if transcript.strip() else ""
+    prompt = UPLOAD_KIT_PROMPT.format(
+        with_tr="와 대사" if tr else "", channel=ch, dur=duration_s or "?",
+        shape="세로 쇼츠" if is_shorts else "일반(가로)",
+        hook=f" · 상단 제목: {hook}" if hook.strip() else "",
+        transcript=tr, cats=", ".join(YT_CATEGORIES))
+    parts = [{"text": prompt}] + [
+        {"inline_data": {"mime_type": "image/jpeg", "data": b64}} for b64 in frames_b64
+    ]
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent")
+    payload = {"contents": [{"parts": parts}],
+               "generationConfig": {"responseMimeType": "application/json"}}
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        out = json.loads(text)
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        raise ScriptError(f"업로드 키트 응답 형식 예상 밖: {json.dumps(data)[:250]}") from e
+    cat = str(out.get("category", "")).strip()
+    if cat not in YT_CATEGORIES:  # 목록 밖이면 기본값으로 (붙여넣기 실패 방지)
+        cat = "인물/블로그"
+    return {
+        "titles": [str(x)[:60] for x in out.get("titles", [])][:5],
+        "description": str(out.get("description", ""))[:1200],
+        "tags": [str(x).strip()[:30] for x in out.get("tags", []) if str(x).strip()][:20],
+        "keywords": [str(x).strip() for x in out.get("keywords", []) if str(x).strip()][:10],
+        "hashtags": [str(x).lstrip("#").strip() for x in out.get("hashtags", [])][:3],
+        "category": cat,
+        "category_reason": str(out.get("category_reason", ""))[:200],
+    }
+
+
+def suggest_upload_kit_stub(transcript: str = "", hook: str = "") -> dict:
+    """오프라인 대역 — 키 없이도 형식·흐름 점검용 예시 키트."""
+    base = (hook.strip().splitlines()[0] if hook.strip()
+            else transcript.strip().splitlines()[0][:18] if transcript.strip() else "이 영상")
+    base = base[:24]
+    return {
+        "titles": [f"{base} — 핵심만 30초 정리", f"{base}, 몰라서 손해봤던 것",
+                   f"{base} 이렇게 하면 됩니다"],
+        "description": (f"{base}의 핵심을 짧게 담았습니다.\n"
+                        "처음 보는 분도 따라 할 수 있게 순서대로 정리했어요.\n"
+                        "#쇼츠 #꿀팁 #정리"),
+        "tags": ["쇼츠", "꿀팁", "튜토리얼", "정리", "요약", "하는법", "초보",
+                 "가이드", "추천", "자동화"],
+        "keywords": ["쇼츠", "꿀팁", "하는법", "정리", "요약", "초보 가이드",
+                     "추천", "자동화", "튜토리얼", "노하우"],
+        "hashtags": ["쇼츠", "꿀팁", "정리"],
+        "category": "노하우/스타일",
+        "category_reason": "방법·팁을 알려주는 실용 영상이라 노하우/스타일이 적합합니다.",
+    }

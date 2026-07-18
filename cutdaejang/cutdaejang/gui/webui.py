@@ -470,7 +470,9 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
 
         settings = config.load_settings()
         note = "고화질(4K) 렌더는 사양에 따라 몇 분 걸릴 수 있어요…" if quality == "ultra" else ""
-        _set_job(job_id, status="running", stage="render", frac=0.0, note=note)
+        # 최종 자막을 job에 남김 → 📦 업로드 키트가 대본으로 활용 (완전 자동 포함)
+        _set_job(job_id, status="running", stage="render", frac=0.0, note=note,
+                 subtitles=subtitles_dicts)
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         out = str(Path(workdir) / job_id / "edited.mp4")
         job = _get_job(job_id) or {}
@@ -711,6 +713,40 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         logging.getLogger("cutdaejang").error("분할 렌더 실패 %s\n%s", job_id, traceback.format_exc())
         _set_job(job_id, status="failed",
                  errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+
+
+def _bgm_credit(bgm_name: str) -> str:
+    """쓴 BGM의 저작자표시(CC BY) 문구 — 무료 음원이면 자동으로 설명란용 크레딧 생성."""
+    if not bgm_name or bgm_name == "random":
+        return ""
+    stem = Path(bgm_name).stem
+    title = stem.split("_", 1)[-1] if "_" in stem else stem
+    try:
+        from ..tools.fetch_bgm import TRACKS  # noqa: PLC0415
+
+        if any(t == title for _, t in TRACKS):  # 6_무료음원_받기로 받은 Kevin MacLeod 곡
+            return ("🎵 BGM\n"
+                    f'"{title}" Kevin MacLeod (incompetech.com)\n'
+                    "Licensed under Creative Commons: By Attribution 4.0 License\n"
+                    "http://creativecommons.org/licenses/by/4.0/")
+    except Exception:
+        pass
+    return f"🎵 BGM: {stem}"
+
+
+def _kit_text(kit: dict, title: str) -> str:
+    """업로드 키트를 붙여넣기 좋은 텍스트 파일로 (job 폴더에 저장)."""
+    lines = ["=" * 46, f"📦 유튜브 업로드 키트 — {title or '완성 영상'}", "=" * 46, ""]
+    lines += ["── 제목 후보 (하나 골라 복사) ──"]
+    lines += [f"{i}. {t}" for i, t in enumerate(kit.get("titles", []), 1)]
+    lines += ["", "── 설명문 (설명란에 그대로 붙여넣기) ──", kit.get("description", "")]
+    lines += ["", "── 태그 (태그란에 통째로 붙여넣기) ──", ", ".join(kit.get("tags", []))]
+    lines += ["", "── 핵심 키워드 10 ──", " · ".join(kit.get("keywords", []))]
+    lines += ["", "── 카테고리 ──",
+              f"{kit.get('category', '')} — {kit.get('category_reason', '')}"]
+    lines += ["", "── 업로드 체크리스트 ──"]
+    lines += [f"□ {c}" for c in kit.get("checklist", [])]
+    return "\n".join(lines) + "\n"
 
 
 def _run_generate(job_id: str, params: dict, workdir: str) -> None:
@@ -1068,6 +1104,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "voice_id": vid, "name": vname})
             except tts_engine.TTSError as e:
                 self._send_json({"error": str(e)}, 400)
+        elif path == "/api/upload_kit":
+            self._upload_kit(params, workdir)
         elif path == "/api/pronounce":
             from ..utils.pronounce import pronounce_ko  # noqa: PLC0415
 
@@ -1152,6 +1190,101 @@ class _Handler(BaseHTTPRequestHandler):
 
         threading.Thread(target=run, daemon=True).start()
         self._send_json({"job_id": new_id})
+
+    # ---------- 📦 업로드 키트 (v0.39) — 유튜브 제목·태그·설명 일괄 생성 ----------
+
+    def _upload_kit(self, params: dict, workdir: str) -> None:
+        _apply_keys(params)
+        from ..core import edit_mode, script_generator as sg  # noqa: PLC0415
+        from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+        job_id = params.get("job_id", "")
+        job = _get_job(job_id) or {}
+        title = job.get("title") or ""
+        mp4 = job.get("mp4")
+        if not (mp4 and Path(mp4).exists()):  # 서버를 껐다 켜도 히스토리 영상이면 가능
+            mp4 = self._video_path(job_id)
+        if not mp4:
+            self._send_json({"error": "완성 영상을 찾을 수 없습니다 — 먼저 영상을 완성하세요"}, 400)
+            return
+        jp = job.get("params") or {}
+        ep = job.get("edit_params") or {}
+        hook = (ep.get("hook") or jp.get("hook") or "").strip()
+        # 대본: 검토 자막(메모리) → job 폴더 script.json → 없으면 장면 캡처만으로
+        transcript = "\n".join(
+            (s.get("text") or "") for s in (job.get("subtitles") or []))
+        if not transcript.strip():
+            sj = Path(workdir) / job_id / "script.json"
+            if sj.is_file():
+                try:
+                    transcript = "\n".join(
+                        json.loads(sj.read_text(encoding="utf-8")).get("sentences", []))
+                except (OSError, json.JSONDecodeError):
+                    pass
+        if not title:
+            try:
+                from ..db.jobs import JobStore  # noqa: PLC0415
+
+                store = JobStore(Path(workdir) / "history.db")
+                row = store.get(job_id)
+                store.close()
+                if row:
+                    title = row["title"] or ""
+            except Exception:
+                pass
+        try:
+            dur_s = int(ff.probe_duration_us(mp4) / 1e6)
+            w, h = ff.probe_video_size(mp4)
+        except Exception:
+            dur_s, w, h = 0, 1080, 1920
+        is_shorts = h > w and dur_s <= 180
+        channel = config.load_settings().get("channel") or {}
+        try:
+            frames = edit_mode.extract_frames_b64(mp4, n=4)
+        except Exception:
+            frames = []
+        stub = False
+        try:
+            if os.environ.get("GEMINI_API_KEY"):
+                kit = sg.suggest_upload_kit(
+                    frames, transcript, duration_s=dur_s, is_shorts=is_shorts,
+                    hook=hook or title, channel=channel)
+            else:
+                kit = sg.suggest_upload_kit_stub(transcript, hook or title)
+                stub = True
+        except sg.ScriptError as e:
+            logging.getLogger("cutdaejang").warning("업로드 키트 AI 실패 → 예시로 대체: %s", e)
+            kit = sg.suggest_upload_kit_stub(transcript, hook or title)
+            stub = True
+        # BGM 크레딧 자동 삽입 — 어떤 곡을 썼는지 컷대장이 아니까 (CC BY 표기 의무)
+        credit = _bgm_credit((ep.get("bgm") or jp.get("bgm") or "").strip())
+        if credit:
+            kit["description"] = (kit.get("description", "").rstrip() + "\n\n" + credit)
+        # 업로드 체크리스트 (계산으로 확실한 것들)
+        checks = []
+        if is_shorts:
+            checks.append(f"세로 {dur_s}초 영상 → 올리면 쇼츠로 자동 인식돼요 (#Shorts 표기 불필요)")
+        else:
+            checks.append(f"가로/롱폼({dur_s}초) → 노출을 위해 썸네일을 꼭 넣으세요")
+        checks.append("썸네일: " + ("만들어 둠 ✓" if job.get("thumbnail")
+                                  else "아직 없음 — 완료 화면 [🖼️ 썸네일 만들기] (쇼츠는 선택, 롱폼은 권장)"))
+        if credit:
+            checks.append("BGM 크레딧이 설명문 끝에 자동 포함됐어요 (무료 음원 표기 의무)")
+        checks.append("태그는 유튜브 스튜디오 [세부정보 → 태그]에 통째로 붙여넣기 (쉼표 그대로)")
+        kit["checklist"] = checks
+        kit["is_shorts"] = is_shorts
+        # 파일로도 저장 — 업로드할 때 열어서 복붙
+        out_dir = Path(job["job_dir"]) if job.get("job_dir") else Path(mp4).parent
+        kit_path = ""
+        try:
+            p = out_dir / "업로드킷.txt"
+            p.write_text(_kit_text(kit, title), encoding="utf-8")
+            kit_path = str(p.resolve())
+        except OSError:
+            pass
+        logging.getLogger("cutdaejang").info(
+            "업로드 키트 생성: %s (AI=%s, 쇼츠=%s)", title or job_id, not stub, is_shorts)
+        self._send_json({"kit": kit, "stub": stub, "path": kit_path})
 
     # ---------- 진단 리포트 / 폴더 열기 ----------
 
@@ -1593,7 +1726,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.38)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.39)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2123,7 +2256,33 @@ _HTML = """<!doctype html>
       <video id="player" controls playsinline></video>
       <div class="stage" id="outPaths"></div>
       <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
+      <button class="ghost" style="margin-top:10px" onclick="toggleKit(event)">📦 업로드 키트 (제목·태그·설명 자동)</button>
       <button class="ghost" style="margin-top:10px" onclick="toggleThumb(event)">🖼️ 유튜브 썸네일 만들기 (16:9)</button>
+      <div id="kitBox" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
+        <div style="font-weight:700;font-size:14px">📦 유튜브 업로드 키트</div>
+        <div class="hint" id="kitStatus" style="margin-top:4px"></div>
+        <div id="kitBody" class="hidden">
+          <b style="font-size:13px">📌 제목 후보 <span class="hint">(클릭하면 복사돼요)</span></b>
+          <div id="kitTitles" class="hookcands"></div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+            <b style="font-size:13px">📝 설명문</b>
+            <span class="hint">(설명란에 그대로 붙여넣기 — BGM 크레딧 포함)</span>
+            <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitDesc')">📋 복사</button>
+          </div>
+          <textarea id="kitDesc" style="min-height:120px;margin-top:4px"></textarea>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <b style="font-size:13px">🏷️ 태그</b>
+            <span class="hint">(태그란에 통째로 붙여넣기)</span>
+            <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitTags')">📋 복사</button>
+          </div>
+          <textarea id="kitTags" style="min-height:48px;margin-top:4px"></textarea>
+          <div class="hint" id="kitKeywords" style="margin-top:8px"></div>
+          <div class="hint" id="kitCategory" style="margin-top:4px"></div>
+          <div class="hint" id="kitChecklist" style="white-space:pre-line;margin-top:8px;color:#cdd3e0"></div>
+          <div class="hint" id="kitPath" style="margin-top:8px"></div>
+          <button class="ghost" style="margin-top:8px" onclick="makeKit(event)">🔄 다시 만들기</button>
+        </div>
+      </div>
       <div id="thumbBox" class="hidden" style="margin-top:10px;padding:10px;border:1px dashed #3a4157;border-radius:10px">
         <label style="margin-top:0">썸네일 제목 <span class="hint">— 짧고 강하게. 줄바꿈 Enter. 강조는 <b>| 단어</b></span></label>
         <textarea id="thumbTitle" style="min-height:52px" placeholder="예) 사진만 넣으면&#10;홍보글이 뚝딱! | 뚝딱!"></textarea>
@@ -2193,6 +2352,12 @@ _HTML = """<!doctype html>
     <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠)</span></div>
     <div class="chk"><input type="checkbox" id="setAiImage"><span>AI 배경 이미지 생성 (실험적 · Gemini · 실패 시 기본 배경) </span></div>
     <div class="hint" style="margin:2px 0 0 26px">끄면 항상 되는 그라데이션 배경을 씁니다. 모델 가용성에 따라 실패할 수 있어요.</div>
+    <div style="font-weight:700;margin-top:16px">📦 내 채널 정보 <span class="hint">(선택 — 업로드 키트 문구를 내 채널 톤에 맞춰줘요)</span></div>
+    <div class="row">
+      <div><label>채널명</label><input type="text" id="setChName" placeholder="예) 곰대리의 자동화"></div>
+      <div><label>채널 주제</label><input type="text" id="setChTopic" placeholder="예) 블로그·유튜브 자동화 꿀팁"></div>
+      <div><label>타깃 시청자</label><input type="text" id="setChAudience" placeholder="예) 부업 시작하는 3040 직장인"></div>
+    </div>
     <button onclick="saveSettings()">설정 저장</button>
   </div>
 
@@ -2438,6 +2603,8 @@ async function startEdit(){
   currentJob = data.job_id;
   window._jobMode = 'edit';
   window._subLoaded = false;
+  window._kitLoaded = false;
+  $('kitBox').classList.add('hidden'); $('kitBody').classList.add('hidden');
   $('editBtn').disabled = true;
   $('editCard').classList.add('hidden');   // 진행 화면에 집중 (🏠 처음으로 로 복귀)
   $('statusCard').classList.remove('hidden');
@@ -2845,6 +3012,8 @@ async function generate(){
   if(data.error){ alert(data.error); return; }
   currentJob = data.job_id;
   window._jobMode = 'gen';
+  window._kitLoaded = false;
+  $('kitBox').classList.add('hidden'); $('kitBody').classList.add('hidden');
   $('goBtn').disabled = true;
   $('formCard').classList.add('hidden');   // 진행 화면에 집중 (🏠 처음으로 로 복귀)
   $('statusCard').classList.remove('hidden');
@@ -3055,6 +3224,69 @@ async function makeThumb(ev){
   } finally { btn.disabled=false; btn.textContent=old; }
 }
 
+// ── 📦 유튜브 업로드 키트 (v0.39) — 제목·태그·설명·카테고리 원클릭 생성 ──
+function toggleKit(ev){
+  if(ev)ev.preventDefault();
+  const box = $('kitBox'); box.classList.toggle('hidden');
+  if(!box.classList.contains('hidden') && !window._kitLoaded) makeKit(ev);
+}
+async function makeKit(ev){
+  if(ev)ev.preventDefault();
+  const key = ensureGeminiKey();  // 키가 있어야 영상 내용 기반 (없으면 예시 문구)
+  $('kitStatus').textContent = '🧠 영상 장면과 대본을 읽고 업로드 문구를 만드는 중… (10~20초)';
+  $('kitBody').classList.add('hidden');
+  try{
+    const data = await (await fetch('/api/upload_kit', {method:'POST',
+      body: JSON.stringify({job_id: currentJob, gemini_key: key, save_key: true})})).json();
+    if(data.error){ $('kitStatus').textContent = '⚠ ' + data.error; return; }
+    if(key) window._hasGeminiKey = true;
+    window._kitLoaded = true;
+    renderKit(data);
+  } catch(e){ $('kitStatus').textContent = '⚠ 생성 실패: ' + e; }
+}
+function renderKit(data){
+  const kit = data.kit || {};
+  $('kitStatus').textContent = data.stub
+    ? '⚠ 제미나이 키가 없어 예시 문구입니다 — 키를 넣으면 영상 내용으로 만들어져요.'
+    : '✅ 완성! 항목마다 복사해서 유튜브 스튜디오에 붙여넣으세요.';
+  const tb = $('kitTitles'); tb.innerHTML = '';
+  (kit.titles || []).forEach(t => {
+    const b = document.createElement('button');
+    b.textContent = t;
+    b.onclick = async (e) => {
+      e.preventDefault();
+      try{ await navigator.clipboard.writeText(t); b.textContent = '✓ 복사됨 — ' + t; }
+      catch(err){ alert('복사 실패 — 드래그해서 복사하세요'); }
+    };
+    tb.appendChild(b);
+  });
+  $('kitDesc').value = kit.description || '';
+  $('kitTags').value = (kit.tags || []).join(', ');
+  $('kitKeywords').innerHTML = '<b>🔑 키워드 10:</b> ' + (kit.keywords || []).join(' · ');
+  $('kitCategory').innerHTML = '<b>📂 카테고리:</b> ' + (kit.category || '') +
+    (kit.category_reason ? (' — ' + kit.category_reason) : '');
+  $('kitChecklist').textContent = (kit.checklist || []).map(c => '□ ' + c)
+    .join(String.fromCharCode(10));
+  $('kitPath').textContent = data.path
+    ? ('💾 저장됨: ' + data.path + ' — 업로드할 때 이 파일을 열어 복붙해도 돼요') : '';
+  $('kitBody').classList.remove('hidden');
+}
+async function copyKit(ev, id){
+  ev.preventDefault();
+  try{
+    await navigator.clipboard.writeText($(id).value);
+    const btn = ev.target; btn.textContent = '✓ 복사됨';
+    setTimeout(() => { btn.textContent = '📋 복사'; }, 1500);
+  } catch(e){ alert('복사 실패 — 직접 드래그해서 복사하세요'); }
+}
+function kitHist(id){
+  playHist(id);                       // 진행 카드 + 플레이어 표시
+  currentJob = id; window._jobMode = 'gen';
+  window._kitLoaded = false;
+  $('kitBox').classList.remove('hidden');
+  makeKit();
+}
+
 async function diagnostic(ev){
   ev.preventDefault();
   const data = await (await fetch('/api/diagnostic', {method:'POST', body:'{}'})).json();
@@ -3134,6 +3366,10 @@ function fillSettings(s){
   $('setDuck').checked = !!s.bgm.duck;
   $('setGap').value = s.audio.gap_ms;
   $('setRpm').value = s.tts.rpm_limit;
+  const ch = s.channel || {};
+  $('setChName').value = ch.name || '';
+  $('setChTopic').value = ch.topic || '';
+  $('setChAudience').value = ch.audience || '';
 }
 
 async function saveSettings(){
@@ -3148,6 +3384,8 @@ async function saveSettings(){
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
     audio: {gap_ms: +$('setGap').value},
     tts: {rpm_limit: +$('setRpm').value},
+    channel: {name: $('setChName').value.trim(), topic: $('setChTopic').value.trim(),
+              audience: $('setChAudience').value.trim()},
   }};
   const data = await (await fetch('/api/settings', {method:'POST', body: JSON.stringify(body)})).json();
   alert(data.ok ? '저장했습니다. 다음 작업부터 적용됩니다.' : ('저장 실패: ' + data.error));
@@ -3309,6 +3547,7 @@ function renderHistory(rows){
     const tr = document.createElement('tr');
     const btns = [
       r.has_mp4 ? `<button class="ghost" onclick="playHist('${r.id}')">▶ 재생</button>` : '',
+      r.has_mp4 ? `<button class="ghost" onclick="kitHist('${r.id}')" title="유튜브 업로드 문구(제목·태그·설명) 만들기">📦 업로드 키트</button>` : '',
       r.has_spec ? `<button class="ghost" onclick="regen('${r.id}')" title="저장된 설계로 mp4 재렌더">♻ 재생성</button>` : '',
     ].join(' ');
     tr.innerHTML = `<td>${(r.created_at||'').replace('T',' ').slice(5,16)}</td>
@@ -3338,6 +3577,8 @@ function resetForm(){
   $('errBox').classList.add('hidden'); $('rawErr').classList.add('hidden');
   if($('thumbBox')){ $('thumbBox').classList.add('hidden'); $('thumbResult').classList.add('hidden');
     $('thumbTitle').value=''; $('thumbCands').innerHTML=''; }
+  window._kitLoaded = false;
+  if($('kitBox')){ $('kitBox').classList.add('hidden'); $('kitBody').classList.add('hidden'); }
   $('goBtn').disabled = false; $('editBtn').disabled = false;
   showHome();
 }

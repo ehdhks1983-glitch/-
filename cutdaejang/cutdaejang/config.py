@@ -45,6 +45,11 @@ DEFAULTS: dict = {
     "ui": {                           # 화면이 기억하는 것들
         "edit_last": {},              # 마지막 편집 폼 세팅 — 다음 실행 때 자동 복원 (v0.38)
     },
+    "channel": {                      # 📦 업로드 키트 맞춤용 내 채널 정보 (선택, v0.39)
+        "name": "",
+        "topic": "",
+        "audience": "",
+    },
     "bgm": {
         "enabled": False,
         "file": "",
