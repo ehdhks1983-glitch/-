@@ -188,6 +188,29 @@ def dialogue_text(sub, style) -> str:
     return body
 
 
+_OVERRIDE_RE = re.compile(r"\{\\[^}]*\}")  # ASS 오버라이드 블록 ({\...})
+
+
+def band_event_lines(style_name: str, start: str, end: str, body: str,
+                     band_on: bool, fade: bool) -> list:
+    """배경 띠 이벤트 조립 — 색 강조가 섞인 줄의 '띠 이음새' 제거 (v0.40.1).
+
+    BorderStyle=3 박스는 색 구간(run)마다 따로 그려져, 인라인 색({\\1c})이 있으면
+    반투명 박스가 경계에서 겹쳐 세로 줄무늬가 생긴다. 해결: 띠는 색 태그를 뺀
+    "유령 이벤트"(글자 투명, 단일 run → 박스 한 장)로 깔고, 글자는 {\\bord0}으로
+    박스 없이 위 레이어에 얹는다. 색 없는 줄은 원래도 한 장이라 그대로 둔다.
+    """
+    prefix = f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,"
+    if not (band_on and "\\1c" in body):
+        return [prefix + body]
+    ghost = _OVERRIDE_RE.sub("", body)          # 색·페이드 태그 제거 → 단일 run
+    fad = "\\fad(100,60)" if fade else ""
+    return [
+        prefix + "{" + fad + "\\1a&HFF&}" + ghost,                       # 띠만 (글자 투명)
+        f"Dialogue: 1,{start},{end},{style_name},,0,0,0,," + "{\\bord0}" + body,  # 글자만
+    ]
+
+
 def write_ass(spec: TimelineSpec, out_path) -> str:
     """spec.subtitles(+spec.hook) → .ass 파일 생성. 생성된 경로를 반환.
 
@@ -233,18 +256,16 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
     lines = []
     # 상단 제목(훅) — 영상 내내 고정 표시
     if spec.hook.strip():
-        lines.append(
-            "Dialogue: 0,{start},{end},Title,,0,0,0,,{text}".format(
-                start=us_to_ass(0),
-                end=us_to_ass(spec.duration_us),
-                text=hook_dialogue_text(spec.hook.strip(), style),
-            )
+        lines += band_event_lines(
+            "Title", us_to_ass(0), us_to_ass(spec.duration_us),
+            hook_dialogue_text(spec.hook.strip(), style),
+            band_on=hook_band, fade=False,
         )
-    lines += [
-        "Dialogue: 0,{start},{end},Default,,0,0,0,,{text}".format(
-            start=us_to_ass(s.start_us), end=us_to_ass(s.end_us), text=dialogue_text(s, style)
+    for s in spec.subtitles:
+        lines += band_event_lines(
+            "Default", us_to_ass(s.start_us), us_to_ass(s.end_us),
+            dialogue_text(s, style),
+            band_on=sub_band, fade=bool(style.fade),
         )
-        for s in spec.subtitles
-    ]
     Path(out_path).write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
     return str(out_path)

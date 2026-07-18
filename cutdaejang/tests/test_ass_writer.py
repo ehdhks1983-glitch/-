@@ -175,3 +175,33 @@ def test_write_ass_hook_scale_multiplies_title_size(tmp_path):
     write_ass(spec, tmp_path / "big.ass")
     big = _style_line((tmp_path / "big.ass").read_text(encoding="utf-8"), "Title")
     assert round(int(base.split(",")[2]) * 1.4) == int(big.split(",")[2])
+
+
+def test_band_seam_fix_two_layer():
+    """v0.40.1: 색 강조 줄 + 띠 = 유령 띠(단일 run) + 글자(bord0) 2층 — 이음새 제거."""
+    from cutdaejang.core.render_engine.ass_writer import band_event_lines
+
+    colored = "안녕 {\\1c&H00D4FF&}강조{\\1c&HFFFFFF&} 문장"
+    lines = band_event_lines("Title", "0:00:00.00", "0:00:03.00", colored,
+                             band_on=True, fade=False)
+    assert len(lines) == 2
+    ghost, text = lines
+    assert "\\1a&HFF&" in ghost and "\\1c" not in ghost      # 띠: 글자 투명·색 태그 없음(단일 run)
+    assert ghost.startswith("Dialogue: 0,")
+    assert text.startswith("Dialogue: 1,") and "\\bord0" in text  # 글자: 위 레이어·박스 없음
+    assert "강조" in ghost and "강조" in text                 # 글자 배치는 동일 (박스 폭 일치)
+
+    # 색 없는 줄은 원래도 박스가 한 장 → 그대로 1줄 (이중 그리기 방지)
+    plain = band_event_lines("Default", "0:00:00.00", "0:00:03.00", "그냥 자막",
+                             band_on=True, fade=False)
+    assert len(plain) == 1 and "\\1a" not in plain[0]
+
+    # 띠 꺼짐이면 색이 있어도 1줄
+    off = band_event_lines("Default", "0:00:00.00", "0:00:03.00", colored,
+                           band_on=False, fade=True)
+    assert len(off) == 1
+
+    # 페이드는 유령 띠에도 붙어 띠·글자가 같이 나타남
+    faded = band_event_lines("Default", "0:00:00.00", "0:00:03.00",
+                             "{\\fad(100,60)}" + colored, band_on=True, fade=True)
+    assert "\\fad(100,60)" in faded[0] and "\\1a&HFF&" in faded[0]
