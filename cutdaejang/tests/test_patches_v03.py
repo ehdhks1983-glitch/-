@@ -350,12 +350,49 @@ def test_background_falls_back_on_any_provider_error(tmp_path):
 
     out = tmp_path / "bg.png"
     notes = []
-    result = bg.prepare_background(
+    result, source = bg.prepare_background(
         str(out), Canvas(), prompt="테스트", provider=Broken404Provider(),
         on_note=notes.append,
     )
     assert Path(result).exists()  # 폴백 배경이 실제로 생성됨
     assert notes and "기본 배경" in notes[0]
+    assert source.startswith("ai_fail:")  # 완료 화면 표시용 출처 (v0.40)
+
+
+def test_prepare_background_source_values(tmp_path):
+    """v0.40: 배경 출처가 완료 화면에 그대로 보임 — local/ai 값 검증."""
+    from cutdaejang.core import background_generator as bg
+    from cutdaejang.core.background_generator import Canvas
+
+    _, src = bg.prepare_background(str(tmp_path / "a.png"), Canvas(), prompt="x")
+    assert src == "local"
+
+    class OkProvider:
+        def generate(self, prompt, out_path, canvas):
+            Path(out_path).write_bytes(b"\x89PNG fake")
+            return out_path
+
+    _, src = bg.prepare_background(
+        str(tmp_path / "b.png"), Canvas(), prompt="x", provider=OkProvider())
+    assert src == "ai"
+
+
+def test_ai_image_setup_gating(monkeypatch):
+    """v0.40: AI 배경은 목소리와 무관 — 키만 있으면 적용(테스트 톤 제외), 사유 문구 확인."""
+    from cutdaejang.gui import webui
+
+    settings = {"bg": {"ai_image": True, "image_model": "m"}}
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    p, why = webui._ai_image_setup({"tts_provider": "windows"}, settings)
+    assert p is None and "키 없음" in why
+
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    p, why = webui._ai_image_setup({"tts_provider": "windows"}, settings)  # 내장 음성도 OK
+    assert p is not None and why == ""
+    p, why = webui._ai_image_setup({"tts_provider": "stub"}, settings)     # 테스트 톤만 제외
+    assert p is None and "테스트 톤" in why
+    p, why = webui._ai_image_setup({"tts_provider": "gemini"}, {"bg": {"ai_image": False}})
+    assert p is None and "꺼짐" in why
 
 
 def test_ai_image_off_by_default():

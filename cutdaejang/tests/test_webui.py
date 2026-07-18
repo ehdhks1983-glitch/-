@@ -192,6 +192,8 @@ def test_auto_mode_full_run_and_video_range(server):
     job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"})
     assert job["status"] == "ok", job.get("errors")
     assert job["mp4"]
+    # v0.40: 어떤 배경이 쓰였는지 완료 화면에 표시 (여기선 설정 꺼짐 → 기본 그라데이션+사유)
+    assert "기본 그라데이션" in job.get("bg_source", "") and "꺼짐" in job["bg_source"]
     _SHARED["done_job"] = job["id"]
 
     with _get(server, f"/video/{job['id']}", headers={"Range": "bytes=0-99"}) as resp:

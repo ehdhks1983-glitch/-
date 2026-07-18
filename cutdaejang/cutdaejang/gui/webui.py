@@ -200,19 +200,40 @@ def _record_history(workdir: str, result, opts: JobOptions) -> None:
         pass  # 히스토리 기록 실패는 UI 동작에 영향 없음
 
 
+def _ai_image_setup(params: dict, settings: dict):
+    """AI 배경 제공자 결정 + (미사용이면) 사유 — 완료 화면에 그대로 보여줌 (v0.40).
+
+    v0.40부터 목소리 선택과 무관: Gemini 키만 있으면 AI 배경을 시도한다
+    (기계 점검용 '테스트 톤'만 제외).
+    """
+    if not settings["bg"].get("ai_image"):
+        return None, "설정에서 AI 배경 꺼짐"
+    if not os.environ.get("GEMINI_API_KEY"):
+        return None, "Gemini 키 없음"
+    if params.get("tts_provider") == "stub":
+        return None, "테스트 톤은 점검용이라 미사용"
+    return background_generator.GeminiImage(
+        model=settings["bg"].get("image_model")), ""
+
+
+def _bg_display(image_provider, bg_skip: str, src: str) -> str:
+    """완료 화면용 배경 출처 문구."""
+    if image_provider is None:
+        return f"기본 그라데이션 ({bg_skip})" if bg_skip else "기본 그라데이션"
+    if src == "ai":
+        return "AI 이미지 ✨"
+    if src == "user":
+        return "내 이미지"
+    if src.startswith("ai_fail:"):
+        return f"기본 그라데이션 (AI 실패: {src[8:]})"
+    return "기본 그라데이션"
+
+
 def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> None:
     settings = config.load_settings()
     opts = _job_options(params, settings)
     try:
-        image_provider = None
-        if (
-            settings["bg"].get("ai_image")
-            and os.environ.get("GEMINI_API_KEY")
-            and params.get("script_provider") == "gemini"
-        ):
-            image_provider = background_generator.GeminiImage(
-                model=settings["bg"].get("image_model")
-            )
+        image_provider, bg_skip = _ai_image_setup(params, settings)
 
         result = orchestrator.run_job(
             workdir, script, opts=opts, settings=settings,
@@ -221,6 +242,8 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
             status_cb=lambda msg: _set_job(job_id, note=msg),
             job_id=job_id,
         )
+        bg_disp = _bg_display(image_provider, bg_skip, result.bg_source or "")
+        logging.getLogger("cutdaejang").info("배경: %s", bg_disp)
         _set_job(
             job_id,
             status=result.status,
@@ -233,6 +256,7 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
             draft=result.draft_path or None,
             tts_provider=result.tts_provider,
             requested_tts=params.get("tts_provider", ""),
+            bg_source=bg_disp,
             fallback_note=result.fallback_note,
             errors=result.errors,
         )
@@ -754,7 +778,13 @@ def _run_generate(job_id: str, params: dict, workdir: str) -> None:
     try:
         _apply_keys(params)
         _set_job(job_id, status="running", stage="script", frac=0.0)
-        provider = SCRIPT_PROVIDERS[params.get("script_provider", "stub")]()
+        provider_name = params.get("script_provider", "stub")
+        if provider_name == "gemini" and not os.environ.get("GEMINI_API_KEY"):
+            # 키 없는 내장 음성 사용자도 실패 없이 — 템플릿 대본으로 안전 강등 (v0.40)
+            provider_name = "stub"
+            params = {**params, "script_provider": "stub"}
+            _set_job(job_id, note="Gemini 키가 없어 템플릿 대본으로 만들어요 — 키를 넣으면 진짜 AI 대본")
+        provider = SCRIPT_PROVIDERS[provider_name]()
         script = orchestrator.generate_script(
             provider, params["topic"], _job_options(params)
         )
@@ -1726,7 +1756,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.39)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.40)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2067,7 +2097,7 @@ _HTML = """<!doctype html>
       <label id="provSovitsLabel" class="hidden"><input type="radio" name="prov" value="sovits" id="provSovits"><span>🎤 내 목소리 (무료·내 PC)</span></label>
       <label><input type="radio" name="prov" value="stub" checked><span>🔧 테스트 톤</span></label>
     </div>
-    <div class="hint">🌟 AI 성우 = 성우급 목소리 + <b>진짜 AI 대본</b>(무료 Gemini 키 필요) · 내장 음성 = Windows 한국어 음성(키·인터넷 불필요) · 테스트 톤 = "삐-" 소리(기계 점검용)</div>
+    <div class="hint">여기서는 <b>목소리만</b> 골라요 — Gemini 키가 있으면 <b>대본·배경은 어떤 목소리든 AI</b>가 만듭니다. 🌟 AI 성우 = 목소리까지 AI(키 필요) · 내장 음성 = Windows 한국어 음성(키 없어도 됨) · 테스트 톤 = "삐-" 소리(기계 점검용)</div>
     <div class="chk" style="gap:8px">
       <span class="hint">내 목소리(녹음으로 만든 AI 목소리)로 만들고 싶다면 →</span>
       <button class="ghost" style="padding:5px 10px" onclick="openVoice(event)">🎤 내 목소리 등록</button>
@@ -2324,40 +2354,60 @@ _HTML = """<!doctype html>
   </div>
 
   <div class="card hidden" id="settingsCard">
-    <div style="font-weight:700">⚙ 설정 <span class="hint">(저장하면 다음 작업부터 적용)</span></div>
-    <div class="row">
-      <div><label>자막 크기(px)</label><input type="number" id="setFontSize" min="40" max="120"></div>
-      <div><label>외곽선 두께</label><input type="number" id="setOutline" min="0" max="8"></div>
-      <div><label>자막 세로 여백</label><input type="number" id="setMarginV" min="100" max="800" step="10"></div>
-      <div><label>한 줄 최대 글자수 <span class="hint">(넘으면 2줄, 0=끔)</span></label><input type="number" id="setWrapChars" min="0" max="40"></div>
-    </div>
-    <div class="row">
-      <div><label>배경 모션</label>
-        <select id="setMotion">
-          <option value="zoom_in">줌인 (기본)</option>
-          <option value="zoom_out">줌아웃</option>
-          <option value="off">없음</option>
-        </select></div>
-      <div><label>줌 정도 (0.02~0.2)</label><input type="number" id="setMotionAmt" min="0.02" max="0.2" step="0.01"></div>
-      <div><label>강조 색</label><input type="color" id="setHlColor" style="height:40px;padding:4px"></div>
-    </div>
-    <div class="row">
-      <div><label>BGM 볼륨(dB)</label><input type="number" id="setBgmVol" min="-40" max="0"></div>
-      <div><label>문장 간격(ms)</label><input type="number" id="setGap" min="0" max="1000" step="10"></div>
-      <div><label>분당 TTS 호출 한도</label><input type="number" id="setRpm" min="1" max="60"></div>
-    </div>
-    <div class="chk"><input type="checkbox" id="setFade"><span>자막 등장 페이드</span></div>
-    <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
-    <div class="chk"><input type="checkbox" id="setBand"><span>자막에도 배경 띠 (하단 자막 뒤에도 어두운 띠)</span></div>
-    <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠)</span></div>
-    <div class="chk"><input type="checkbox" id="setAiImage"><span>AI 배경 이미지 생성 (실험적 · Gemini · 실패 시 기본 배경) </span></div>
-    <div class="hint" style="margin:2px 0 0 26px">끄면 항상 되는 그라데이션 배경을 씁니다. 모델 가용성에 따라 실패할 수 있어요.</div>
-    <div style="font-weight:700;margin-top:16px">📦 내 채널 정보 <span class="hint">(선택 — 업로드 키트 문구를 내 채널 톤에 맞춰줘요)</span></div>
-    <div class="row">
-      <div><label>채널명</label><input type="text" id="setChName" placeholder="예) 곰대리의 자동화"></div>
-      <div><label>채널 주제</label><input type="text" id="setChTopic" placeholder="예) 블로그·유튜브 자동화 꿀팁"></div>
-      <div><label>타깃 시청자</label><input type="text" id="setChAudience" placeholder="예) 부업 시작하는 3040 직장인"></div>
-    </div>
+    <div style="font-weight:700">⚙ 설정 <span class="hint">— 필요한 묶음만 펼쳐서 바꾸세요 (저장하면 다음 작업부터 적용)</span></div>
+
+    <details class="opt">
+      <summary>📝 자막·제목 스타일 <span class="hint">— 크기 · 띠 · 강조 색 · 줄바꿈</span></summary>
+      <div class="row" style="margin-top:4px">
+        <div><label>자막 크기(px)</label><input type="number" id="setFontSize" min="40" max="120"></div>
+        <div><label>외곽선 두께</label><input type="number" id="setOutline" min="0" max="8"></div>
+        <div><label>자막 세로 여백</label><input type="number" id="setMarginV" min="100" max="800" step="10"></div>
+        <div><label>한 줄 최대 글자수 <span class="hint">(넘으면 2줄, 0=끔)</span></label><input type="number" id="setWrapChars" min="0" max="40"></div>
+      </div>
+      <div class="row">
+        <div><label>강조 색</label><input type="color" id="setHlColor" style="height:40px;padding:4px"></div>
+      </div>
+      <div class="chk"><input type="checkbox" id="setFade"><span>자막 등장 페이드</span></div>
+      <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
+      <div class="chk"><input type="checkbox" id="setBand"><span>자막에도 배경 띠 (하단 자막 뒤에도 어두운 띠)</span></div>
+    </details>
+
+    <details class="opt">
+      <summary>🎬 배경·모션 <span class="hint">— AI 영상 만들기의 배경 (줌 · AI 배경 이미지)</span></summary>
+      <div class="row" style="margin-top:4px">
+        <div><label>배경 모션</label>
+          <select id="setMotion">
+            <option value="zoom_in">줌인 (기본)</option>
+            <option value="zoom_out">줌아웃</option>
+            <option value="off">없음</option>
+          </select></div>
+        <div><label>줌 정도 (0.02~0.2)</label><input type="number" id="setMotionAmt" min="0.02" max="0.2" step="0.01"></div>
+      </div>
+      <div class="chk"><input type="checkbox" id="setAiImage"><span>AI 배경 이미지 생성 (Gemini · 실패 시 기본 배경)</span></div>
+      <div class="hint" style="margin:2px 0 0 26px">🤖 AI 영상 만들기 전용 (내 영상 편집·사진은 원본이 배경). Gemini 키가 있으면
+        어떤 목소리를 골라도 적용돼요 (테스트 톤만 제외). <b>실제로 어떤 배경이 쓰였는지는 완성 화면의
+        「🖼️ 배경: …」 표시로 확인</b> — AI 이미지 ✨ / 기본 그라데이션(사유)로 알려줍니다.</div>
+    </details>
+
+    <details class="opt">
+      <summary>🔊 소리·목소리 <span class="hint">— BGM 볼륨 · 덕킹 · 문장 간격 · TTS 한도</span></summary>
+      <div class="row" style="margin-top:4px">
+        <div><label>BGM 볼륨(dB)</label><input type="number" id="setBgmVol" min="-40" max="0"></div>
+        <div><label>문장 간격(ms)</label><input type="number" id="setGap" min="0" max="1000" step="10"></div>
+        <div><label>분당 TTS 호출 한도</label><input type="number" id="setRpm" min="1" max="60"></div>
+      </div>
+      <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠)</span></div>
+    </details>
+
+    <details class="opt">
+      <summary>📦 내 채널 정보 <span class="hint">— 업로드 키트 문구를 내 채널 톤에 맞춰줘요 (선택)</span></summary>
+      <div class="row" style="margin-top:4px">
+        <div><label>채널명</label><input type="text" id="setChName" placeholder="예) 곰대리의 자동화"></div>
+        <div><label>채널 주제</label><input type="text" id="setChTopic" placeholder="예) 블로그·유튜브 자동화 꿀팁"></div>
+        <div><label>타깃 시청자</label><input type="text" id="setChAudience" placeholder="예) 부업 시작하는 3040 직장인"></div>
+      </div>
+    </details>
+
     <button onclick="saveSettings()">설정 저장</button>
   </div>
 
@@ -2998,7 +3048,8 @@ async function generate(){
   const prov = pick('prov');
   const body = {
     topic: $('topic').value, auto: pick('mode') === 'auto',
-    script_provider: prov === 'gemini' ? 'gemini' : 'stub',  // 진짜 대본은 Gemini만
+    // v0.40: 대본은 목소리와 무관 — 키만 있으면 AI 대본 (테스트 톤만 템플릿, 키 없으면 서버가 안전 강등)
+    script_provider: prov === 'stub' ? 'stub' : 'gemini',
     tts_provider: prov,
     voice: prov === 'gemini' ? $('voiceSel').value : '',
     tts_style: prov === 'gemini' ? $('styleSel').value : '',
@@ -3514,6 +3565,7 @@ async function poll(){
     if(job.requested_tts && job.tts_provider && job.requested_tts !== job.tts_provider)
       badge = '⚠ ' + (provKo[job.tts_provider] || job.tts_provider) + '로 대체 생성됨 (원래 선택: ' + (provKo[job.requested_tts] || job.requested_tts) + ')';
     if(job.edit_summary) badge = '✂️ ' + job.edit_summary;  // 편집 모드 요약
+    if(job.bg_source) badge = (badge ? badge + '  ·  ' : '') + '🖼️ 배경: ' + job.bg_source;
     $('providerBadge').textContent = badge;
     if(job.mp4){
       $('doneBox').classList.remove('hidden');

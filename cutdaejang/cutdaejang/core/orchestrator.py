@@ -58,6 +58,7 @@ class JobResult:
     mp4: Optional[RenderResult] = None
     draft_path: str = ""
     tts_provider: str = ""               # 실제 사용된 제공자 (폴백 추적)
+    bg_source: str = ""                  # 배경 출처: user/ai/ai_fail:사유/local (v0.40)
     fallback_note: Optional[str] = None
     errors: List[str] = field(default_factory=list)
 
@@ -177,7 +178,7 @@ def run_job(
         report("background", 0.0)
         bg_path = str(job_dir / "background.png")
         canvas = presets.CANVAS_SHORTS
-        background_generator.prepare_background(
+        _, result.bg_source = background_generator.prepare_background(
             bg_path,
             canvas,
             user_image=opts.user_background,

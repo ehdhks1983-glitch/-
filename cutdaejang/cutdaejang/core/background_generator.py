@@ -117,21 +117,26 @@ def prepare_background(
     prompt: str = "",
     provider: Optional[GeminiImage] = None,
     on_note: Optional[callable] = None,
-) -> str:
+) -> tuple:
     """우선순위: 사용자 이미지 → 제공자(Gemini) → 로컬 그라데이션 폴백.
 
     배경은 비필수라, 제공자에서 어떤 예외가 나도 로컬 폴백으로 넘어가 작업을 살린다.
+    반환: (배경 경로, 출처) — 출처는 "user"/"ai"/"ai_fail:사유"/"local".
+    완료 화면에서 어떤 배경이 쓰였는지 보여주기 위한 값 (v0.40).
     """
     if user_image:
         try:
-            return normalize_to_canvas(user_image, out_path, canvas)
+            return normalize_to_canvas(user_image, out_path, canvas), "user"
         except ff.FFmpegError:
             if on_note:
                 on_note("배경 이미지를 읽지 못해 기본 배경으로 대체합니다")
+    ai_fail = ""
     if provider is not None:
         try:
-            return provider.generate(prompt, out_path, canvas)
+            return provider.generate(prompt, out_path, canvas), "ai"
         except Exception as e:  # 배경 실패가 작업 전체를 죽이지 않게 (§5.6 정신)
+            ai_fail = str(e)[:120]
             if on_note:
-                on_note(f"AI 배경 생성 실패 → 기본 배경 사용 ({str(e)[:120]})")
-    return generate_local(out_path, canvas, seed_text=prompt)
+                on_note(f"AI 배경 생성 실패 → 기본 배경 사용 ({ai_fail})")
+    path = generate_local(out_path, canvas, seed_text=prompt)
+    return path, (f"ai_fail:{ai_fail}" if ai_fail else "local")
