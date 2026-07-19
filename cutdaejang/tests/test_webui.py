@@ -749,6 +749,73 @@ def test_fetch_bgm_endpoint_and_ui(server, monkeypatch, tmp_path):
     assert (tmp_path / "bgm" / fb.CREDIT_FILE).exists()  # 크레딧 파일 생성
 
 
+def test_scene_manual_mode_flow(server, tmp_path):
+    """v0.51 — ✍ 내가 넣기: 키 없이 검토 진입(비용 0) → 폴더/파일로 그림 삽입 → 완성.
+
+    프롬프트만 뽑아 챗지피티/제미나이에서 직접 만들어 넣는 흐름의 서버 왕복.
+    """
+    from cutdaejang.utils import ffmpeg as ff
+
+    _post(server, "/api/settings", {"settings": {"bg": {"scene_mode": "manual"}}})
+    try:
+        res = _post(server, "/api/generate", {
+            "topic": "수동 그림 흐름", "auto": False,
+            "script_provider": "stub", "tts_provider": "stub",
+        })
+        _wait_status(server, res["job_id"], {"awaiting_review"})
+        _post(server, "/api/confirm", {
+            "job_id": res["job_id"], "title": "수동 그림 제목",
+            "sentences": ["첫 문장입니다.", "둘째 문장입니다.", "셋째 문장입니다."],
+        })
+        job = _wait_status(server, res["job_id"], {"review_scenes", "ok", "failed"})
+        assert job["status"] == "review_scenes", job.get("errors")
+        scenes = job["scenes"]
+        assert len(scenes) == 3
+        assert all(not s["ok"] and s["prompt"] for s in scenes)  # 그림 없음 + 프롬프트 존재
+
+        # 내가 만든 그림 폴더 (이름순 2장) → 1·2번 장면에
+        folder = tmp_path / "my_imgs"
+        folder.mkdir()
+        for k, c in enumerate(["red", "lime"]):
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                    "-i", f"color=c={c}:s=600x900:d=0.1", "-frames:v", "1",
+                    str(folder / f"{k + 1:02d}.png")])
+        r = _post(server, "/api/scene_folder", {"job_id": res["job_id"],
+                                                "folder": str(folder)})
+        assert r["applied"] == 2 and r["total"] == 3
+
+        # 3번 장면은 파일 1장으로 직접 (임의 비율 → 캔버스 정규화 확인)
+        one = tmp_path / "solo.jpg"
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                "-i", "color=c=blue:s=800x500:d=0.1", "-frames:v", "1", str(one)])
+        last_i = scenes[2]["i"]
+        assert _post(server, "/api/scene_upload", {
+            "job_id": res["job_id"], "index": last_i, "path": str(one)}).get("ok")
+        png = _get(server, f"/scene/{res['job_id']}/{last_i}").read()
+        assert png[:4] == b"\x89PNG"
+        state = json.loads(_get(server, "/api/state").read())
+        j = next(x for x in state["jobs"] if x["id"] == res["job_id"])
+        assert all(s["ok"] for s in j["scenes"])  # 3장 모두 채워짐
+
+        assert _post(server, "/api/confirm_scenes", {"job_id": res["job_id"]}).get("ok")
+        done = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=300)
+        assert done["status"] == "ok", done.get("errors")
+        assert "AI 장면 이미지 3/3장" in (done.get("bg_source") or "")
+    finally:
+        _post(server, "/api/settings", {"settings": {"bg": {"scene_mode": "auto"}}})
+
+
+def test_pick_file_kind_routing(server, monkeypatch):
+    """v0.51 — /api/pick_file kind: folder/image는 pick_path로, 기본은 기존 함수로."""
+    from cutdaejang.gui import webui
+
+    seen = []
+    monkeypatch.setattr(webui, "pick_path", lambda kind, timeout=600.0: (
+        seen.append(kind) or f"C:/선택/{kind}"))
+    data = _post(server, "/api/pick_file", {"kind": "folder"})
+    assert data["path"] == "C:/선택/folder" and seen == ["folder"]
+
+
 def test_thumbnail_api_position(server, tmp_path):
     """v0.49 — 썸네일 글자 위치(pos_x/pos_y)가 실제로 반영되는지 픽셀 실측."""
     import subprocess

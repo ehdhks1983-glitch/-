@@ -238,6 +238,60 @@ def test_generate_scene_images_uses_ref_for_character(tmp_path):
     assert prov2.refs == [None, None]  # 캐릭터 없으면 참조 안 씀
 
 
+def test_select_indices_and_merge_spans():
+    """v0.51 — 장수 제한 균등 배치 + 같은 그림 연속 구간 병합."""
+    assert bg.select_scene_indices(4, 0) == {0, 1, 2, 3}      # 0=제한 없음
+    assert bg.select_scene_indices(3, 5) == {0, 1, 2}          # 문장보다 크면 전부
+    sel = bg.select_scene_indices(19, 10)
+    assert len(sel) == 10 and 0 in sel and max(sel) < 19       # 10곳 균등, 첫 장면 포함
+    merged = bg.merge_scene_spans([("a.png", 100), ("a.png", 50), ("b.png", 30),
+                                   ("b.png", 20), ("a.png", 10)])
+    assert merged == [("a.png", 150), ("b.png", 50), ("a.png", 10)]
+
+
+@requires_ffmpeg
+def test_generate_scene_images_limit_and_quota_stop(tmp_path):
+    """v0.51 — only_indices로 선택 문장만 생성 + 한도(429) 만나면 남은 장면 중단."""
+    canvas = Canvas(w=90, h=160, fps=30)
+    prov = FakeImage()
+    imgs = bg.generate_scene_images(["a", "b", "c", "d"], prov, tmp_path / "s", canvas,
+                                    only_indices={0, 2})
+    assert bool(imgs[0]) and imgs[1] is None and bool(imgs[2]) and imgs[3] is None
+    assert len(prov.calls) == 2  # 선택한 2곳만 호출 (비용 절감)
+
+    class QuotaImage(FakeImage):
+        def generate(self, prompt, out_path, canvas, ref_png=None):
+            if len(self.calls) >= 1:
+                self.calls.append(prompt)
+                raise RuntimeError("HTTP 429 RESOURCE_EXHAUSTED: credits are depleted")
+            return super().generate(prompt, out_path, canvas)
+
+    prov2 = QuotaImage()
+    imgs2 = bg.generate_scene_images(["a", "b", "c", "d", "e"], prov2, tmp_path / "q", canvas)
+    assert bool(imgs2[0]) and imgs2[1] is None and imgs2[2] is None
+    assert len(prov2.calls) == 2  # 429 이후 남은 장면은 호출 자체를 안 함
+
+
+@requires_ffmpeg
+def test_run_job_max_scene_images(tmp_path):
+    """v0.51 — 최대 장수 2로 제한: 생성 2장뿐, 사이 문장은 직전 그림 유지."""
+    from cutdaejang import config
+    from cutdaejang.core import orchestrator
+    from cutdaejang.core.orchestrator import JobOptions
+
+    prov = FakeImage()
+    settings = config.deep_merge(config.load_settings(), {"bg": {"max_scene_images": 2}})
+    res = orchestrator.run_job(
+        tmp_path / "jobs", StubScript().generate("장수 제한"),
+        opts=JobOptions(tts_chain=["stub"], auto_mode=True), image_provider=prov,
+        settings=settings)
+    assert res.status == "ok", res.errors
+    assert res.bg_source == "ai_scenes:2/2"          # 계획 2장 / 성공 2장
+    assert len(prov.calls) == 3                       # 기본 배경 1 + 장면 2 (4 아님)
+    spec = TimelineSpec.load(f"{res.job_dir}/spec.json")
+    assert spec.background.type == "video"
+
+
 @requires_ffmpeg
 def test_run_job_with_pregenerated_scene_images(tmp_path):
     """v0.50 — 장면 검토에서 확정한 이미지를 run_job에 넘기면 생성 없이 사용."""

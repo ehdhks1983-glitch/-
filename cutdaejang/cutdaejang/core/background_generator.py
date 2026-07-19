@@ -209,6 +209,23 @@ def scene_prompt_text(prompt: str, style: str = "일러스트", character: str =
     return ". ".join(parts)
 
 
+def select_scene_indices(n: int, max_images: int) -> set:
+    """장면 n개 중 그림을 만들 문장 인덱스 — 균등 간격 (v0.51 장수 제한, 비용 절감).
+
+    예: 문장 19개·최대 10장 → {0,1,3,5,7,…} 10곳. 나머지는 직전 그림 유지.
+    0 이하 또는 n 이상이면 전부.
+    """
+    if max_images <= 0 or max_images >= n:
+        return set(range(n))
+    return {int(i * n / max_images) for i in range(max_images)}
+
+
+def _is_quota_error(e: Exception) -> bool:
+    """429·크레딧 소진 — 남은 장면을 계속 시도해봤자 전부 실패(+과금 시도)다."""
+    s = str(e)
+    return "429" in s or "RESOURCE_EXHAUSTED" in s or "credits are depleted" in s
+
+
 def generate_scene_images(
     prompts: list,
     provider: GeminiImage,
@@ -218,18 +235,28 @@ def generate_scene_images(
     character: str = "",
     on_note: Optional[callable] = None,
     on_progress: Optional[callable] = None,
+    only_indices: Optional[set] = None,
 ) -> list:
     """장면 묘사 목록 → 이미지 경로 목록 (실패한 장면은 None — 호출측이 이웃으로 채움).
 
     스타일·캐릭터를 앞에 붙여 전 장면을 통일하고, 캐릭터 모드에서는 첫 성공
     이미지를 참조로 넘겨 다음 장면들의 캐릭터·그림체 일관성을 높인다 (v0.50).
     한 장 실패가 전체를 막지 않는다 (None으로 두고 계속).
+    only_indices가 오면 그 문장만 생성 (v0.51 장수 제한 — 나머지는 None).
+    한도·크레딧 소진(429)을 만나면 남은 장면 생성을 즉시 중단한다.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     ref: Optional[str] = None
+    quota_hit = False
     for i, prompt in enumerate(prompts):
+        if only_indices is not None and i not in only_indices:
+            paths.append(None)  # 이 문장은 직전 그림 유지 (fill_scene_gaps)
+            continue
+        if quota_hit:
+            paths.append(None)
+            continue
         if on_progress:
             on_progress(i, len(prompts))
         full = scene_prompt_text(prompt, style, character)
@@ -249,11 +276,31 @@ def generate_scene_images(
                     on_note(f"장면 {i + 1} 이미지 실패 → 이웃 장면으로 대체 ({str(e)[:80]})")
         except Exception as e:  # noqa: BLE001 — 한 장 실패는 이웃 이미지로 대체
             paths.append(None)
+            if _is_quota_error(e):
+                quota_hit = True
+                if on_note:
+                    on_note("이미지 한도·크레딧 소진 — 남은 장면 생성을 건너뜁니다")
+                continue
             if on_note:
                 on_note(f"장면 {i + 1} 이미지 실패 → 이웃 장면으로 대체 ({str(e)[:80]})")
     if on_progress:
         on_progress(len(prompts), len(prompts))
     return paths
+
+
+def merge_scene_spans(spans: list) -> list:
+    """같은 그림이 연달아 나오는 구간을 하나로 합침 (v0.51).
+
+    장수 제한·실패 채움으로 같은 이미지가 반복될 때, 문장마다 줌이 처음부터
+    다시 시작해 배경이 '툭' 끊겨 보이는 것 방지 — 한 구간으로 이어 자연스럽게.
+    """
+    out: list = []
+    for img, dur in spans:
+        if out and out[-1][0] == img:
+            out[-1] = (img, out[-1][1] + dur)
+        else:
+            out.append((img, dur))
+    return out
 
 
 def fill_scene_gaps(paths: list, base: Optional[str] = None) -> list:

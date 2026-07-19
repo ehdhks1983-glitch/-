@@ -88,36 +88,53 @@ def _dt_stamp() -> str:
 
 # 네이티브 파일 선택 창 — 서버(사용자 PC)에서 tkinter 대화상자를 별도 프로세스로 띄워
 # 전체 경로를 돌려받는다. 서버 스레드와 GUI 스레드 충돌을 피하려 subprocess로 분리.
+# v0.51: 종류별(영상/그림/소리/폴더) 일반화 — 폼마다 [📁] 버튼에서 재사용.
 _PICK_FILE_CODE = r"""
+import sys
 import tkinter as tk
 from tkinter import filedialog
+kind = sys.argv[1] if len(sys.argv) > 1 else "video"
 r = tk.Tk(); r.withdraw(); r.attributes("-topmost", True)
-p = filedialog.askopenfilename(
-    title="편집할 영상 선택",
-    filetypes=[("영상 파일", "*.mp4 *.mov *.avi *.mkv *.webm *.m4v *.wmv *.flv"),
-               ("모든 파일", "*.*")],
-)
+if kind == "folder":
+    p = filedialog.askdirectory(title="폴더 선택")
+elif kind == "image":
+    p = filedialog.askopenfilename(
+        title="그림 파일 선택",
+        filetypes=[("그림 파일", "*.png *.jpg *.jpeg *.webp *.bmp"), ("모든 파일", "*.*")])
+elif kind == "audio":
+    p = filedialog.askopenfilename(
+        title="소리 파일 선택",
+        filetypes=[("소리 파일", "*.mp3 *.wav *.m4a *.ogg *.flac"), ("모든 파일", "*.*")])
+else:
+    p = filedialog.askopenfilename(
+        title="편집할 영상 선택",
+        filetypes=[("영상 파일", "*.mp4 *.mov *.avi *.mkv *.webm *.m4v *.wmv *.flv"),
+                   ("모든 파일", "*.*")])
 r.destroy()
-import sys
 sys.stdout.write(p or "")
 """
 
 
-def pick_video_file(timeout: float = 600.0) -> Optional[str]:
-    """네이티브 파일 선택 창을 띄우고 선택된 경로 반환. 취소=None, 사용불가=예외."""
+def pick_path(kind: str = "video", timeout: float = 600.0) -> Optional[str]:
+    """네이티브 선택 창을 띄우고 선택된 경로 반환. 취소=None, 사용불가=예외."""
     import subprocess  # noqa: PLC0415
 
     proc = subprocess.run(
-        [sys.executable, "-c", _PICK_FILE_CODE],
+        [sys.executable, "-c", _PICK_FILE_CODE, kind],
         capture_output=True, text=True, timeout=timeout,
     )
     if proc.returncode != 0:
         raise RuntimeError(
-            "파일 선택 창을 열 수 없습니다. 경로를 직접 붙여넣어 주세요. "
+            "선택 창을 열 수 없습니다. 경로를 직접 붙여넣어 주세요. "
             f"({proc.stderr.strip()[-200:]})"
         )
     path = proc.stdout.strip()
     return path or None
+
+
+def pick_video_file(timeout: float = 600.0) -> Optional[str]:
+    """(호환용) 영상 파일 선택 — 기존 테스트·호출 유지."""
+    return pick_path("video", timeout)
 
 
 def _stt_available() -> dict:
@@ -233,10 +250,10 @@ def _ai_image_setup(params: dict, settings: dict):
 
 def _bg_display(image_provider, bg_skip: str, src: str) -> str:
     """완료 화면용 배경 출처 문구."""
+    if src.startswith("ai_scenes:"):  # v0.45 장면별 이미지 — v0.51부터 ✍ 수동 삽입도
+        return f"AI 장면 이미지 {src[10:]}장 ✨"  # (키 없이 내가 넣은 그림 포함)
     if image_provider is None:
         return f"기본 그라데이션 ({bg_skip})" if bg_skip else "기본 그라데이션"
-    if src.startswith("ai_scenes:"):  # v0.45 장면별 이미지 (성공/전체)
-        return f"AI 장면 이미지 {src[10:]}장 ✨"
     if src == "ai":
         return "AI 이미지 ✨"
     if src == "user":
@@ -247,13 +264,21 @@ def _bg_display(image_provider, bg_skip: str, src: str) -> str:
 
 
 def _apply_bg_style(params: dict, settings: dict) -> dict:
-    """생성 폼에서 고른 장면 그림체·마스코트를 설정에 반영(기억)하고 병합 (v0.45/0.50)."""
+    """생성 폼에서 고른 장면 그림체·마스코트·그림 방식을 설정에 반영(기억)하고 병합
+    (v0.45/0.50/0.51)."""
     over = {}
     style = (params.get("bg_style") or "").strip()
     if style:
         over["image_style"] = style
     if "bg_character" in params:  # 빈 문자열 = 캐릭터 없음(해제)도 기억
         over["character"] = str(params.get("bg_character") or "").strip()
+    if str(params.get("bg_scene_mode") or "") in ("auto", "manual", "off"):  # v0.51
+        over["scene_mode"] = params["bg_scene_mode"]
+    if "bg_max_imgs" in params:  # v0.51 장수 제한 (0=문장마다)
+        try:
+            over["max_scene_images"] = max(0, min(50, int(params.get("bg_max_imgs") or 0)))
+        except (TypeError, ValueError):
+            pass
     if not over:
         return settings
     cur = settings["bg"]
@@ -944,15 +969,27 @@ def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> 
     try:
         settings = _apply_bg_style(params, config.load_settings())
         provider, _skip = _ai_image_setup(params, settings)
+        mode = settings["bg"].get("scene_mode", "auto")
         job_dir = Path(workdir) / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         (job_dir / "script.json").write_text(script.to_json(), encoding="utf-8")
-        if provider is None:
+        if provider is None and mode != "manual":
             _run_pipeline(job_id, script, params, workdir)
             return
         from .. import presets  # noqa: PLC0415
 
         prompts = [sp or s for sp, s in zip(script.scene_prompts, script.sentences)]
+        sel = sorted(background_generator.select_scene_indices(
+            len(prompts), int(settings["bg"].get("max_scene_images", 0) or 0)))
+        if mode == "manual":
+            # ✍ 내가 넣기 (v0.51) — AI 생성 없이(비용 0원) 프롬프트만 뽑아 검토로.
+            # [📋 전체 복사] → 챗지피티/제미나이에서 직접 생성 → [📁]로 삽입.
+            scenes = [{"i": i, "prompt": prompts[i], "ok": False,
+                       "text": script.sentences[i]} for i in sel]
+            _set_job(job_id, status="review_scenes", stage="review", frac=1.0,
+                     note="✍ 내가 넣기 — 프롬프트를 복사해 그림을 만들어 넣어주세요",
+                     scenes=scenes)
+            return
         imgs = background_generator.generate_scene_images(
             prompts, provider, job_dir / "scenes", presets.CANVAS_SHORTS,
             style=settings["bg"].get("image_style", "일러스트"),
@@ -961,13 +998,17 @@ def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> 
             on_progress=lambda i, n: _set_job(
                 job_id, stage="background", frac=i / max(n, 1),
                 note=f"장면 그림 {min(i + 1, n)}/{n} 만드는 중…"),
+            only_indices=set(sel) if len(sel) < len(prompts) else None,
         )
-        if not any(imgs):  # 전부 실패 → 검토 화면 의미 없음, 기존 흐름으로
-            _set_job(job_id, note="장면 그림 생성이 모두 실패해 기본 배경으로 진행합니다")
-            _run_pipeline(job_id, script, params, workdir)
+        if not any(imgs):  # 전부 실패 → 그래도 검토 화면에서 직접 넣을 수 있게 (v0.51)
+            _set_job(job_id, status="review_scenes", stage="review", frac=1.0,
+                     note="장면 그림 생성이 모두 실패했어요 — 프롬프트를 복사해 직접 만들어 "
+                          "넣거나, 그대로 ✅ 완성하면 기본 배경으로 만들어져요",
+                     scenes=[{"i": i, "prompt": prompts[i], "ok": False,
+                              "text": script.sentences[i]} for i in sel])
             return
-        scenes = [{"i": i, "prompt": prompts[i], "ok": bool(p), "text": script.sentences[i]}
-                  for i, p in enumerate(imgs)]
+        scenes = [{"i": i, "prompt": prompts[i], "ok": bool(imgs[i]),
+                   "text": script.sentences[i]} for i in sel]
         _set_job(job_id, status="review_scenes", stage="review", frac=1.0, note="",
                  scenes=scenes)
     except Exception as e:
@@ -1171,8 +1212,16 @@ class _Handler(BaseHTTPRequestHandler):
 
             logging.getLogger("cutdaejang").error(
                 "API 처리 오류 %s\n%s", self.path, traceback.format_exc())
+            msg = f"서버 내부 오류: {e} — 하단 🪵 로그 참고"
+            s = str(e)
+            if "429" in s and ("credit" in s.lower() or "RESOURCE_EXHAUSTED" in s
+                               or "quota" in s.lower()):
+                # 사용자 스크린샷: 원문 JSON이 그대로 떠서 무슨 말인지 알 수 없었음 (v0.51)
+                msg = ("Gemini 한도·크레딧이 소진돼 요청이 실패했어요 — 무료 한도는 내일 "
+                       "오후 4~5시쯤(한국시간) 풀리고, 유료 크레딧은 ai.studio → 결제에서 "
+                       "충전할 수 있어요. ✍ 그림은 '내가 넣기' 방식이면 비용 없이 계속 가능!")
             try:
-                self._send_json({"error": f"서버 내부 오류: {e} — 하단 🪵 로그 참고"}, 500)
+                self._send_json({"error": msg}, 500)
             except Exception:  # noqa: BLE001 — 이미 응답을 보낸 경우 등
                 pass
 
@@ -1244,11 +1293,14 @@ class _Handler(BaseHTTPRequestHandler):
                 background_prompt=(job.get("script") or {}).get("background_prompt", ""),
                 scene_prompts=scene_prompts,
             )
-            settings = config.load_settings()
+            settings = _apply_bg_style(job.get("params", {}), config.load_settings())
             provider, _skip = _ai_image_setup(job.get("params", {}), settings)
-            # 🖼 장면 검토 (v0.50) — 키·설정이 되면 그림을 먼저 보여주고 확정받는다
-            if (provider is not None and settings["bg"].get("scene_images", True)
-                    and len(script.sentences) > 1):
+            # 🖼 장면 검토 (v0.50) — 키·설정이 되면 그림을 먼저 보여주고 확정받는다.
+            # v0.51: ✍ 내가 넣기(manual)는 키 없이도 검토로 — 프롬프트만 뽑아 직접 삽입.
+            scene_mode = settings["bg"].get("scene_mode", "auto")
+            if (settings["bg"].get("scene_images", True) and scene_mode != "off"
+                    and len(script.sentences) > 1
+                    and (scene_mode == "manual" or provider is not None)):
                 _set_job(job["id"], status="running", stage="background", frac=0.0,
                          note="장면 그림을 준비하는 중…")
                 threading.Thread(
@@ -1451,8 +1503,10 @@ class _Handler(BaseHTTPRequestHandler):
                 logging.getLogger("cutdaejang").error("썸네일 실패\n%s", traceback.format_exc())
                 self._send_json({"error": f"썸네일 생성 실패: {e}"}, 500)
         elif path == "/api/pick_file":
+            kind = str(params.get("kind") or "video")
             try:
-                picked = pick_video_file()
+                # video는 기존 함수 경유 (테스트·기존 몽키패치 호환)
+                picked = pick_video_file() if kind == "video" else pick_path(kind)
                 self._send_json({"path": picked or "", "cancelled": picked is None})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
@@ -1537,8 +1591,12 @@ class _Handler(BaseHTTPRequestHandler):
             scenes = job.get("scenes") or []
             try:
                 idx = int(params.get("index"))
-                scene = scenes[idx]
-            except (TypeError, ValueError, IndexError):
+            except (TypeError, ValueError):
+                self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
+                return
+            # v0.51: 장수 제한 시 scenes는 문장 일부 — 문장 인덱스(i)로 찾는다
+            scene = next((s for s in scenes if s.get("i") == idx), None)
+            if scene is None:
                 self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
                 return
             settings = config.load_settings()
@@ -1570,6 +1628,74 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True})
             except Exception as e:  # noqa: BLE001
                 self._send_json({"error": f"다시 그리기 실패: {str(e)[:200]}"}, 500)
+        elif path == "/api/scene_upload":  # ✍ 내 그림으로 장면 교체 (v0.51 — 파일 1장)
+            job = _get_job(params.get("job_id", ""))
+            if not job or job.get("status") != "review_scenes":
+                self._send_json({"error": "장면 검토 중인 작업이 아닙니다"}, 400)
+                return
+            src = (params.get("path") or "").strip().strip('"')
+            try:
+                idx = int(params.get("index"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
+                return
+            scenes = job.get("scenes") or []
+            scene = next((s for s in scenes if s.get("i") == idx), None)
+            if scene is None:
+                self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
+                return
+            if not src or not Path(src).is_file():
+                self._send_json({"error": f"그림 파일을 찾을 수 없습니다: {src or '(비어 있음)'}"}, 400)
+                return
+            if Path(src).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+                self._send_json({"error": "그림 파일(png/jpg/webp/bmp)만 넣을 수 있어요"}, 400)
+                return
+            from .. import presets  # noqa: PLC0415
+
+            dest = Path(workdir) / job["id"] / "scenes" / f"scene_{idx + 1:02d}.png"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:  # 어떤 크기·비율이 와도 쇼츠 캔버스에 맞게 정규화 (한쪽 채우고 넘침은 잘라냄)
+                background_generator.normalize_to_canvas(src, str(dest), presets.CANVAS_SHORTS)
+            except Exception as e:  # noqa: BLE001
+                self._send_json({"error": f"그림 넣기 실패: {str(e)[:200]}"}, 500)
+                return
+            scene["ok"] = True
+            _set_job(job["id"], scenes=scenes)
+            self._send_json({"ok": True})
+        elif path == "/api/scene_folder":  # ✍ 폴더의 그림을 순서대로 한꺼번에 (v0.51)
+            job = _get_job(params.get("job_id", ""))
+            if not job or job.get("status") != "review_scenes":
+                self._send_json({"error": "장면 검토 중인 작업이 아닙니다"}, 400)
+                return
+            folder = (params.get("folder") or "").strip().strip('"')
+            if not folder or not Path(folder).is_dir():
+                self._send_json({"error": f"폴더를 찾을 수 없습니다: {folder or '(비어 있음)'}"}, 400)
+                return
+            files = sorted(
+                (p for p in Path(folder).iterdir()
+                 if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp")),
+                key=lambda p: p.name)
+            if not files:
+                self._send_json({"error": "폴더에 그림 파일(png/jpg/webp/bmp)이 없습니다"}, 400)
+                return
+            from .. import presets  # noqa: PLC0415
+
+            scenes = job.get("scenes") or []
+            scenes_dir = Path(workdir) / job["id"] / "scenes"
+            scenes_dir.mkdir(parents=True, exist_ok=True)
+            applied, errors = 0, []
+            for scene, f in zip(scenes, files):  # 이름순 k번째 그림 → k번째 장면
+                dest = scenes_dir / f"scene_{int(scene['i']) + 1:02d}.png"
+                try:
+                    background_generator.normalize_to_canvas(str(f), str(dest),
+                                                             presets.CANVAS_SHORTS)
+                    scene["ok"] = True
+                    applied += 1
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{f.name}: {str(e)[:80]}")
+            _set_job(job["id"], scenes=scenes)
+            self._send_json({"ok": True, "applied": applied, "total": len(scenes),
+                             "files": len(files), "errors": errors[:3]})
         elif path == "/api/confirm_scenes":  # 🖼 장면 검토 확정 → 렌더 (v0.50)
             job = _get_job(params.get("job_id", ""))
             if not job or job.get("status") != "review_scenes":
@@ -1582,10 +1708,14 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "대본 파일을 읽을 수 없습니다"}, 500)
                 return
             scenes_dir = Path(workdir) / job["id"] / "scenes"
-            imgs = []
-            for i in range(len(job.get("scenes") or [])):
-                p = scenes_dir / f"scene_{i + 1:02d}.png"
-                imgs.append(str(p) if p.is_file() else None)
+            # 장수 제한(v0.51) 시 scenes는 문장 일부만 — 문장 인덱스(i)로 매핑하고
+            # 빈 곳은 렌더에서 직전 그림으로 채워진다 (fill_scene_gaps)
+            imgs = [None] * len(script.sentences)
+            for s in (job.get("scenes") or []):
+                idx = int(s.get("i", -1))
+                p = scenes_dir / f"scene_{idx + 1:02d}.png"
+                if 0 <= idx < len(imgs) and p.is_file():
+                    imgs[idx] = str(p)
             _set_job(job["id"], status="running", stage="tts", frac=0.0, note="")
             threading.Thread(
                 target=_run_pipeline,
@@ -2261,7 +2391,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.50)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.51)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2321,8 +2451,11 @@ _HTML = """<!doctype html>
 
     <div id="photoBlock" class="hidden">
       <div class="steplabel"><span class="stepnum">1</span>사진 고르기</div>
-      <input type="text" id="photoPath" placeholder="사진이 들어 있는 폴더 경로를 붙여넣기 (안의 사진 전부, 이름 순서대로)">
-      <div class="hint">파일 경로 여러 개를 줄바꿈/세미콜론으로 넣어도 돼요. 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="photoPath" style="flex:1" placeholder="사진이 들어 있는 폴더 경로 (안의 사진 전부, 이름 순서대로)">
+        <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','folder')">📁 폴더 선택</button>
+      </div>
+      <div class="hint">🆕 v0.51 [📁 폴더 선택]으로 바로 고를 수 있어요. 파일 경로 여러 개를 줄바꿈/세미콜론으로 넣어도 돼요. 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
       <div class="chk" style="gap:8px">
         <span>영상 전체 길이</span>
         <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px">
@@ -2637,7 +2770,7 @@ _HTML = """<!doctype html>
       <label><input type="radio" name="prov" value="gemini"><span>🌟 AI 성우 (추천)</span></label>
       <label id="provWinLabel" class="hidden"><input type="radio" name="prov" value="windows" id="provWin"><span>내장 음성 (무료)</span></label>
       <label id="provMineLabel" class="hidden"><input type="radio" name="prov" value="elevenlabs" id="provMine"><span>🎤 내 목소리</span></label>
-      <label id="provElevenLabel" class="hidden"><input type="radio" name="prov" value="eleven_voice" id="provEleven"><span>🎙 일레븐랩스 성우</span></label>
+      <label id="provElevenLabel"><input type="radio" name="prov" value="eleven_voice" id="provEleven" onclick="checkElevenProv(event)"><span>🎙 일레븐랩스 성우</span></label>
       <label id="provSovitsLabel" class="hidden"><input type="radio" name="prov" value="sovits" id="provSovits"><span>🎤 내 목소리 (무료·내 PC)</span></label>
       <label><input type="radio" name="prov" value="stub" checked><span>🔧 테스트 톤</span></label>
     </div>
@@ -2738,6 +2871,20 @@ _HTML = """<!doctype html>
                placeholder="예) 파란 모자를 쓴 유머러스한 해골">
         <span class="hint">🆕 v0.50 — 모든 장면에 같은 캐릭터가 등장해요 (첫 그림을 참조로 일관성 유지)</span>
       </div>
+      <div class="chk" style="gap:8px;flex-wrap:wrap">
+        <span>그림 만들기</span>
+        <select id="genSceneMode" style="width:auto;padding:6px 8px">
+          <option value="auto" selected>🤖 자동 — AI가 장면마다 생성</option>
+          <option value="manual">✍ 내가 넣기 — 프롬프트만 뽑기 (AI 비용 0원)</option>
+          <option value="off">⛔ 그림 없이 (기본 배경)</option>
+        </select>
+        <span>최대 장수</span>
+        <input type="number" id="genMaxImg" min="0" max="50" value="0" style="width:74px;padding:6px 8px">
+        <span class="hint">0=문장마다 1장 · 예) 19문장에 10 → 10장만 만들어 비용 절감 (사이 문장은 직전 그림 유지)</span>
+      </div>
+      <div class="hint">🆕 v0.51 ✍ <b>내가 넣기</b>: 「검토」로 만들면 장면 프롬프트가 번호대로 쭉 나와요 —
+        [📋 전체 복사] → 챗지피티/제미나이(이미 쓰는 유료 계정)에 붙여넣어 한 번에 생성 →
+        [📁 폴더에서 넣기]로 끝. 컷대장 쪽 이미지 비용은 <b>0원</b>.</div>
       <div class="hint hidden" id="aiBgOffWarn" style="color:#e8b34b">⚠ 지금 ⚙ 설정에서 <b>AI 배경이 꺼져 있어</b> 장면 그림·마스코트가 적용되지 않아요.
         <button class="ghost" style="padding:3px 10px;margin-left:6px" onclick="enableAiBg(event)">지금 켜기</button></div>
       <div class="hint">🆕 v0.45 — 대본의 문장(장면)마다 AI가 그림을 그려 말 타이밍에 맞춰 넘어갑니다
@@ -2782,7 +2929,11 @@ _HTML = """<!doctype html>
 
     <div id="sceneBox" class="hidden">
       <div style="font-weight:700">🖼 장면 그림 확인 <span class="hint">— 문장마다 이 그림이 배경으로 들어가요</span></div>
-      <div class="hint" style="margin-top:4px">마음에 안 드는 장면은 <b>묘사를 고치고 [🔄 다시 그리기]</b> → 다 되면 맨 아래 <b>[✅ 이 그림들로 완성]</b></div>
+      <div class="hint" style="margin-top:4px">마음에 안 드는 장면은 <b>묘사를 고치고 [🔄 다시 그리기]</b>, 또는 <b>[📁 내 그림]</b>으로 직접 만든 그림을 넣어도 돼요 → 다 되면 맨 아래 <b>[✅ 이 그림들로 완성]</b></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="ghost" onclick="copyScenePrompts(event)" title="번호별 장면 묘사 + 그림체·마스코트 지시문을 한 번에 복사 — 챗지피티/제미나이에 붙여넣어 직접 생성">📋 프롬프트 전체 복사</button>
+        <button class="ghost" onclick="importSceneFolder(event)" title="직접 만든 그림들을 폴더에 담아두면 이름순으로 1번 장면부터 차례로 들어갑니다">📁 그림 폴더에서 한꺼번에 넣기</button>
+      </div>
       <div id="sceneGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-top:10px"></div>
       <button style="margin-top:12px" onclick="confirmScenes()">✅ 이 그림들로 영상 완성</button>
     </div>
@@ -3305,6 +3456,19 @@ async function pickFile(ev){
     // 취소면 그대로 둠
   } catch(e){ alert('파일 선택 창을 열 수 없습니다: ' + e); }
   finally { btn.disabled = false; btn.textContent = '📁 영상 선택'; }
+}
+
+// 종류별 선택 창을 열어 입력칸에 채움 (v0.51 — 폴더/그림/소리)
+async function pickInto(ev, targetId, kind){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true;
+  try{
+    const data = await (await fetch('/api/pick_file', {method:'POST',
+      body: JSON.stringify({kind: kind || 'video'})})).json();
+    if(data.error){ alert(data.error); }
+    else if(data.path){ $(targetId).value = data.path; }
+  } catch(e){ alert('선택 창을 열 수 없습니다: ' + e); }
+  finally { btn.disabled = false; }
 }
 
 function toggleAutoSub(){
@@ -3844,8 +4008,17 @@ async function generate(){
   if(prov === 'eleven_voice' && !(($('elevenVoiceSel')||{}).value)){
     alert('일레븐랩스 보이스 목록을 아직 못 불러왔어요 — 잠시 후 다시 시도하거나 키를 확인하세요'); return;
   }
+  let autoMode = pick('mode') === 'auto';
+  const sceneMode = (($('genSceneMode')||{}).value)||'auto';
+  if(sceneMode === 'manual' && autoMode && !(($('batchChk')||{}).checked)){
+    // ✍ 내가 넣기는 그림을 직접 넣는 단계가 필요 → 검토 방식으로 자동 전환 (v0.51)
+    alert('✍ 내가 넣기는 「검토」 방식으로 진행돼요 — 대본 확정 후 프롬프트가 나옵니다.');
+    autoMode = false;
+    const rv = document.querySelector("input[name='mode'][value='review']");
+    if(rv) rv.checked = true;
+  }
   const body = {
-    topic: $('topic').value, auto: pick('mode') === 'auto',
+    topic: $('topic').value, auto: autoMode,
     // v0.40: 대본은 목소리와 무관 — 키만 있으면 AI 대본 (테스트 톤만 템플릿, 키 없으면 서버가 안전 강등)
     script_provider: prov === 'stub' ? 'stub' : 'gemini',
     tts_provider: prov === 'eleven_voice' ? 'elevenlabs' : prov,   // 🎙 성우도 같은 제공자
@@ -3857,6 +4030,8 @@ async function generate(){
     bg_character: (($('genCharSel')||{}).value) === 'custom'
       ? ((($('genCharCustom')||{}).value)||'').trim()
       : ((($('genCharSel')||{}).value)||''),
+    bg_scene_mode: sceneMode,                                   // v0.51 그림 방식
+    bg_max_imgs: Math.max(0, +((($('genMaxImg')||{}).value)||0)), // v0.51 장수 제한
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
   };
@@ -4268,6 +4443,7 @@ function resetGenForm(ev){
   set('styleSel', ($('styleSel').options[0]||{}).value || '');
   set('genBgStyle','일러스트');
   set('genCharSel',''); set('genCharCustom',''); onGenCharChange();
+  set('genSceneMode','auto'); set('genMaxImg','0');   // v0.51 그림 방식·장수
 }
 
 function updateLogs(lines){
@@ -4415,33 +4591,119 @@ async function confirmScript(){
   timer = timer || setInterval(poll, 900);
 }
 
-// ── 🖼 장면 그림 검토 (v0.50) — 그리드 렌더·장면별 재생성·확정 ──
+// ── 🖼 장면 그림 검토 (v0.50/0.51) — 그리드 렌더·재생성·내 그림 삽입·확정 ──
 function renderScenes(job){
   const grid = $('sceneGrid'); grid.innerHTML = '';
-  (job.scenes || []).forEach(s => {
+  window._lastScenes = job.scenes || [];
+  (job.scenes || []).forEach((s, k) => {
     const cell = document.createElement('div');
     cell.style.cssText = 'border:1px solid #2c3350;border-radius:10px;padding:6px;background:#12141c';
     const img = document.createElement('img');
     img.style.cssText = 'width:100%;border-radius:8px;aspect-ratio:9/16;object-fit:cover;background:#0d0f14';
-    img.src = s.ok ? ('/scene/' + encodeURIComponent(job.id) + '/' + s.i + '?t=' + Date.now()) : '';
+    if(s.ok){
+      img.src = '/scene/' + encodeURIComponent(job.id) + '/' + s.i + '?t=' + Date.now();
+    } else {
+      cell.style.borderStyle = 'dashed';  // ✍ 아직 그림 없음 (내가 넣기/실패)
+    }
     img.alt = '장면 ' + (s.i + 1);
     const cap = document.createElement('div');
     cap.className = 'hint';
     cap.style.marginTop = '4px';
-    cap.textContent = (s.i + 1) + '. ' + (s.text || '');
+    cap.textContent = (k + 1) + '번 그림 · ' + (s.text || '') + (s.ok ? '' : '  (그림 없음)');
     const ta = document.createElement('textarea');
     ta.style.cssText = 'min-height:52px;font-size:12px;margin-top:4px';
     ta.value = s.prompt || '';
     ta.id = 'scnP' + s.i;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap';
     const btn = document.createElement('button');
     btn.className = 'ghost';
     btn.style.cssText = 'margin-top:4px;padding:4px 8px;font-size:12px';
-    btn.textContent = s.ok ? '🔄 다시 그리기' : '🔄 그리기 (실패했던 장면)';
+    btn.textContent = '🔄 ' + (s.ok ? '다시 그리기' : 'AI로 그리기');
     btn.onclick = (e) => regenScene(e, s.i);
-    cell.append(img, cap, ta, btn);
+    const up = document.createElement('button');
+    up.className = 'ghost';
+    up.style.cssText = 'margin-top:4px;padding:4px 8px;font-size:12px';
+    up.textContent = '📁 내 그림';
+    up.title = '직접 만든 그림 파일을 이 장면에 넣기 (자동으로 쇼츠 크기에 맞춰져요)';
+    up.onclick = (e) => sceneUpload(e, s.i);
+    row.append(btn, up);
+    cell.append(img, cap, ta, row);
     grid.appendChild(cell);
   });
   $('sceneBox').classList.remove('hidden');
+}
+
+async function refreshScenes(){
+  const state = await (await fetch('/api/state')).json();
+  const job = (state.jobs || []).find(j => j.id === currentJob);
+  if(job && job.scenes) renderScenes(job);
+}
+
+// 📋 번호별 프롬프트 + 그림체·마스코트 지시문을 한 번에 복사 (v0.51 — 챗지피티/제미나이용)
+async function copyScenePrompts(ev){
+  ev.preventDefault();
+  const scenes = window._lastScenes || [];
+  if(!scenes.length){ alert('장면이 없습니다'); return; }
+  const style = (($('genBgStyle')||{}).value)||'일러스트';
+  const ch = (($('genCharSel')||{}).value) === 'custom'
+    ? ((($('genCharCustom')||{}).value)||'').trim() : ((($('genCharSel')||{}).value)||'');
+  const lines = [
+    '아래 번호마다 유튜브 쇼츠용 세로(9:16) 이미지를 1장씩 만들어줘. 총 ' + scenes.length + '장.',
+    '모든 장면은 같은 그림체(' + style + ' 느낌)로 통일하고, 글자는 넣지 말고, 화면 아래 1/3은 자막이 올라갈 수 있게 단순하게.',
+  ];
+  if(ch) lines.push('주인공 캐릭터: ' + ch + ' — 모든 장면에 같은 모습·같은 그림체로 등장.');
+  lines.push('');
+  scenes.forEach((s, k) => {
+    const p = (($('scnP' + s.i)||{}).value) || s.prompt || s.text || '';
+    lines.push((k + 1) + '. ' + p);
+  });
+  const text = lines.join(String.fromCharCode(10));
+  try { await navigator.clipboard.writeText(text); }
+  catch(e){ prompt('자동 복사가 안 돼요 — 아래 내용을 직접 복사하세요', text); return; }
+  alert('복사 완료! 챗지피티/제미나이에 붙여넣어 그림을 만들고,' + String.fromCharCode(10) +
+        '만들어진 그림들을 한 폴더에 저장한 뒤 [📁 그림 폴더에서 한꺼번에 넣기]를 누르세요.' + String.fromCharCode(10) +
+        '(파일 이름순으로 1번 그림부터 차례로 들어가요)');
+}
+
+// 📁 폴더의 그림을 이름순으로 1번 장면부터 (v0.51)
+async function importSceneFolder(ev){
+  ev.preventDefault();
+  const pk = await (await fetch('/api/pick_file', {method:'POST',
+    body: JSON.stringify({kind:'folder'})})).json();
+  if(pk.error){ alert(pk.error); return; }
+  if(!pk.path) return;  // 취소
+  const data = await (await fetch('/api/scene_folder', {method:'POST',
+    body: JSON.stringify({job_id: currentJob, folder: pk.path})})).json();
+  if(data.error){ alert(data.error); return; }
+  await refreshScenes();
+  let msg = '그림 ' + data.applied + '/' + data.total + '개 장면에 넣었어요';
+  if(data.files < data.total) msg += ' (폴더에 그림이 ' + data.files + '개뿐 — 나머지 장면은 직전 그림 유지)';
+  if((data.errors||[]).length) msg += String.fromCharCode(10) + '실패: ' + data.errors.join(', ');
+  alert(msg);
+}
+
+// 📁 이 장면에 내 그림 1장 (v0.51)
+async function sceneUpload(ev, i){
+  ev.preventDefault();
+  const pk = await (await fetch('/api/pick_file', {method:'POST',
+    body: JSON.stringify({kind:'image'})})).json();
+  if(pk.error){ alert(pk.error); return; }
+  if(!pk.path) return;
+  const data = await (await fetch('/api/scene_upload', {method:'POST',
+    body: JSON.stringify({job_id: currentJob, index: i, path: pk.path})})).json();
+  if(data.error){ alert(data.error); return; }
+  await refreshScenes();
+}
+
+// 🎙 일레븐랩스 라디오 — 키가 없으면 등록 화면으로 안내 (v0.51 상시 노출)
+function checkElevenProv(ev){
+  if(window._hasElevenKey) return;
+  ev.target.checked = false;
+  const stub = document.querySelector("input[name='prov'][value='stub']");
+  if(stub) stub.checked = true;
+  if(confirm('일레븐랩스 성우를 쓰려면 키 등록이 필요해요 (elevenlabs.io 가입 → 키 발급).' +
+             String.fromCharCode(10) + '등록 화면으로 갈까요?')) openVoice(ev);
 }
 
 async function regenScene(ev, i){
@@ -4459,6 +4721,9 @@ async function regenScene(ev, i){
 }
 
 async function confirmScenes(){
+  const okN = (window._lastScenes || []).filter(s => s.ok).length;  // v0.51 안내
+  if(!okN && !confirm('그림이 하나도 없어요 — 이대로 완성하면 기본 그라데이션 배경으로 만들어져요.' +
+                      String.fromCharCode(10) + '계속할까요?')) return;
   const data = await (await fetch('/api/confirm_scenes', {method:'POST',
     body: JSON.stringify({job_id: currentJob})})).json();
   if(data.error){ alert(data.error); return; }
@@ -4557,6 +4822,11 @@ async function poll(){
       else { $('genCharSel').value = 'custom'; $('genCharCustom').value = bgc; }
       onGenCharChange();
     }
+    // v0.51: 그림 방식·최대 장수 복원
+    const scm = ((state.settings || {}).bg || {}).scene_mode || 'auto';
+    if($('genSceneMode')) $('genSceneMode').value = scm;
+    const mxi = ((state.settings || {}).bg || {}).max_scene_images || 0;
+    if($('genMaxImg')) $('genMaxImg').value = String(mxi);
     initHookChips();
     const mv = ((state.settings || {}).tts || {});
     if(mv.voice_elevenlabs) addMyVoiceOption(mv.voice_elevenlabs_name || '내 목소리');

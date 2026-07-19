@@ -67,6 +67,8 @@ DEFAULTS: dict = {
         "scene_images": True,         # 문장(장면)마다 새 이미지 (v0.45. 끄면 1장+줌)
         "image_style": "일러스트",     # 장면 그림체 — background_generator.IMAGE_STYLES 키
         "character": "",              # 마스코트 캐릭터 (v0.50) — 프리셋 키 또는 직접 묘사
+        "scene_mode": "auto",         # 장면 그림 방식 (v0.51): auto=AI 생성 | manual=내가 넣기 | off=끄기
+        "max_scene_images": 0,        # 장면 그림 최대 장수 (v0.51) — 0=문장마다, N=N장만(비용 절감)
     },
     "subtitle": {
         "font_size": 84,             # 유튜브 쇼츠 기본 (v0.23 상향)

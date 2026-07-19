@@ -99,10 +99,11 @@ def parse_retry_delay_s(err: TTSHTTPError) -> Optional[float]:
 
 
 def is_daily_quota(err: TTSHTTPError) -> bool:
-    """429가 '하루 한도' 소진인지 — 분당 한도와 달리 기다려도 소용없다 (v0.50.2).
+    """429가 '기다려도 안 풀리는' 소진인지 — 하루 한도 또는 선불 크레딧 (v0.50.2/0.51).
 
-    사용자 로그: 하루 한도가 끝난 날은 문장마다 120초를 꼬박 기다린 뒤에야
-    다음 목소리로 넘어갔다. 한도 종류를 구분해 즉시 폴백한다.
+    사용자 로그: 하루 한도(또는 크레딧)가 끝난 날은 문장마다 120초를 꼬박 기다린
+    뒤에야 다음 목소리로 넘어갔다. 분당 한도(잠깐 기다리면 풀림)와 구분해 즉시
+    폴백한다. "prepayment credits are depleted"는 유료 선불 크레딧 소진 (v0.51).
     """
     try:
         for detail in err.payload["error"]["details"]:
@@ -111,7 +112,8 @@ def is_daily_quota(err: TTSHTTPError) -> bool:
                     return True
     except (TypeError, KeyError):
         pass
-    return bool(re.search(r"per[\s_]?day|daily", err.text[:2000], re.IGNORECASE))
+    return bool(re.search(r"per[\s_]?day|daily|prepayment credit|credits are depleted",
+                          err.text[:2000], re.IGNORECASE))
 
 
 # ─────────────────────────── 레이트리미터 ───────────────────────────
@@ -630,8 +632,9 @@ class TTSEngine:
                     raise  # 4xx 기타는 재시도 무의미
                 if e.code == 429 and is_daily_quota(e):
                     raise TTSExhausted(
-                        f"{self.provider.name} 오늘의 무료 한도 소진 — 즉시 다음 목소리로 "
-                        "넘어갑니다 (한국시간 오후 4~5시쯤 리셋)", raw=e.text
+                        f"{self.provider.name} 오늘의 무료 한도·크레딧 소진 — 즉시 다음 "
+                        "목소리로 넘어갑니다 (무료 한도는 한국시간 오후 4~5시쯤 리셋, "
+                        "크레딧은 ai.studio에서 충전)", raw=e.text
                     ) from e
                 if attempt >= max_retries:
                     break

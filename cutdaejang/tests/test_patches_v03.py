@@ -158,13 +158,16 @@ def test_daily_quota_fails_over_immediately(tmp_path):
     clk = FakeClock()
     engine = TTSEngine(DailyQuotaProvider(), tmp_path / "c", sleep=clk.sleep,
                        limiter=RateLimiter(8, clock=clk.now, sleep=clk.sleep))
-    with pytest.raises(tts_engine.TTSExhausted, match="무료 한도 소진"):
+    with pytest.raises(tts_engine.TTSExhausted, match="한도·크레딧 소진"):
         engine.synth_sentence("하루 한도 문장")
     assert clk.slept == []  # 120초 대기 없이 즉시
 
     # 분당 한도(RetryInfo만 있는 429)는 기존대로 기다렸다 재시도 — 회귀 방지
     assert tts_engine.is_daily_quota(TTSHTTPError(429, RETRY_PAYLOAD, json.dumps(RETRY_PAYLOAD))) is False
     assert tts_engine.is_daily_quota(TTSHTTPError(429, None, '"quotaId": "...PerDay..."')) is True
+    # v0.51 — 유료 선불 크레딧 소진(사용자 스크린샷)도 즉시 폴백 대상
+    assert tts_engine.is_daily_quota(TTSHTTPError(
+        429, None, "Your prepayment credits are depleted. Please go to AI Studio")) is True
 
 
 @requires_ffmpeg

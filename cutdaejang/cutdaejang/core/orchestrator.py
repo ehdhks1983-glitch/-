@@ -218,26 +218,39 @@ def run_job(
         # v0.45: 장면별 AI 이미지 배경 — 문장 타이밍(오디오 클립)에 맞춰 이미지가 넘어감.
         # 키 없음/설정 꺼짐/사용자 배경/문장 1개면 기존 단일 배경 유지. 실패는 이웃으로 채움.
         # v0.50: scene_images가 오면(장면 검토에서 확정) 생성 없이 그대로 사용.
-        use_scene_mode = (bg_cfg.get("scene_images", True) and not opts.user_background
+        # v0.51: scene_mode(auto/manual/off) + max_scene_images 장수 제한 — manual은
+        # 검토에서 확정한 이미지(scene_images)로만 동작 (자동 생성 안 함 = 비용 0).
+        scene_mode = bg_cfg.get("scene_mode", "auto")
+        use_scene_mode = (bg_cfg.get("scene_images", True) and scene_mode != "off"
+                          and not opts.user_background
                           and len(spec.audio) > 1
-                          and (image_provider is not None or scene_images))
+                          and (scene_images
+                               or (image_provider is not None and scene_mode == "auto")))
         if use_scene_mode:
             style = bg_cfg.get("image_style", "일러스트")
             prompts = [sp or s for sp, s in zip(script.scene_prompts, script.sentences)]
+            planned = len(prompts)
             if scene_images:
                 imgs = list(scene_images)[: len(prompts)]
                 imgs += [None] * (len(prompts) - len(imgs))
             else:
                 character = bg_cfg.get("character", "")
-                note(f"장면별 AI 이미지 {len(prompts)}장 생성 중… (그림체: {style})")
+                sel = background_generator.select_scene_indices(
+                    len(prompts), int(bg_cfg.get("max_scene_images", 0) or 0))
+                planned = len(sel)
+                note(f"장면별 AI 이미지 {planned}장 생성 중… (그림체: {style})")
                 imgs = background_generator.generate_scene_images(
                     prompts, image_provider, job_dir / "scenes", canvas, style=style,
                     character=character,
                     on_note=note,
                     on_progress=lambda i, n: report("background", i / max(n, 1)),
+                    only_indices=sel if planned < len(prompts) else None,
                 )
             ok_n = sum(1 for p in imgs if p)
-            if ok_n >= max(2, len(imgs) // 3):  # 충분히 성공했을 때만 슬라이드 배경
+            # 충분히 성공했을 때만 슬라이드 배경 (장수 제한 시엔 계획 장수 기준).
+            # 검토에서 확정한 이미지는 1장이라도 사용자의 선택이므로 그대로 쓴다.
+            min_ok = 1 if scene_images else min(planned, max(2, planned // 3))
+            if ok_n >= min_ok and ok_n > 0:
                 filled = background_generator.fill_scene_gaps(imgs, base=bg_path)
                 starts = [a.start_us for a in spec.audio]
                 spans = []
@@ -245,14 +258,15 @@ def run_job(
                     s0 = 0 if i == 0 else starts[i]
                     s1 = starts[i + 1] if i + 1 < len(starts) else spec.duration_us
                     spans.append((img, s1 - s0))
+                spans = background_generator.merge_scene_spans(spans)
                 slides = background_generator.scene_slideshow(
                     spans, str(job_dir / "bg_slides.mp4"), canvas,
                     motion=bg_cfg.get("motion", "zoom_in"),
                     motion_amount=bg_cfg.get("motion_amount", 0.08),
                 )
                 spec.background = Background(type="video", path=slides)
-                result.bg_source = f"ai_scenes:{ok_n}/{len(imgs)}"
-                note(f"장면 이미지 {ok_n}/{len(imgs)}장으로 배경 완성")
+                result.bg_source = f"ai_scenes:{ok_n}/{planned}"
+                note(f"장면 이미지 {ok_n}/{planned}장으로 배경 완성")
             else:
                 note("장면 이미지가 대부분 실패해 단일 배경으로 진행합니다")
 
