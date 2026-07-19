@@ -322,6 +322,40 @@ def test_settings_deep_merge():
     assert config.DEFAULTS["tts"]["rpm_limit"] == 8  # 원본 불변
 
 
+def test_settings_migration_revives_ai_image(tmp_path, monkeypatch):
+    """v0.50.1 — v0.45 이전에 저장된 ai_image:false 박제를 1회 승격으로 켠다.
+
+    사용자 리포트: 설정 화면을 옛날에 저장한 PC는 AI 배경이 '설정에서 꺼짐'으로
+    영영 안 나옴. 단, 승격 후 사용자가 직접 끈 것(cfg_v 찍힘)은 다시 안 건드림.
+    """
+    import json
+
+    f = tmp_path / "settings.json"
+    f.write_text(json.dumps({"bg": {
+        "ai_image": False, "motion": "off",
+        "image_model": "gemini-2.5-flash-image-preview",   # 옛 zip이 심은 은퇴 모델명
+    }}), encoding="utf-8")
+    monkeypatch.setenv("CUTDAEJANG_SETTINGS", str(f))
+
+    applied = config.migrate_settings()
+    assert len(applied) == 2 and "AI 배경" in applied[0]
+    saved = json.loads(f.read_text(encoding="utf-8"))
+    assert saved["bg"]["ai_image"] is True
+    assert saved["bg"]["image_model"] == config.DEFAULTS["bg"]["image_model"]
+    assert saved["bg"]["motion"] == "off"          # 다른 사용자 선택은 그대로
+    assert saved["cfg_v"] == config.CONFIG_VERSION
+    assert config.migrate_settings() == []          # 2번째 실행은 no-op
+
+    # 승격 이후 사용자가 설정 화면에서 직접 끄면 (저장이 cfg_v를 찍음) 유지된다
+    config.save_settings({"bg": {"ai_image": False}})
+    assert config.migrate_settings() == []
+    assert json.loads(f.read_text(encoding="utf-8"))["bg"]["ai_image"] is False
+
+    # 설정 파일이 아예 없으면 아무 일도 안 함 (기본값이 이미 켬)
+    monkeypatch.setenv("CUTDAEJANG_SETTINGS", str(tmp_path / "없음.json"))
+    assert config.migrate_settings() == []
+
+
 def test_resolve_bgm(tmp_path):
     settings = config.load_settings()
     (tmp_path / "track.mp3").write_bytes(b"x")

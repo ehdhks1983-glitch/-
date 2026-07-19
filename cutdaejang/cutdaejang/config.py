@@ -140,6 +140,43 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+CONFIG_VERSION = 2  # 저장 파일 스키마 표식 — 기본값이 바뀔 때 1회 승격용 (v0.50.1)
+
+
+def migrate_settings(path: Optional[str] = None) -> list:
+    """구버전 settings.json을 1회 승격 — 바뀐 기본값을 따라잡는다. 적용 내역 반환.
+
+    v0.45에서 bg.ai_image 기본이 꺼짐→켬으로 바뀌었지만, 그 전에 설정 화면을
+    저장한 파일에는 옛 false가 박제돼 AI 배경·장면 그림이 영영 안 나온다
+    (사용자 리포트: "설정에서 AI 배경 꺼짐"). cfg_v 표식이 없는 파일 = 그 시절
+    파일로 보고 켠다. 이후 저장은 항상 cfg_v가 찍히므로, 사용자가 직접 끈
+    선택(cfg_v 있음)은 다시 건드리지 않는다.
+    """
+    target = _settings_target(path)
+    if not target.is_file():
+        return []
+    try:
+        user = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(user, dict) or user.get("cfg_v", 0) >= CONFIG_VERSION:
+        return []
+    applied = []
+    bg = user.get("bg")
+    if isinstance(bg, dict) and bg.get("ai_image") is False:
+        bg["ai_image"] = True
+        applied.append("AI 배경을 다시 켰습니다 (v0.45부터 기본 켬 — 원치 않으면 ⚙ 설정에서 끄기)")
+    if isinstance(bg, dict) and bg.get("image_model") == "gemini-2.5-flash-image-preview":
+        bg["image_model"] = DEFAULTS["bg"]["image_model"]  # 은퇴한 프리뷰명 → 정식명
+        applied.append("이미지 모델명을 정식명으로 교체했습니다")
+    user["cfg_v"] = CONFIG_VERSION
+    try:
+        _atomic_write(target, json.dumps(user, ensure_ascii=False, indent=2) + "\n")
+    except OSError:
+        return []
+    return applied
+
+
 def _settings_target(path: Optional[str] = None) -> Path:
     for candidate in _settings_candidates(path):
         if candidate and Path(candidate).is_file():
@@ -151,6 +188,7 @@ def save_settings(overrides: dict, path: Optional[str] = None) -> str:
     """현재 설정에 overrides를 병합해 파일로 저장 (설정 화면용). 저장 경로 반환."""
     target = _settings_target(path)
     merged = deep_merge(load_settings(str(target) if target.is_file() else None), overrides)
+    merged["cfg_v"] = CONFIG_VERSION  # 이후 이 파일은 마이그레이션이 건드리지 않음
     _atomic_write(target, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
     return str(target)
 
@@ -167,6 +205,7 @@ def save_settings_replace(dotted_key: str, value, path: Optional[str] = None) ->
     for p in parts[:-1]:
         node = node.setdefault(p, {})
     node[parts[-1]] = value
+    merged["cfg_v"] = CONFIG_VERSION
     _atomic_write(target, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
     return str(target)
 

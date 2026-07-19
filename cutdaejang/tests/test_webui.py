@@ -721,6 +721,34 @@ def test_scene_review_flow(server, monkeypatch):
         _post(server, "/api/settings", {"settings": {"bg": {"character": ""}}})
 
 
+def test_fetch_bgm_endpoint_and_ui(server, monkeypatch, tmp_path):
+    """v0.50.1 — 화면 [⬇ 무료 BGM 받기]: 다운로드 스레드 → 상태 폴링 → 목록 반영."""
+    from cutdaejang.core import orchestrator
+    from cutdaejang.tools import fetch_bgm as fb
+
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="bgmFetchBtn"' in html and "/api/fetch_bgm" in html
+    assert 'id="aiBgOffWarn"' in html and "enableAiBg" in html  # AI 배경 꺼짐 경고
+
+    def fake_fetch(url, dest):
+        assert url.startswith("https://incompetech.com/")
+        dest.write_bytes(b"ID3" + b"\x00" * 120_000)  # 100KB 이상이어야 성공 판정
+        return True
+
+    monkeypatch.setattr(fb, "fetch", fake_fetch)
+    monkeypatch.setattr(orchestrator, "DEFAULT_BGM_DIR", tmp_path / "bgm")
+    assert _post(server, "/api/fetch_bgm", {}).get("ok")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        st = json.loads(_get(server, "/api/state").read())
+        if not st["bgm_fetch"]["running"]:
+            break
+        time.sleep(0.3)
+    assert "14곡 준비 완료" in st["bgm_fetch"]["msg"], st["bgm_fetch"]
+    assert len(st["bgm_files"]) == 14  # 새 폴더 목록이 state에 반영
+    assert (tmp_path / "bgm" / fb.CREDIT_FILE).exists()  # 크레딧 파일 생성
+
+
 def test_thumbnail_api_position(server, tmp_path):
     """v0.49 — 썸네일 글자 위치(pos_x/pos_y)가 실제로 반영되는지 픽셀 실측."""
     import subprocess

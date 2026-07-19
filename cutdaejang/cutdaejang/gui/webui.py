@@ -977,6 +977,31 @@ def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> 
         _set_job(job_id, status="failed", errors=[str(e)])
 
 
+_BGM_TASK = {"running": False, "msg": ""}  # 🎵 무료 BGM 받기 진행 상태 (v0.50.1)
+
+
+def _fetch_bgm_bg() -> None:
+    """무료 BGM 14곡 다운로드 — 화면 버튼용 백그라운드 작업 (bat과 같은 일)."""
+    from ..tools import fetch_bgm as fb  # noqa: PLC0415
+
+    try:
+        def progress_fetch(url, dest):
+            _BGM_TASK["msg"] = f"받는 중… {dest.name}"
+            return fb.fetch(url, dest)
+
+        ok, fail = fb.main(bgm_dir=orchestrator.DEFAULT_BGM_DIR, fetch_fn=progress_fetch)
+        if not ok and fail:
+            msg = "받기 실패 — 인터넷 연결(방화벽)을 확인하고 다시 눌러주세요"
+        else:
+            msg = f"무료 BGM {len(ok)}곡 준비 완료!"
+            if fail:
+                msg += f" (실패 {len(fail)}곡 — 다시 누르면 그 곡만 재시도)"
+        _BGM_TASK.update(running=False, msg=msg)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("cutdaejang").error("BGM 받기 실패: %s", e)
+        _BGM_TASK.update(running=False, msg=f"받기 실패: {str(e)[:120]}")
+
+
 def _run_batch(job_id: str, topics: list, params: dict, workdir: str) -> None:
     """📦 배치 (v0.42) — 주제 여러 개를 순차 생성해 mp4 N개. 한 개 실패해도 계속."""
     outs, errors = [], []
@@ -1574,6 +1599,14 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "path": saved_to})
             except OSError as e:
                 self._send_json({"error": f"설정 저장 실패: {e}"}, 500)
+        elif path == "/api/fetch_bgm":  # 🎵 무료 BGM 화면에서 받기 (v0.50.1)
+            with _LOCK:
+                if _BGM_TASK["running"]:
+                    self._send_json({"ok": True, "already": True})
+                    return
+                _BGM_TASK.update(running=True, msg="무료 BGM 받기 시작…")
+            threading.Thread(target=_fetch_bgm_bg, daemon=True).start()
+            self._send_json({"ok": True})
         elif path == "/api/template":  # 📋 편집 세팅 템플릿 (v0.43)
             name = (params.get("name") or "").strip()[:40]
             if not name:
@@ -1973,6 +2006,7 @@ class _Handler(BaseHTTPRequestHandler):
             "voices": GEMINI_VOICES,
             "styles": list(STYLE_INSTRUCTIONS),
             "stt_available": _stt_available(),
+            "bgm_fetch": dict(_BGM_TASK),
             "logs": list(_LOG_BUF)[-120:],
         }
 
@@ -2072,6 +2106,8 @@ def _attach_ui_log() -> None:
 def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
     Path(workdir).mkdir(parents=True, exist_ok=True)
     _attach_ui_log()
+    for msg in config.migrate_settings():  # 구버전 설정 1회 승격 (v0.50.1)
+        logging.getLogger("cutdaejang").info("설정 업데이트: %s", msg)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     httpd.workdir = str(workdir)  # type: ignore[attr-defined]
     return httpd
@@ -2667,6 +2703,8 @@ _HTML = """<!doctype html>
       <div style="display:flex;gap:6px;margin-top:4px">
         <select id="bgmSel" style="flex:1"><option value="">없음</option></select>
         <button class="ghost" style="white-space:nowrap" onclick="previewBgm(event,'bgmSel',null)">▶ 미리듣기</button>
+        <button class="ghost" id="bgmFetchBtn" style="white-space:nowrap" onclick="fetchBgm(event)"
+                title="유튜버들이 가장 많이 쓰는 무료 BGM 14곡(Kevin MacLeod, CC BY)을 resources/bgm 폴더에 자동으로 받아옵니다 (약 40MB)">⬇ 무료 BGM 받기</button>
       </div>
       <div class="hint"><b>windows\\6_무료음원_받기.bat</b>로 유명 무료 BGM 자동 채우기. 저작권 확인된 음원만 사용하세요.</div>
     </details>
@@ -2700,6 +2738,8 @@ _HTML = """<!doctype html>
                placeholder="예) 파란 모자를 쓴 유머러스한 해골">
         <span class="hint">🆕 v0.50 — 모든 장면에 같은 캐릭터가 등장해요 (첫 그림을 참조로 일관성 유지)</span>
       </div>
+      <div class="hint hidden" id="aiBgOffWarn" style="color:#e8b34b">⚠ 지금 ⚙ 설정에서 <b>AI 배경이 꺼져 있어</b> 장면 그림·마스코트가 적용되지 않아요.
+        <button class="ghost" style="padding:3px 10px;margin-left:6px" onclick="enableAiBg(event)">지금 켜기</button></div>
       <div class="hint">🆕 v0.45 — 대본의 문장(장면)마다 AI가 그림을 그려 말 타이밍에 맞춰 넘어갑니다
         (장면마다 살짝 줌 + 부드러운 전환). Gemini 키가 있으면 자동 적용,
         없으면 기본 그라데이션 배경으로 만들어져요. 이미지 비용은 무료 키 한도 안이면 0원.
@@ -3909,7 +3949,7 @@ function previewBgm(ev, selId, volSelId){
   if(!name){ alert('먼저 배경음악을 선택하세요 (없음 상태)'); return; }
   if(name === 'random'){
     const files = window._bgmFiles || [];
-    if(!files.length){ alert('resources/bgm 폴더에 음원이 없습니다 — 6_무료음원_받기.bat를 실행해보세요'); return; }
+    if(!files.length){ alert('resources/bgm 폴더에 음원이 없습니다 — [⬇ 무료 BGM 받기] 버튼을 눌러보세요 (배경음악 그룹)'); return; }
     name = files[Math.floor(Math.random() * files.length)];
   }
   const a = new Audio('/bgm/' + encodeURIComponent(name));
@@ -4430,6 +4470,56 @@ function onGenCharChange(){
   $('genCharCustom').classList.toggle('hidden', $('genCharSel').value !== 'custom');
 }
 
+// '으로/로' 조사 — 받침 있으면 '으로', 없거나 ㄹ받침·비한글이면 '로' ("내장 음성으로")
+function josaRo(w){
+  const c = (w || '').charCodeAt((w || '').length - 1);
+  if(c < 0xAC00 || c > 0xD7A3) return w + '로';
+  const jong = (c - 0xAC00) % 28;
+  return w + ((jong === 0 || jong === 8) ? '로' : '으로');
+}
+
+// ── ⚠ AI 배경 꺼짐 경고 — 구버전 설정 파일로 장면 그림이 안 나오던 사용자용 (v0.50.1) ──
+async function enableAiBg(ev){
+  ev.preventDefault();
+  await fetch('/api/settings', {method:'POST', body: JSON.stringify({settings:{bg:{ai_image:true}}})});
+  $('aiBgOffWarn').classList.add('hidden');
+  if(window._settings && window._settings.bg) window._settings.bg.ai_image = true;
+  if($('setAiImage')) $('setAiImage').checked = true;
+}
+
+// ── 🎵 무료 BGM 화면에서 받기 (v0.50.1) — bat 없이 버튼 하나로 ──
+function refillBgmLists(files){
+  for(const id of ['bgmSel','bgmEditSel']){
+    const sel = $(id); if(!sel) continue;
+    const cur = sel.value;
+    sel.innerHTML = '';
+    sel.add(new Option('없음', ''));
+    if(files.length) sel.add(new Option('랜덤', 'random'));
+    for(const f of files) sel.add(new Option(f, f));
+    if([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  }
+  window._bgmFiles = files;
+}
+
+async function fetchBgm(ev){
+  ev.preventDefault();
+  const btn = $('bgmFetchBtn'); btn.disabled = true;
+  btn.textContent = '받는 중… (1~3분)';
+  try{
+    await fetch('/api/fetch_bgm', {method:'POST', body:'{}'});
+    while(true){
+      await new Promise(s => setTimeout(s, 2000));
+      const st = await (await fetch('/api/state')).json();
+      const t = st.bgm_fetch || {};
+      if(t.running){ btn.textContent = t.msg || '받는 중…'; continue; }
+      refillBgmLists(st.bgm_files || []);
+      alert((t.msg || '무료 BGM 받기 완료') + '\\n크레딧 문구는 resources/bgm 폴더의 txt 파일에 — 영상 설명란에 붙여넣으세요.');
+      break;
+    }
+  } catch(e){ alert('받기 중 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = '⬇ 무료 BGM 받기'; }
+}
+
 async function poll(){
   const state = await (await fetch('/api/state')).json();
   window._hasGeminiKey = state.keys.gemini;
@@ -4483,6 +4573,8 @@ async function poll(){
   }
   $('keySaved').classList.toggle('hidden', !state.keys.gemini);
   $('startGuide').classList.toggle('hidden', !!state.keys.gemini);  // 처음 사용자 안내
+  // ⚠ 설정에서 AI 배경이 꺼져 있으면 생성 폼에 경고 + 켜기 버튼 (v0.50.1)
+  $('aiBgOffWarn').classList.toggle('hidden', !!(((state.settings || {}).bg || {}).ai_image));
   const env = state.env || {};
   const problems = [];
   if(env.ffmpeg === false) problems.push('⚠ FFmpeg가 없습니다 — windows 폴더의 1_설치.bat 을 먼저 실행한 뒤 이 화면을 새로고침하세요.');
@@ -4555,7 +4647,7 @@ async function poll(){
       : '<span class="fail-badge">부분 완료</span>';
     let badge = job.tts_provider ? '목소리: ' + (provKo[job.tts_provider] || job.tts_provider) : '';
     if(job.requested_tts && job.tts_provider && job.requested_tts !== job.tts_provider)
-      badge = '⚠ ' + (provKo[job.tts_provider] || job.tts_provider) + '로 대체 생성됨 (원래 선택: ' + (provKo[job.requested_tts] || job.requested_tts) + ')';
+      badge = '⚠ ' + josaRo(provKo[job.tts_provider] || job.tts_provider) + ' 대체 생성됨 (원래 선택: ' + (provKo[job.requested_tts] || job.requested_tts) + ')';
     if(job.edit_summary) badge = '✂️ ' + job.edit_summary;  // 편집 모드 요약
     if(job.bg_source) badge = (badge ? badge + '  ·  ' : '') + '🖼️ 배경: ' + job.bg_source;
     $('providerBadge').textContent = badge;
