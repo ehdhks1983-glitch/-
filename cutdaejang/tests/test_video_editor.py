@@ -236,3 +236,49 @@ def test_attach_branding_skips_when_missing(tmp_path):
     # 경로가 있어도 파일이 없으면 건너뜀
     assert ve.attach_branding(str(main), str(tmp_path / "없음.mp4"), "",
                               str(tmp_path / "o2.mp4")) == str(main)
+
+
+# ─────────── v0.44: 장면 전환 감지 + 경계 스냅 ───────────
+
+
+@requires_ffmpeg
+def test_detect_scene_changes_on_color_cuts(tmp_path):
+    # 어두움 2초 → 흰색 2초 → 회색 2초: 장면 전환은 2s·4s 두 곳
+    # (빨강→초록 같은 순색 조합은 ffmpeg 장면 메트릭에서 점수가 낮게 나오는
+    #  합성 소재 특이 케이스라 휘도 차가 있는 색으로 만든다 — 실제 영상은 무관)
+    src = tmp_path / "scenes.mp4"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", "color=c=0x202020:s=320x180:d=2:r=30",
+            "-f", "lavfi", "-i", "color=c=white:s=320x180:d=2:r=30",
+            "-f", "lavfi", "-i", "color=c=0x606060:s=320x180:d=2:r=30",
+            "-filter_complex", "[0][1][2]concat=n=3:v=1:a=0[v]", "-map", "[v]",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(src)])
+    scenes = ve.detect_scene_changes(str(src))
+    assert len(scenes) == 2, scenes
+    assert abs(scenes[0] - 2_000_000) < 200_000
+    assert abs(scenes[1] - 4_000_000) < 200_000
+
+
+def test_shift_ranges_to_scenes_snaps_and_keeps_length():
+    scenes = [2_000_000, 10_000_000]
+    ranges = [(1_200_000, 4_200_000), (9_300_000, 12_300_000)]  # 각 3초
+    out = ve.shift_ranges_to_scenes(ranges, scenes, duration_us=20_000_000)
+    assert out == [(2_000_000, 5_000_000), (10_000_000, 13_000_000)]  # 길이 3초 유지
+    # 스냅 범위(±1.5s) 밖이면 그대로
+    far = ve.shift_ranges_to_scenes([(6_000_000, 9_000_000)], scenes, 20_000_000)
+    assert far == [(6_000_000, 9_000_000)]
+    # 밀었을 때 영상 밖으로 나가면 포기
+    tail = ve.shift_ranges_to_scenes([(9_000_000, 11_500_000)], [10_000_000], 11_600_000)
+    assert tail == [(9_000_000, 11_500_000)]
+
+
+def test_snap_boundaries_to_scenes_moves_interior_only():
+    scenes = [29_000_000]
+    ranges = [(0, 30_000_000), (30_000_000, 60_000_000)]
+    out = ve.snap_boundaries_to_scenes(ranges, scenes)
+    # 경계 30s → 장면 전환 29s로, 양 끝(0·60s)은 고정, 빈틈 없음
+    assert out == [(0, 29_000_000), (29_000_000, 60_000_000)]
+    # 스냅하면 한 쪽이 3초 미만이 되는 경우엔 경계 유지
+    short = ve.snap_boundaries_to_scenes([(0, 4_000_000), (4_000_000, 8_000_000)],
+                                         [2_500_000])
+    assert short == [(0, 4_000_000), (4_000_000, 8_000_000)]

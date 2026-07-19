@@ -29,6 +29,7 @@ DEFAULTS: dict = {
         "sovits_url": "http://127.0.0.1:9880",  # GPT-SoVITS 로컬 API (무료 내 목소리)
         "sovits_ref_audio": "",                 # 참조 녹음(5~10초) 경로
         "sovits_ref_text": "",                  # 참조 녹음에서 말한 문장
+        "windows_rate": 0,                      # 내장 음성 말 속도 -10~10 (v0.44)
     },
     "audio": {
         "gap_ms": 220,                # 문장 간격
@@ -55,7 +56,7 @@ DEFAULTS: dict = {
         "enabled": False,
         "file": "",
         "volume_db": -20,
-        "duck": False,
+        "duck": True,                 # 목소리 나올 때 BGM 자동 감쇠 (v0.44 기본 켬)
     },
     "bg": {
         "motion": "zoom_in",          # zoom_in | zoom_out | off

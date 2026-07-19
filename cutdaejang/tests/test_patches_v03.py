@@ -554,3 +554,20 @@ def test_sovits_cache_key_changes_with_reference(tmp_path, monkeypatch):
     # 기존 제공자(cache_extra 없음)는 키 형식이 그대로라 기존 캐시 유지
     g = TTSEngine(StubTTS(), tmp_path, settings=settings)
     assert g.cache_path("같은 문장", "") == g.cache_path("같은 문장", "")
+
+
+def test_windows_tts_rate_setting():
+    """v0.44 내장 음성 속도 — 설정 → 제공자 rate·캐시 키 반영, 스크립트 치환 가능."""
+    from cutdaejang.core import tts_engine as te
+
+    p = te.make_provider("windows", {"tts": {"windows_rate": 2}})
+    assert p.rate == 2 and p.cache_extra == "rate2"
+    # 기본(0)은 캐시 키 추가 없음 → 기존 캐시 그대로 재사용
+    p0 = te.make_provider("windows", {"tts": {}})
+    assert p0.rate == 0 and p0.cache_extra == ""
+    # 범위 밖 값은 안전하게 클램프
+    assert te.WindowsTTS(rate=99).rate == 10
+    assert te.WindowsTTS(rate="이상한값").rate == 0
+    # PS1 템플릿에 치환 지점이 있고, 치환하면 사라짐
+    assert "__RATE__" in te._SAPI_PS1
+    assert "__RATE__" not in te._SAPI_PS1.replace("__RATE__", "2")

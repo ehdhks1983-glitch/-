@@ -227,6 +227,7 @@ def render_edited(
     orig_audio: str = "keep",          # 원본 소리: keep(그대로) | low(작게) | mute(무음)
     bgm_path: Optional[str] = None,    # 배경음악 파일 (영상 길이만큼 루프 + 페이드)
     bgm_db: float = -16.0,             # BGM 볼륨(dB)
+    bgm_duck: bool = False,            # 덕킹 — 목소리 나올 때 BGM 자동 감쇠 (v0.44)
     watermark: Optional[dict] = None,  # {path, pos(tr/tl/br/bl), scale, opacity} 로고 오버레이
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> str:
@@ -333,7 +334,21 @@ def render_edited(
             aparts.append(
                 f"[{bgm_idx}:a]volume={gain:.4f},atrim=0:{dur_s:.3f},"
                 f"afade=t=in:d=0.8,afade=t=out:st={fade_st:.3f}:d=1.2[abgm]")
-            streams.append("[abgm]")
+            if bgm_duck:
+                # 목소리(원본+내레이션)를 먼저 합치고 → BGM은 목소리가 나올 때
+                # 자동으로 줄어들게(sidechaincompress) 한 뒤 합성 (v0.44 덕킹)
+                if len(streams) > 1:
+                    aparts.append(
+                        "".join(streams)
+                        + f"amix=inputs={len(streams)}:duration=first:normalize=0[avox]")
+                else:
+                    aparts.append(f"{streams[0]}anull[avox]")
+                aparts.append("[avox]asplit[vmain][vside]")
+                aparts.append("[abgm][vside]sidechaincompress="
+                              "threshold=0.03:ratio=8:attack=20:release=300[abgmd]")
+                streams = ["[vmain]", "[abgmd]"]
+            else:
+                streams.append("[abgm]")
         if len(streams) > 1:
             aparts.append(
                 "".join(streams)
@@ -798,6 +813,7 @@ def render_from_analysis(
     orig_audio: str = "keep",
     bgm_path: Optional[str] = None,
     bgm_db: float = -16.0,
+    bgm_duck: bool = False,
     watermark: Optional[dict] = None,
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
@@ -815,7 +831,7 @@ def render_from_analysis(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
             speed=speed, quality=quality, denoise=denoise,
             narration_wav=narration_wav, orig_audio=orig_audio,
-            bgm_path=bgm_path, bgm_db=bgm_db, watermark=watermark,
+            bgm_path=bgm_path, bgm_db=bgm_db, bgm_duck=bgm_duck, watermark=watermark,
             progress_cb=progress_cb,
         )
         if not _fits_us(ff.probe_duration_us(out_path), int(result.cut_us / speed), tol=200_000):

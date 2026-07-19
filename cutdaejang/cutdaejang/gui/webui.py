@@ -375,6 +375,14 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             from ..core import video_editor as ve  # noqa: PLC0415
             _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {tgt_auto}초를 뽑는 중…")
             ranges = edit_mode.spread_ranges(analysis.cut_us, tgt_auto * 1_000_000)
+            try:  # 🎬 장면 전환에 맞춰 조각 시작점을 스냅 — 컷이 장면 중간에서 안 끊기게 (v0.44)
+                if analysis.cut_us < 20 * 60 * 1_000_000:  # 아주 긴 영상은 감지 생략(시간)
+                    _set_job(job_id, note="장면 전환 지점을 찾는 중…")
+                    scenes = ve.detect_scene_changes(analysis.cut_video)
+                    if scenes:
+                        ranges = ve.shift_ranges_to_scenes(ranges, scenes, analysis.cut_us)
+            except Exception:  # noqa: BLE001 — 감지 실패는 스냅 없이 진행
+                pass
             analysis.cut_video = ve.cut_and_concat(
                 analysis.cut_video, ranges,
                 str(Path(workdir) / job_id / "auto_montage.mp4"),
@@ -690,6 +698,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             layout=layout, hook=hook, speed=speed, quality=quality, denoise=denoise,
             narration_wav=narration_wav,
             orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
+            bgm_duck=bool(settings["bgm"].get("duck", True)),
             watermark=watermark,
             progress_cb=lambda f: _set_job(job_id, stage="render", frac=f),
         )
@@ -752,6 +761,14 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             if len(ranges) > 1 and (ranges[-1][1] - ranges[-1][0]) < int(tgt_us * 0.4):
                 last = ranges.pop()  # 꼬리가 너무 짧으면 앞 쇼츠에 합침
                 ranges[-1] = (ranges[-1][0], last[1])
+            try:  # 🎬 분할 경계를 장면 전환에 스냅 — 쇼츠가 장면 중간에서 안 끊기게 (v0.44)
+                if len(ranges) > 1 and total_us < 20 * 60 * 1_000_000:
+                    _set_job(job_id, note="장면 전환 지점을 찾는 중…")
+                    scenes = video_editor.detect_scene_changes(cut_video)
+                    if scenes:
+                        ranges = video_editor.snap_boundaries_to_scenes(ranges, scenes)
+            except Exception:  # noqa: BLE001
+                pass
             plan = [("time", r) for r in ranges]
         note_extra = ""
         if len(plan) > _SPLIT_MAX:
@@ -799,6 +816,7 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     clip_video, clip_subs, out, style=style, layout=layout,
                     hook=hook, speed=speed, quality=quality, denoise=denoise,
                     orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
+                    bgm_duck=bool(settings["bgm"].get("duck", True)),
                     watermark=watermark,
                     progress_cb=lambda f, b=base, n=len(plan): _set_job(
                         job_id, stage="render", frac=b + f / n),
@@ -1938,7 +1956,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.43)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.44)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2621,7 +2639,15 @@ _HTML = """<!doctype html>
         <div><label>문장 간격(ms)</label><input type="number" id="setGap" min="0" max="1000" step="10"></div>
         <div><label>분당 TTS 호출 한도</label><input type="number" id="setRpm" min="1" max="60"></div>
       </div>
-      <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠)</span></div>
+      <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠 — 기본 켬, v0.44부터 편집·사진 영상에도 적용)</span></div>
+      <div class="chk" style="gap:8px"><span>내장 음성 말 속도</span>
+        <select id="setWinRate" style="width:auto;padding:6px 8px">
+          <option value="-2">느리게</option>
+          <option value="0">보통 (기본)</option>
+          <option value="2">살짝 빠르게 (추천)</option>
+          <option value="4">빠르게</option>
+        </select>
+        <span class="hint">Windows 내장 한국어 음성(키 없이 쓰는 목소리)에만 적용</span></div>
     </details>
 
     <details class="opt">
@@ -3713,6 +3739,8 @@ function fillSettings(s){
   $('setDuck').checked = !!s.bgm.duck;
   $('setGap').value = s.audio.gap_ms;
   $('setRpm').value = s.tts.rpm_limit;
+  const wr = String(s.tts.windows_rate != null ? s.tts.windows_rate : 0);
+  $('setWinRate').value = ['-2','0','2','4'].includes(wr) ? wr : '0';
   const ch = s.channel || {};
   $('setChName').value = ch.name || '';
   $('setChTopic').value = ch.topic || '';
@@ -3793,7 +3821,7 @@ async function saveSettings(){
          ai_image: $('setAiImage').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
     audio: {gap_ms: +$('setGap').value},
-    tts: {rpm_limit: +$('setRpm').value},
+    tts: {rpm_limit: +$('setRpm').value, windows_rate: +$('setWinRate').value},
     channel: {name: $('setChName').value.trim(), topic: $('setChTopic').value.trim(),
               audience: $('setChAudience').value.trim()},
     branding: {intro: $('setIntroPath').value.trim(), outro: $('setOutroPath').value.trim()},

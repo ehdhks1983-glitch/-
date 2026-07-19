@@ -880,3 +880,27 @@ def test_analyze_video_sentence_timestamps(talk_video, tmp_path):
     assert any("문장 단위" in n for n in analysis.notes)
     for s in analysis.subtitles:  # 절대 시각·순서 정상
         assert 0 <= s.start_us < s.end_us <= analysis.cut_us + 100_000
+
+
+@requires_ffmpeg
+def test_render_with_bgm_duck(tmp_path):
+    """v0.44 편집 모드 덕킹 — BGM+덕킹 그래프로 렌더가 정상 완성되는지."""
+    from cutdaejang.core import edit_mode
+    from cutdaejang.utils import ffmpeg as ff
+
+    src = tmp_path / "v.mp4"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", "color=c=gray:s=320x568:d=3",
+            "-f", "lavfi", "-i", "sine=frequency=600:duration=3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(src)])
+    bgm = tmp_path / "bgm.wav"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", "sine=frequency=200:duration=10", str(bgm)])
+    out = tmp_path / "out.mp4"
+    r = edit_mode.render_from_analysis(
+        str(src), [], str(out), layout="keep",
+        bgm_path=str(bgm), bgm_db=-14, bgm_duck=True)
+    assert r.ok, r.errors
+    assert ff.has_audio_stream(str(out))
+    assert abs(ff.probe_duration_us(str(out)) - 3_000_000) < 400_000

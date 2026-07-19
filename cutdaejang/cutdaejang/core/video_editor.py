@@ -325,6 +325,78 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
     return str(out_path)
 
 
+_SCENE_PTS = re.compile(r"pts_time:([0-9.]+)")
+
+
+def detect_scene_changes(video: str, threshold: float = 0.35,
+                         limit: int = 500) -> List[int]:
+    """장면이 확 바뀌는 시각(μs) 목록 (v0.44 — 컷 경계를 장면에 맞추는 용도).
+
+    ffmpeg select='gt(scene,th)' + metadata=print 로 장면 전환 프레임만 골라 파싱.
+    인코딩 없이 디코드만 하므로 빠르다. 실패하면 빈 목록(호출측은 스냅 생략).
+    """
+    proc = ff.run([
+        ff.ffmpeg_bin(), "-hide_banner", "-nostats", "-i", str(video),
+        "-vf", f"select='gt(scene,{threshold})',metadata=print",
+        "-an", "-f", "null", "-",
+    ])
+    text = proc.stderr.decode("utf-8", "replace")
+    times = sorted({int(float(m) * 1e6) for m in _SCENE_PTS.findall(text)})
+    return times[:limit]
+
+
+def _nearest_scene(t_us: int, scenes: List[int], max_shift_us: int):
+    best = None
+    for s in scenes:
+        if abs(s - t_us) <= max_shift_us and (best is None or abs(s - t_us) < abs(best - t_us)):
+            best = s
+    return best
+
+
+def shift_ranges_to_scenes(ranges: List[Tuple[int, int]], scenes: List[int],
+                           duration_us: int, max_shift_us: int = 1_500_000) -> List[Tuple[int, int]]:
+    """몽타주용 — 떨어져 있는 각 구간을 통째로 밀어 시작점을 장면 전환에 맞춘다.
+
+    구간 길이는 유지(전체 목표 길이 보존), 영상 밖·이전 구간과 겹치면 스냅 포기.
+    """
+    out: List[Tuple[int, int]] = []
+    for s, e in ranges:
+        snap = _nearest_scene(s, scenes, max_shift_us)
+        if snap is not None:
+            ns, ne = snap, snap + (e - s)
+            if 0 <= ns and ne <= duration_us and (not out or ns >= out[-1][1]):
+                out.append((ns, ne))
+                continue
+        if out and s < out[-1][1]:  # 앞 구간이 밀려 겹치면 원래 위치 유지 불가 → 뒤로
+            s2 = out[-1][1]
+            out.append((s2, s2 + (e - s)) if s2 + (e - s) <= duration_us else (s2, duration_us))
+        else:
+            out.append((s, e))
+    return [r for r in out if r[1] - r[0] > 200_000]
+
+
+def snap_boundaries_to_scenes(ranges: List[Tuple[int, int]], scenes: List[int],
+                              max_shift_us: int = 1_500_000,
+                              min_len_us: int = 3_000_000) -> List[Tuple[int, int]]:
+    """분할용 — 이어져 있는 구간들의 '경계'를 가장 가까운 장면 전환으로 옮긴다.
+
+    (쇼츠 여러 개로 나눌 때 장면 중간에서 뚝 끊기지 않게.) 양 끝은 고정,
+    옮겨서 어느 쪽이 min_len 미만이 되면 그 경계는 그대로 둔다.
+    """
+    if len(ranges) < 2:
+        return list(ranges)
+    out = [list(r) for r in ranges]
+    for i in range(len(out) - 1):
+        b = out[i][1]
+        snap = _nearest_scene(b, scenes, max_shift_us)
+        if snap is None:
+            continue
+        if snap - out[i][0] >= min_len_us and out[i + 1][1] - snap >= min_len_us:
+            out[i][1] = snap
+            out[i + 1][0] = snap
+    return [tuple(r) for r in out]
+
+
 def attach_branding(video: str, intro: str, outro: str, out_path: str,
                     fps: int = 30, still_s: float = 2.5) -> str:
     """본편 앞뒤에 인트로/아웃트로를 붙인다 (v0.43 채널 브랜딩).

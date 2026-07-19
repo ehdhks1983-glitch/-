@@ -366,7 +366,7 @@ $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $ko = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ko*' } | Select-Object -First 1
 if (-not $ko) { $s.Dispose(); exit 3 }
 $s.SelectVoice($ko.VoiceInfo.Name)
-$s.Rate = 0
+$s.Rate = __RATE__
 $s.SetOutputToWaveFile($OutWav)
 $s.Speak($text)
 $s.Dispose()
@@ -375,9 +375,20 @@ exit 0
 
 
 class WindowsTTS:
-    """Windows 내장 한국어 음성(SAPI) — 키·인터넷 없이 무료 (로봇톤이지만 실제 음성)."""
+    """Windows 내장 한국어 음성(SAPI) — 키·인터넷 없이 무료 (로봇톤이지만 실제 음성).
+
+    rate: SAPI 말 속도 -10(아주 느림)~10(아주 빠름), 0=보통 (v0.44 설정 가능).
+    """
 
     name = "windows"
+
+    def __init__(self, rate: int = 0):
+        try:
+            self.rate = max(-10, min(10, int(rate)))
+        except (TypeError, ValueError):
+            self.rate = 0
+        # 속도가 바뀌면 다른 소리 → 캐시 키에 반영 (0은 기존 캐시 그대로 재사용)
+        self.cache_extra = f"rate{self.rate}" if self.rate else ""
 
     def synthesize(self, text: str, voice: str, out_path: str) -> str:
         import subprocess  # noqa: PLC0415
@@ -389,7 +400,8 @@ class WindowsTTS:
         with tempfile.TemporaryDirectory() as tmp:
             ps1 = Path(tmp) / "sapi.ps1"
             txt = Path(tmp) / "text.txt"
-            ps1.write_text(_SAPI_PS1, encoding="utf-8-sig")
+            ps1.write_text(_SAPI_PS1.replace("__RATE__", str(self.rate)),
+                           encoding="utf-8-sig")
             txt.write_text(text, encoding="utf-8")
             proc = subprocess.run(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -652,6 +664,8 @@ def make_provider(name: str, settings: dict) -> TTSProvider:
         return GPTSoVITSTTS(url=tts_cfg.get("sovits_url", ""),
                             ref_audio=tts_cfg.get("sovits_ref_audio", ""),
                             ref_text=tts_cfg.get("sovits_ref_text", ""))
+    if name == "windows":
+        return WindowsTTS(rate=tts_cfg.get("windows_rate", 0))
     return PROVIDERS[name]()
 
 
