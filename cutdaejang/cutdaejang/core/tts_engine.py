@@ -256,6 +256,31 @@ class ElevenLabsTTS:
         return str(out_path)
 
 
+def list_elevenlabs_voices(api_key: Optional[str] = None) -> list:
+    """내 ElevenLabs 계정의 보이스 목록 (v0.46 — 기성 성우 보이스 선택용).
+
+    프리메이드 + 라이브러리에서 담은 보이스 + 내 클론까지, 계정에 보이는 그대로.
+    반환: [{"voice_id","name","category"}] (name 순).
+    """
+    key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
+    if not key:
+        raise TTSError("ELEVENLABS_API_KEY가 설정되어 있지 않습니다")
+    req = urllib.request.Request(
+        "https://api.elevenlabs.io/v1/voices", headers={"xi-api-key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise TTSError(f"ElevenLabs 보이스 목록 실패 {e.code}: "
+                       f"{e.read().decode('utf-8', 'replace')[:200]}") from e
+    out = [
+        {"voice_id": v["voice_id"], "name": str(v.get("name") or v["voice_id"]),
+         "category": str(v.get("category") or "")}
+        for v in data.get("voices", []) if v.get("voice_id")
+    ]
+    return sorted(out, key=lambda v: (v["category"] != "cloned", v["name"].lower()))
+
+
 class GPTSoVITSTTS:
     """GPT-SoVITS 로컬 API — 완전 무료·오프라인 내 목소리 (zero-shot 참조 클로닝).
 

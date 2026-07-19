@@ -538,3 +538,36 @@ def test_generate_remembers_bg_style(server):
     job = next(j for j in state["jobs"] if j["id"] == data["job_id"])
     assert job["status"] == "ok"
     assert "그라데이션" in (job.get("bg_source") or "")
+
+
+def test_eleven_voices_endpoint_no_key(server):
+    """v0.46 — 키 없으면 빈 목록 + no_key (UI는 라디오 자체를 숨김)."""
+    data = _post(server, "/api/eleven_voices", {})
+    assert data.get("voices") == [] and data.get("no_key") is True
+
+
+def test_eleven_voices_listing_and_cache(monkeypatch):
+    """v0.46 — /v1/voices 응답 파싱 (클론 먼저·이름순) 몽키패치 검증."""
+    import io
+    import urllib.request as ur
+
+    from cutdaejang.core import tts_engine as te
+
+    payload = json.dumps({"voices": [
+        {"voice_id": "v2", "name": "Bella", "category": "premade"},
+        {"voice_id": "v3", "name": "Adam", "category": "premade"},
+        {"voice_id": "v1", "name": "내클론", "category": "cloned"},
+        {"name": "id없음"},
+    ]}).encode()
+
+    class FakeResp(io.BytesIO):
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+    monkeypatch.setattr(ur, "urlopen", lambda req, timeout=30: FakeResp(payload))
+    voices = te.list_elevenlabs_voices()
+    assert [v["voice_id"] for v in voices] == ["v1", "v3", "v2"]  # 클론 먼저, 이름순
+    assert voices[0]["category"] == "cloned"

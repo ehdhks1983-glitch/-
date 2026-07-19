@@ -630,14 +630,19 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 chain.append("sovits")      # 무료 내 목소리(로컬) — 실패 시 아래로 폴백
             if narr_voice == "__mine__" and os.environ.get("ELEVENLABS_API_KEY"):
                 chain.append("elevenlabs")  # 내 목소리 클론 — 실패 시 아래로 폴백
+            if narr_voice.startswith("el:") and os.environ.get("ELEVENLABS_API_KEY"):
+                chain.append("elevenlabs")  # 🎙 일레븐랩스 성우 보이스 (v0.46)
             if os.environ.get("GEMINI_API_KEY"):
                 chain.append("gemini")
             if sys.platform == "win32":
                 chain.append("windows")
             chain.append("stub")
             # __mine__/__sovits__는 보이스명이 아니라서 비움 → 제공자별 기본값으로 해석
-            voice = "" if narr_voice in ("__mine__", "__sovits__") else (
-                narr_voice or settings["tts"].get("voice_gemini", ""))
+            if narr_voice.startswith("el:"):
+                voice = narr_voice[3:]      # 일레븐랩스 voice_id
+            else:
+                voice = "" if narr_voice in ("__mine__", "__sovits__") else (
+                    narr_voice or settings["tts"].get("voice_gemini", ""))
             texts = [_tts_clean(s2.text) or "네" for s2 in subs]
             clips, used, note = tts_engine.synth_with_fallback(
                 texts, chain, Path(workdir) / "cache" / "tts", settings,
@@ -646,6 +651,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             )
             # 고른 보이스가 반영 안 되는 폴백이면 이유를 사용자에게 알림
             want = {"__mine__": "elevenlabs", "__sovits__": "sovits"}.get(narr_voice)
+            if narr_voice.startswith("el:"):
+                want = "elevenlabs"
             warn = ""
             if want and used != want:
                 warn = "⚠ 내 목소리 합성에 실패해 다른 목소리로 대체했어요"
@@ -1338,6 +1345,8 @@ class _Handler(BaseHTTPRequestHandler):
             from ..utils.pronounce import pronounce_ko  # noqa: PLC0415
 
             self._send_json({"lines": [pronounce_ko(l) for l in params.get("lines", [])]})
+        elif path == "/api/eleven_voices":  # 🎙 일레븐랩스 계정 보이스 목록 (v0.46)
+            self._eleven_voices()
         elif path == "/api/settings":
             try:
                 saved_to = config.save_settings(params.get("settings") or {})
@@ -1625,6 +1634,23 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e), "path": str(target)}, 500)
 
     # ---------- 목소리 미리듣기 (지시서 PATCH 6) ----------
+
+    def _eleven_voices(self) -> None:
+        """내 ElevenLabs 계정 보이스 목록 — 10분 캐시 (v0.46 성우 보이스 선택)."""
+        if not os.environ.get("ELEVENLABS_API_KEY"):
+            self._send_json({"voices": [], "no_key": True})
+            return
+        now = time.time()
+        cache = getattr(type(self.server), "_eleven_cache", None)
+        if cache and now - cache[0] < 600:
+            self._send_json({"voices": cache[1]})
+            return
+        try:
+            voices = tts_engine.list_elevenlabs_voices()
+            type(self.server)._eleven_cache = (now, voices)
+            self._send_json({"voices": voices})
+        except tts_engine.TTSError as e:
+            self._send_json({"voices": [], "error": str(e)})
 
     def _preview(self, params: dict) -> None:
         _apply_keys(params)
@@ -1973,7 +1999,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.45)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.46)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2349,6 +2375,7 @@ _HTML = """<!doctype html>
       <label><input type="radio" name="prov" value="gemini"><span>🌟 AI 성우 (추천)</span></label>
       <label id="provWinLabel" class="hidden"><input type="radio" name="prov" value="windows" id="provWin"><span>내장 음성 (무료)</span></label>
       <label id="provMineLabel" class="hidden"><input type="radio" name="prov" value="elevenlabs" id="provMine"><span>🎤 내 목소리</span></label>
+      <label id="provElevenLabel" class="hidden"><input type="radio" name="prov" value="eleven_voice" id="provEleven"><span>🎙 일레븐랩스 성우</span></label>
       <label id="provSovitsLabel" class="hidden"><input type="radio" name="prov" value="sovits" id="provSovits"><span>🎤 내 목소리 (무료·내 PC)</span></label>
       <label><input type="radio" name="prov" value="stub" checked><span>🔧 테스트 톤</span></label>
     </div>
@@ -2384,6 +2411,20 @@ _HTML = """<!doctype html>
           <button class="ghost" style="margin-bottom:1px" onclick="previewVoice(event)">🔊 미리듣기</button>
         </div>
       </div>
+    </div>
+
+    <div id="elevenOpts" class="hidden">
+      <div class="row">
+        <div>
+          <label>일레븐랩스 보이스 <span class="hint">— 내 계정에 담긴 보이스 그대로</span></label>
+          <select id="elevenVoiceSel"></select>
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="ghost" style="margin-bottom:1px" onclick="previewElevenVoice(event)">🔊 미리듣기</button>
+        </div>
+      </div>
+      <div class="hint">elevenlabs.io의 <b>Voices</b>에서 마음에 드는 보이스를 내 계정에 담으면(Add)
+        여기 목록에 나타나요 (10분 정도 뒤 반영, 클론 보이스 포함). 글자 수 과금 — 60초 쇼츠 1편 ≈ 300자.</div>
     </div>
 
     <div class="steplabel" style="margin-top:20px"><span class="stepnum">3</span>꾸미기 <span class="hint">— 전부 선택사항. 필요한 줄만 눌러서 펼치세요</span></div>
@@ -2737,7 +2778,47 @@ document.querySelectorAll('input[name=prov]').forEach(r => r.onchange = () => {
   const isGemini = pick('prov') === 'gemini';
   $('keyRow').classList.toggle('hidden', !isGemini || window._hasGeminiKey);
   $('geminiOpts').classList.toggle('hidden', !isGemini);
+  $('elevenOpts').classList.toggle('hidden', pick('prov') !== 'eleven_voice');
 });
+
+// ── 🎙 일레븐랩스 성우 보이스 (v0.46) — 내 계정 보이스 자동 불러오기 ──
+async function loadElevenVoices(){
+  if(window._elevenLoaded) return;
+  window._elevenLoaded = true;
+  try{
+    const data = await (await fetch('/api/eleven_voices', {method:'POST', body:'{}'})).json();
+    const voices = data.voices || [];
+    if(!voices.length) return;
+    const sel = $('elevenVoiceSel');
+    sel.innerHTML = '';
+    for(const v of voices){
+      const tag = v.category === 'cloned' ? ' (내 클론)' : '';
+      sel.add(new Option(v.name + tag, v.voice_id));
+      // 내레이션 보이스 목록에도 추가 (편집·사진 모드)
+      const nv = $('narrVoiceSel');
+      if(nv && ![...nv.options].some(o => o.value === 'el:' + v.voice_id))
+        nv.add(new Option('🎙 ' + v.name + ' (일레븐랩스)', 'el:' + v.voice_id));
+    }
+    // 기억된 내레이션 보이스가 일레븐랩스면 목록이 채워진 지금 복원
+    if(window._wantNarrVoice && [...$('narrVoiceSel').options].some(o => o.value === window._wantNarrVoice)){
+      $('narrVoiceSel').value = window._wantNarrVoice;
+      window._wantNarrVoice = '';
+    }
+  } catch(e){ window._elevenLoaded = false; }
+}
+
+async function previewElevenVoice(ev){
+  ev.preventDefault();
+  const btn = ev.target;
+  btn.disabled = true; btn.textContent = '합성 중...';
+  try{
+    const res = await fetch('/api/preview', {method:'POST', body: JSON.stringify({
+      tts_provider: 'elevenlabs', voice: $('elevenVoiceSel').value,
+    })});
+    const data = await res.json();
+    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+  } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
+}
 
 function pick(name){ return document.querySelector(`input[name=${name}]:checked`).value; }
 
@@ -2841,6 +2922,8 @@ function applyEditLast(el){
   set('narrFitSel', el.narr_fit); set('transSel', el.transition);
   if(el.narr_voice && [...$('narrVoiceSel').options].some(o => o.value === el.narr_voice))
     $('narrVoiceSel').value = el.narr_voice;
+  else if((el.narr_voice || '').startsWith('el:'))
+    window._wantNarrVoice = el.narr_voice;   // 일레븐랩스 목록은 늦게 채워짐 → 로드 후 복원
   chk('autoSubChk', el.auto_subtitle); chk('cutSilenceChk', el.cut_silence);
   set('whisperModelSel', el.whisper_model);
   window._wantStt = el.stt_provider || '';   // STT 목록은 늦게 채워짐 → loadStt에서 적용
@@ -3403,12 +3486,16 @@ function onBatchChange(){
 
 async function generate(){
   const prov = pick('prov');
+  if(prov === 'eleven_voice' && !(($('elevenVoiceSel')||{}).value)){
+    alert('일레븐랩스 보이스 목록을 아직 못 불러왔어요 — 잠시 후 다시 시도하거나 키를 확인하세요'); return;
+  }
   const body = {
     topic: $('topic').value, auto: pick('mode') === 'auto',
     // v0.40: 대본은 목소리와 무관 — 키만 있으면 AI 대본 (테스트 톤만 템플릿, 키 없으면 서버가 안전 강등)
     script_provider: prov === 'stub' ? 'stub' : 'gemini',
-    tts_provider: prov,
-    voice: prov === 'gemini' ? $('voiceSel').value : '',
+    tts_provider: prov === 'eleven_voice' ? 'elevenlabs' : prov,   // 🎙 성우도 같은 제공자
+    voice: prov === 'gemini' ? $('voiceSel').value
+         : prov === 'eleven_voice' ? $('elevenVoiceSel').value : '',
     tts_style: prov === 'gemini' ? $('styleSel').value : '',
     bgm: $('bgmSel').value, hook: $('genHook').value,
     bg_style: (($('genBgStyle')||{}).value)||'',
@@ -3469,6 +3556,7 @@ async function previewNarrVoice(ev){
   let key = '';
   if(v === '__mine__') prov = 'elevenlabs';
   else if(v === '__sovits__') prov = 'sovits';
+  else if(v.startsWith('el:')) prov = 'elevenlabs';   // 🎙 일레븐랩스 성우 (v0.46)
   else {
     key = ensureGeminiKey();   // 보이스는 제미나이 키가 있어야 적용됨 — 없으면 물어봄
     if(key || window._hasGeminiKey) prov = 'gemini';
@@ -3478,7 +3566,9 @@ async function previewNarrVoice(ev){
   btn.disabled = true; btn.textContent = '합성 중...';
   try{
     const res = await fetch('/api/preview', {method:'POST', body: JSON.stringify({
-      tts_provider: prov, voice: (v === '__mine__' || v === '__sovits__') ? '' : v,
+      tts_provider: prov,
+      voice: (v === '__mine__' || v === '__sovits__') ? ''
+           : (v.startsWith('el:') ? v.slice(3) : v),
       tts_style: $('narrStyleSel').value, gemini_key: key, save_key: true,
     })});
     const data = await res.json();
@@ -3930,6 +4020,10 @@ async function poll(){
 
   window._isWin = (state.platform || '').startsWith('win');
   window._hasElevenKey = !!(state.keys && state.keys.elevenlabs);
+  if(window._hasElevenKey){
+    $('provElevenLabel').classList.remove('hidden');   // 🎙 성우 보이스 (키 있을 때만)
+    loadElevenVoices();
+  }
   if(window._isWin){
     $('provWinLabel').classList.remove('hidden');
     if(!window._defaultSet){ window._defaultSet = true; $('provWin').checked = true; }
