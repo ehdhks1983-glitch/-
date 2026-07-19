@@ -192,8 +192,9 @@ def test_auto_mode_full_run_and_video_range(server):
     job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"})
     assert job["status"] == "ok", job.get("errors")
     assert job["mp4"]
-    # v0.40: 어떤 배경이 쓰였는지 완료 화면에 표시 (여기선 설정 꺼짐 → 기본 그라데이션+사유)
-    assert "기본 그라데이션" in job.get("bg_source", "") and "꺼짐" in job["bg_source"]
+    # v0.40: 어떤 배경이 쓰였는지 완료 화면에 표시
+    # (v0.45부터 AI 배경 기본 켬 — 키 없는 환경이라 사유는 "Gemini 키 없음")
+    assert "기본 그라데이션" in job.get("bg_source", "") and "키 없음" in job["bg_source"]
     _SHARED["done_job"] = job["id"]
 
     with _get(server, f"/video/{job['id']}", headers={"Range": "bytes=0-99"}) as resp:
@@ -520,3 +521,20 @@ def test_edit_photo_transition_fade_and_branding(server, tmp_path):
         assert "인트로" in (job.get("note") or "") or "인트로" in (job.get("tts_warn") or "")
     finally:  # 다른 테스트가 브랜딩 영향을 받지 않게 원상복구
         _post(server, "/api/settings", {"settings": {"branding": {"intro": "", "outro": ""}}})
+
+
+def test_generate_remembers_bg_style(server):
+    """v0.45 — 생성 폼에서 고른 장면 그림체가 설정(bg.image_style)에 기억되는지."""
+    from cutdaejang import config
+
+    data = _post(server, "/api/generate", {
+        "topic": "그림체 기억 테스트", "auto": True,
+        "script_provider": "stub", "tts_provider": "stub", "bg_style": "수채화",
+    })
+    _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert config.load_settings()["bg"]["image_style"] == "수채화"
+    # 키 없는 환경 → 장면 이미지 없이 기본 그라데이션으로 정상 완성
+    state = json.loads(_get(server, "/api/state").read())
+    job = next(j for j in state["jobs"] if j["id"] == data["job_id"])
+    assert job["status"] == "ok"
+    assert "그라데이션" in (job.get("bg_source") or "")

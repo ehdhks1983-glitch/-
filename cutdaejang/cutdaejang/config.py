@@ -61,8 +61,10 @@ DEFAULTS: dict = {
     "bg": {
         "motion": "zoom_in",          # zoom_in | zoom_out | off
         "motion_amount": 0.08,        # 총 줌 비율 (8%)
-        "ai_image": False,            # AI 배경 이미지 생성 (opt-in, 실패 시 그라데이션 폴백)
+        "ai_image": True,             # AI 배경 (v0.45부터 기본 켬 — 키 없으면 자동 생략)
         "image_model": "gemini-2.5-flash-image-preview",  # 모델 가용성 변동 대비 설정화
+        "scene_images": True,         # 문장(장면)마다 새 이미지 (v0.45. 끄면 1장+줌)
+        "image_style": "일러스트",     # 장면 그림체 — background_generator.IMAGE_STYLES 키
     },
     "subtitle": {
         "font_size": 84,             # 유튜브 쇼츠 기본 (v0.23 상향)

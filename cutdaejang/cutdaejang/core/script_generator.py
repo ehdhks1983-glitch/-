@@ -31,7 +31,9 @@ PROMPT_TEMPLATE = """\
 - 문장당 반드시 {max_chars}자 이내 (자막 1줄). 초과 문장 금지 — 길면 두 문장으로 나눌 것
 - 구어체. 숫자·영어 약어는 한글 발음으로 표기 (TTS 오독 방지. 예: "2026년"→"이천이십육년", "AI"→"에이아이")
 - highlight: 각 문장에서 시청자가 기억해야 할 단어 1개 (문장에 그대로 포함된 단어, 없으면 빈 문자열)
-출력(JSON만): {{"title":"","sentences":[{{"text":"","highlight":""}},...],"background_prompt":"","hashtags":[""]}}
+- scene: 그 문장이 나올 때 화면에 보여줄 장면 묘사 1줄 (한국어, 그림 생성용. 인물·사물·배경·분위기를
+  구체적으로. 글자·문자·로고는 절대 넣지 말 것)
+출력(JSON만): {{"title":"","sentences":[{{"text":"","highlight":"","scene":""}},...],"background_prompt":"","hashtags":[""]}}
 """
 
 
@@ -42,11 +44,14 @@ class Script:
     highlights: List[str] = field(default_factory=list)  # 문장별 강조 단어 (병렬 리스트)
     background_prompt: str = ""
     hashtags: List[str] = field(default_factory=list)
+    scene_prompts: List[str] = field(default_factory=list)  # 문장별 장면 묘사 (v0.45 이미지 생성용)
 
     def __post_init__(self):
-        # highlights는 항상 sentences와 같은 길이로 정규화
+        # highlights/scene_prompts는 항상 sentences와 같은 길이로 정규화
         self.highlights = (self.highlights or [])[: len(self.sentences)]
         self.highlights += [""] * (len(self.sentences) - len(self.highlights))
+        self.scene_prompts = (self.scene_prompts or [])[: len(self.sentences)]
+        self.scene_prompts += [""] * (len(self.sentences) - len(self.scene_prompts))
 
     @classmethod
     def from_json_text(cls, text: str) -> "Script":
@@ -59,19 +64,23 @@ class Script:
         if not isinstance(raw, list) or not raw:
             raise ScriptParseError(f"sentences 형식 오류: {raw!r}")
 
-        sentences, highlights = [], []
+        sentences, highlights, scenes = [], [], []
         for item in raw:
             if isinstance(item, str) and item.strip():  # 구버전 문자열 형식 호환
                 sentences.append(item.strip())
                 highlights.append("")
+                scenes.append("")
             elif isinstance(item, dict) and str(item.get("text", "")).strip():
                 sentences.append(str(item["text"]).strip())
                 highlights.append(str(item.get("highlight", "") or "").strip())
+                scenes.append(str(item.get("scene", "") or "").strip())
             else:
                 raise ScriptParseError(f"sentences 항목 형식 오류: {item!r}")
         # 리스트 병렬 형식({"sentences":[...], "highlights":[...]})도 수용
         if not any(highlights) and isinstance(data.get("highlights"), list):
             highlights = [str(h or "").strip() for h in data["highlights"]]
+        if not any(scenes) and isinstance(data.get("scene_prompts"), list):
+            scenes = [str(s or "").strip() for s in data["scene_prompts"]]
 
         return cls(
             title=str(data.get("title", "")),
@@ -79,6 +88,7 @@ class Script:
             highlights=highlights,
             background_prompt=str(data.get("background_prompt", "")),
             hashtags=[str(h) for h in data.get("hashtags", []) if h],
+            scene_prompts=scenes,
         )
 
     def to_json(self) -> str:
@@ -86,8 +96,8 @@ class Script:
             {
                 "title": self.title,
                 "sentences": [
-                    {"text": t, "highlight": h}
-                    for t, h in zip(self.sentences, self.highlights)
+                    {"text": t, "highlight": h, "scene": s}
+                    for t, h, s in zip(self.sentences, self.highlights, self.scene_prompts)
                 ],
                 "background_prompt": self.background_prompt,
                 "hashtags": self.hashtags,
@@ -446,6 +456,12 @@ class StubScript:
             highlights=["집중", "자동", "한 번에요", "구독"],
             background_prompt=f"{topic}를 상징하는 세로형 미니멀 배경, 어두운 톤",
             hashtags=["쇼츠", "자동화", "컷대장"],
+            scene_prompts=[
+                f"{topic}를 상징하는 인상적인 첫 장면, 시선을 끄는 구도",
+                "작업이 자동으로 조립되는 느낌의 장면, 톱니바퀴와 부품",
+                "대본·마이크·자막이 어우러진 제작 장면",
+                "밝고 긍정적인 마무리 장면, 엄지척",
+            ],
         )
 
 

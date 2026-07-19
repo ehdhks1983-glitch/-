@@ -31,10 +31,10 @@ class Canvas:
 
 @dataclass
 class Background:
-    type: str = "image"  # "image" | "color"
+    type: str = "image"  # "image" | "color" | "video"(장면별 이미지 슬라이드, v0.45)
     path: Optional[str] = None
     color: Optional[str] = None  # 예: "#101020" (type=color일 때)
-    motion: str = "off"          # Ken Burns: "zoom_in" | "zoom_out" | "off"
+    motion: str = "off"          # Ken Burns: "zoom_in" | "zoom_out" | "off" (image 전용)
     motion_amount: float = 0.08  # 총 줌 비율
 
 
@@ -156,9 +156,9 @@ class TimelineSpec:
         if self.duration_us <= 0:
             raise SpecError("duration_us는 0보다 커야 합니다")
 
-        if self.background.type == "image":
+        if self.background.type in ("image", "video"):
             if not self.background.path:
-                raise SpecError("background.type=image에는 path가 필요합니다")
+                raise SpecError(f"background.type={self.background.type}에는 path가 필요합니다")
         elif self.background.type == "color":
             if not self.background.color:
                 raise SpecError("background.type=color에는 color가 필요합니다")
@@ -213,7 +213,8 @@ class TimelineSpec:
             return (path if path.is_absolute() else base / path).exists()
 
         missing = []
-        if self.background.type == "image" and self.background.path and not ok(self.background.path):
+        if (self.background.type in ("image", "video") and self.background.path
+                and not ok(self.background.path)):
             missing.append(self.background.path)
         if self.main_video and not ok(self.main_video.path):
             missing.append(self.main_video.path)

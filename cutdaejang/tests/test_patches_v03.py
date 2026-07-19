@@ -395,8 +395,11 @@ def test_ai_image_setup_gating(monkeypatch):
     assert p is None and "꺼짐" in why
 
 
-def test_ai_image_off_by_default():
-    assert config.DEFAULTS["bg"]["ai_image"] is False
+def test_ai_image_defaults():
+    # v0.45부터 기본 켬 (키 없으면 자동 생략이라 안전) + 장면별 이미지·그림체 기본값
+    assert config.DEFAULTS["bg"]["ai_image"] is True
+    assert config.DEFAULTS["bg"]["scene_images"] is True
+    assert config.DEFAULTS["bg"]["image_style"] == "일러스트"
     assert config.load_settings()["bg"]["image_model"]  # 모델명 설정 존재
 
 

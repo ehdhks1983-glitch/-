@@ -110,6 +110,125 @@ class GeminiImage:
         return str(out_path)
 
 
+# ─────────── v0.45: 장면별 이미지 → 슬라이드 배경 영상 ───────────
+
+# 그림체 프리셋 — UI(genBgStyle)와 키를 맞춘다. 프롬프트 앞에 붙어 전 장면 통일.
+IMAGE_STYLES = {
+    "일러스트": "따뜻한 플랫 벡터 일러스트 스타일, 부드러운 색감",
+    "실사풍": "사실적인 고품질 사진 스타일, 자연스러운 빛",
+    "3D": "귀여운 3D 렌더 스타일, 파스텔 톤, 부드러운 조명",
+    "수채화": "은은한 수채화 그림 스타일, 종이 질감",
+    "네온": "네온 빛 사이버 스타일, 어두운 배경에 형광 포인트",
+    "미니멀": "미니멀 그래픽 스타일, 단순한 도형과 넉넉한 여백",
+}
+
+
+def generate_scene_images(
+    prompts: list,
+    provider: GeminiImage,
+    out_dir,
+    canvas: Canvas,
+    style: str = "일러스트",
+    on_note: Optional[callable] = None,
+    on_progress: Optional[callable] = None,
+) -> list:
+    """장면 묘사 목록 → 이미지 경로 목록 (실패한 장면은 None — 호출측이 이웃으로 채움).
+
+    스타일 프리셋을 앞에 붙여 전 장면 그림체를 통일한다. 한 장 실패가 전체를
+    막지 않는다 (None으로 두고 계속).
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    style_text = IMAGE_STYLES.get(style, "")
+    paths = []
+    for i, prompt in enumerate(prompts):
+        if on_progress:
+            on_progress(i, len(prompts))
+        p = (prompt or "").strip()
+        full = f"{style_text}. {p}" if style_text and p else (style_text or p)
+        try:
+            paths.append(provider.generate(full, str(out_dir / f"scene_{i + 1:02d}.png"), canvas))
+        except Exception as e:  # noqa: BLE001 — 한 장 실패는 이웃 이미지로 대체
+            paths.append(None)
+            if on_note:
+                on_note(f"장면 {i + 1} 이미지 실패 → 이웃 장면으로 대체 ({str(e)[:80]})")
+    if on_progress:
+        on_progress(len(prompts), len(prompts))
+    return paths
+
+
+def fill_scene_gaps(paths: list, base: Optional[str] = None) -> list:
+    """None(실패 장면)을 직전 성공 이미지로, 맨 앞은 다음 성공(없으면 base)으로 채움."""
+    out = list(paths)
+    last = None
+    for i, p in enumerate(out):
+        if p:
+            last = p
+        elif last:
+            out[i] = last
+    nxt = None
+    for i in range(len(out) - 1, -1, -1):
+        if out[i]:
+            nxt = out[i]
+        elif nxt:
+            out[i] = nxt
+    return [p or base for p in out]
+
+
+def scene_slideshow(
+    images_spans: list,
+    out_path: str,
+    canvas: Canvas,
+    motion: str = "zoom_in",
+    motion_amount: float = 0.08,
+    fade_s: float = 0.3,
+) -> str:
+    """[(이미지, 구간 μs)] → 문장 타이밍에 맞춰 넘어가는 배경 영상 (무음).
+
+    장면마다 살짝 줌(켄번즈) + 경계 페이드로 이어 붙인다. 전체 길이 = 구간 합.
+    """
+    if not images_spans:
+        raise BackgroundError("장면 이미지가 없습니다")
+    w, h, fps = canvas.w, canvas.h, canvas.fps
+    up_w, up_h = int(w * 1.5) & ~1, int(h * 1.5) & ~1
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-nostdin"]
+    parts = []
+    n = len(images_spans)
+    for i, (img, dur_us) in enumerate(images_spans):
+        dur_s = max(0.15, dur_us / 1e6)
+        # -framerate 필수: 이미지 loop 기본은 25fps라 캔버스 fps와 어긋나 길이가 줄어든다
+        args += ["-framerate", str(fps), "-loop", "1", "-t", f"{dur_s:.3f}", "-i", str(img)]
+        frames = max(1, int(dur_s * fps))
+        chain = (f"[{i}:v]scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
+                 f"crop={up_w}:{up_h}")
+        if motion in ("zoom_in", "zoom_out"):
+            amt = max(0.02, min(0.2, motion_amount))
+            if motion == "zoom_in":
+                z = f"min(1+{amt}*on/{frames},1+{amt})"
+            else:
+                z = f"max(1+{amt}-{amt}*on/{frames},1)"
+            chain += (f",zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                      f":d=1:s={w}x{h}:fps={fps}")
+        else:
+            chain += f",scale={w}:{h},fps={fps}"
+        fd = min(fade_s, dur_s / 3)
+        if n > 1:
+            if i > 0:
+                chain += f",fade=t=in:st=0:d={fd:.3f}"
+            if i < n - 1:
+                chain += f",fade=t=out:st={max(0.0, dur_s - fd):.3f}:d={fd:.3f}"
+        parts.append(chain + f",setsar=1[v{i}]")
+    fc = (";".join(parts) + ";" + "".join(f"[v{i}]" for i in range(n))
+          + f"concat=n={n}:v=1:a=0[v]")
+    script = Path(out_path).with_suffix(".filter.txt")  # 장면 많으면 명령줄 한계 회피
+    script.write_text(fc, encoding="utf-8")
+    args += ["-filter_complex_script", str(script), "-map", "[v]",
+             "-r", str(fps), "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out_path)]
+    ff.run(args)
+    return str(out_path)
+
+
 def prepare_background(
     out_path: str,
     canvas: Canvas,

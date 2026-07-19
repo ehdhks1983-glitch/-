@@ -80,6 +80,16 @@ def build_command(
             f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
             f":d={total_frames}:s={c.w}x{c.h}:fps={c.fps},setsar=1[bg]"
         )
+    elif spec.background.type == "video":
+        # v0.45 장면 슬라이드 배경 영상 — 캔버스 크기로 합성돼 오지만 안전하게 재정규화.
+        # 몇 프레임 짧아도 마지막 프레임 복제(tpad)로 duration까지 채운다.
+        args += ["-i", spec.background.path]
+        filters.append(
+            f"[0:v]scale={c.w}:{c.h}:force_original_aspect_ratio=increase,"
+            f"crop={c.w}:{c.h},fps={c.fps},"
+            f"tpad=stop_mode=clone:stop_duration=3,trim=duration={dur_s},"
+            f"setpts=PTS-STARTPTS,setsar=1[bg]"
+        )
     else:
         if spec.background.type == "image":
             args += ["-loop", "1", "-t", dur_s, "-i", spec.background.path]

@@ -235,6 +235,8 @@ def _bg_display(image_provider, bg_skip: str, src: str) -> str:
     """완료 화면용 배경 출처 문구."""
     if image_provider is None:
         return f"기본 그라데이션 ({bg_skip})" if bg_skip else "기본 그라데이션"
+    if src.startswith("ai_scenes:"):  # v0.45 장면별 이미지 (성공/전체)
+        return f"AI 장면 이미지 {src[10:]}장 ✨"
     if src == "ai":
         return "AI 이미지 ✨"
     if src == "user":
@@ -244,8 +246,21 @@ def _bg_display(image_provider, bg_skip: str, src: str) -> str:
     return "기본 그라데이션"
 
 
+def _apply_bg_style(params: dict, settings: dict) -> dict:
+    """생성 폼에서 고른 장면 그림체를 설정에 반영(기억)하고 병합해 돌려줌 (v0.45)."""
+    style = (params.get("bg_style") or "").strip()
+    if not style:
+        return settings
+    if style != settings["bg"].get("image_style"):
+        try:
+            config.save_settings({"bg": {"image_style": style}})
+        except OSError:
+            pass
+    return config.deep_merge(settings, {"bg": {"image_style": style}})
+
+
 def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> None:
-    settings = config.load_settings()
+    settings = _apply_bg_style(params, config.load_settings())
     opts = _job_options(params, settings)
     try:
         image_provider, bg_skip = _ai_image_setup(params, settings)
@@ -885,7 +900,7 @@ def _run_batch(job_id: str, topics: list, params: dict, workdir: str) -> None:
         provider_name = params.get("script_provider", "stub")
         if provider_name == "gemini" and not os.environ.get("GEMINI_API_KEY"):
             provider_name = "stub"
-        settings = config.load_settings()
+        settings = _apply_bg_style(params, config.load_settings())
         opts = _job_options(params, settings)
         image_provider, _bg_skip = _ai_image_setup(params, settings)
         for i, topic in enumerate(topics):
@@ -1958,7 +1973,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.44)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.45)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2390,6 +2405,26 @@ _HTML = """<!doctype html>
     </details>
 
     <details class="opt">
+      <summary>🖼 AI 배경 그림 <span class="hint">— 문장마다 장면 그림이 넘어가요 (Gemini 키)</span></summary>
+      <div class="chk" style="gap:8px;margin-top:4px">
+        <span>그림체</span>
+        <select id="genBgStyle" style="width:auto;padding:6px 8px">
+          <option value="일러스트" selected>일러스트 (기본)</option>
+          <option value="실사풍">실사풍</option>
+          <option value="3D">3D</option>
+          <option value="수채화">수채화</option>
+          <option value="네온">네온</option>
+          <option value="미니멀">미니멀</option>
+        </select>
+        <span class="hint">전 장면에 같은 그림체로 통일돼요</span>
+      </div>
+      <div class="hint">🆕 v0.45 — 대본의 문장(장면)마다 AI가 그림을 그려 말 타이밍에 맞춰 넘어갑니다
+        (장면마다 살짝 줌 + 부드러운 전환). Gemini 키가 있으면 자동 적용,
+        없으면 기본 그라데이션 배경으로 만들어져요. 이미지 비용은 무료 키 한도 안이면 0원.
+        ⚙ 설정 → 배경·모션에서 끌 수 있어요.</div>
+    </details>
+
+    <details class="opt">
       <summary>⚙️ 세부 설정 <span class="hint">— 완성 전에 대본을 확인하고 싶다면</span></summary>
       <label style="margin-top:4px">완성 방식</label>
       <div class="toggle">
@@ -2628,10 +2663,12 @@ _HTML = """<!doctype html>
           </select></div>
         <div><label>줌 정도 (0.02~0.2)</label><input type="number" id="setMotionAmt" min="0.02" max="0.2" step="0.01"></div>
       </div>
-      <div class="chk"><input type="checkbox" id="setAiImage"><span>AI 배경 이미지 생성 (Gemini · 실패 시 기본 배경)</span></div>
+      <div class="chk"><input type="checkbox" id="setAiImage"><span>AI 배경 이미지 생성 (Gemini · 키 없으면 자동 생략 — v0.45부터 기본 켬)</span></div>
+      <div class="chk"><input type="checkbox" id="setSceneImg"><span>🖼 문장(장면)마다 새 이미지 — 말 타이밍에 맞춰 그림이 넘어가요 (끄면 1장+줌)</span></div>
       <div class="hint" style="margin:2px 0 0 26px">🤖 AI 영상 만들기 전용 (내 영상 편집·사진은 원본이 배경). Gemini 키가 있으면
-        어떤 목소리를 골라도 적용돼요 (테스트 톤만 제외). <b>실제로 어떤 배경이 쓰였는지는 완성 화면의
-        「🖼️ 배경: …」 표시로 확인</b> — AI 이미지 ✨ / 기본 그라데이션(사유)로 알려줍니다.</div>
+        어떤 목소리를 골라도 적용돼요 (테스트 톤만 제외). 그림체는 만들기 폼의 「🖼 AI 배경 그림」에서.
+        <b>실제로 어떤 배경이 쓰였는지는 완성 화면의 「🖼️ 배경: …」 표시로 확인</b> —
+        AI 장면 이미지 N장 ✨ / AI 이미지 ✨ / 기본 그라데이션(사유)로 알려줍니다.</div>
     </details>
 
     <details class="opt">
@@ -3374,6 +3411,7 @@ async function generate(){
     voice: prov === 'gemini' ? $('voiceSel').value : '',
     tts_style: prov === 'gemini' ? $('styleSel').value : '',
     bgm: $('bgmSel').value, hook: $('genHook').value,
+    bg_style: (($('genBgStyle')||{}).value)||'',
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
   };
@@ -3739,6 +3777,7 @@ function resetGenForm(ev){
   const hc = $('genHookCands'); if(hc) hc.innerHTML='';
   set('bgmSel',''); set('voiceSel', ($('voiceSel').options[0]||{}).value || '');
   set('styleSel', ($('styleSel').options[0]||{}).value || '');
+  set('genBgStyle','일러스트');
 }
 
 function updateLogs(lines){
@@ -3768,6 +3807,7 @@ function fillSettings(s){
   $('setMotion').value = s.bg.motion;
   $('setMotionAmt').value = s.bg.motion_amount;
   $('setAiImage').checked = !!s.bg.ai_image;
+  $('setSceneImg').checked = s.bg.scene_images !== false;
   $('setBgmVol').value = s.bgm.volume_db;
   $('setDuck').checked = !!s.bgm.duck;
   $('setGap').value = s.audio.gap_ms;
@@ -3851,7 +3891,7 @@ async function saveSettings(){
                hook_band: $('setHookBand').checked, band: $('setBand').checked,
                wrap_chars: +$('setWrapChars').value, anim: $('setSubAnim').value},
     bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,
-         ai_image: $('setAiImage').checked},
+         ai_image: $('setAiImage').checked, scene_images: $('setSceneImg').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
     audio: {gap_ms: +$('setGap').value},
     tts: {rpm_limit: +$('setRpm').value, windows_rate: +$('setWinRate').value},
@@ -3905,6 +3945,10 @@ async function poll(){
       for(const f of state.bgm_files){ $('bgmSel').add(new Option(f, f)); $('bgmEditSel').add(new Option(f, f)); }
     }
     if(state.settings) fillSettings(state.settings);
+    // v0.45: 마지막에 쓴 장면 그림체 복원
+    const bgst = ((state.settings || {}).bg || {}).image_style;
+    if(bgst && $('genBgStyle') && [...$('genBgStyle').options].some(o => o.value === bgst))
+      $('genBgStyle').value = bgst;
     initHookChips();
     const mv = ((state.settings || {}).tts || {});
     if(mv.voice_elevenlabs) addMyVoiceOption(mv.voice_elevenlabs_name || '내 목소리');
