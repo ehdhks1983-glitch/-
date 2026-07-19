@@ -904,3 +904,52 @@ def test_render_with_bgm_duck(tmp_path):
     assert r.ok, r.errors
     assert ff.has_audio_stream(str(out))
     assert abs(ff.probe_duration_us(str(out)) - 3_000_000) < 400_000
+
+
+def test_gemini_stt_thinking_off_and_empty_stop(monkeypatch, tmp_path):
+    """v0.50.2 — 2.5-flash 씽킹 차단(thinkingBudget 0) + 출력 없는 정상 종료(STOP)는
+    무음 처리. 사용자 로그: 씽킹이 출력을 삼켜 '빈 응답' 경고 8건."""
+    import io
+    import json
+    import urllib.request as ur
+
+    from cutdaejang.core import stt_engine as se
+
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFFfake")
+    sent = {}
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=120):
+        sent["payload"] = json.loads(req.data.decode())
+        return Resp(json.dumps(sent["reply"]).encode())
+
+    monkeypatch.setattr(ur, "urlopen", fake_urlopen)
+    stt = se.GeminiSTT(api_key="k")
+
+    sent["reply"] = {"candidates": [
+        {"content": {"parts": [{"text": " 안녕하세요 "}]}, "finishReason": "STOP"}]}
+    assert stt.transcribe(str(wav)) == "안녕하세요"
+    assert sent["payload"]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
+
+    # 사용자 로그 그대로: parts 없이 STOP → 빈 자막 (오류·경고 아님)
+    sent["reply"] = {"candidates": [{"content": {"role": "model"}, "finishReason": "STOP"}]}
+    assert stt.transcribe(str(wav)) == ""
+
+    # candidates 자체가 없으면(안전 차단·쿼터) 여전히 오류 → 빈 자막 캐시 오염 방지
+    sent["reply"] = {"promptFeedback": {"blockReason": "SAFETY"}}
+    with pytest.raises(se.STTError, match="빈 응답"):
+        stt.transcribe(str(wav))
+
+    # 씽킹 미지원 모델(2.5 아님)엔 thinkingConfig를 보내지 않음
+    stt_old = se.GeminiSTT(api_key="k", model="gemini-2.0-flash")
+    sent["reply"] = {"candidates": [
+        {"content": {"parts": [{"text": "네"}]}, "finishReason": "STOP"}]}
+    assert stt_old.transcribe(str(wav)) == "네"
+    assert "generationConfig" not in sent["payload"]

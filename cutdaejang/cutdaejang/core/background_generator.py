@@ -133,19 +133,33 @@ class GeminiImage:
                 "data": base64.b64encode(Path(ref_png).read_bytes()).decode(),
             }})
             parts[0]["text"] += "\n(첨부한 이미지와 같은 캐릭터·같은 그림체를 유지할 것)"
-        payload = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
-        }
-        try:
-            data = _http_post_json(url, payload, {"x-goog-api-key": self.api_key})
-        except Exception as e:  # HTTP/네트워크 오류 유형에 무관하게 BackgroundError로 통일
-            raise BackgroundError(f"이미지 생성 API 오류: {str(e)[:200]}") from e
-        try:
-            parts = data["candidates"][0]["content"]["parts"]
-            b64 = next(p["inlineData"]["data"] for p in parts if "inlineData" in p)
-        except (KeyError, IndexError, StopIteration) as e:
-            raise BackgroundError(f"이미지 응답 형식 예상 밖: {json.dumps(data)[:300]}") from e
+        b64 = None
+        for attempt in (0, 1):
+            payload = {
+                "contents": [{"parts": parts}],
+                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            }
+            try:
+                data = _http_post_json(url, payload, {"x-goog-api-key": self.api_key})
+            except Exception as e:  # HTTP/네트워크 오류 유형에 무관하게 BackgroundError로 통일
+                raise BackgroundError(f"이미지 생성 API 오류: {str(e)[:200]}") from e
+            try:
+                out_parts = data["candidates"][0]["content"]["parts"]
+                b64 = next(p["inlineData"]["data"] for p in out_parts if "inlineData" in p)
+                break
+            except (KeyError, IndexError, StopIteration) as e:
+                # 모델이 그림 대신 말로 대답하는 경우가 가끔 있다(사용자 로그: 장면 1장) —
+                # "이미지만" 지시를 붙여 한 번 더 (v0.50.2)
+                replied_text = ""
+                try:
+                    replied_text = " ".join(
+                        p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+                except (KeyError, IndexError, TypeError):
+                    pass
+                if attempt == 0 and replied_text.strip():
+                    parts[0]["text"] += "\n(묻지 말고, 설명 없이 반드시 이미지 1장만 생성해 응답할 것)"
+                    continue
+                raise BackgroundError(f"이미지 응답 형식 예상 밖: {json.dumps(data)[:300]}") from e
         raw = str(out_path) + ".raw"
         Path(raw).write_bytes(base64.b64decode(b64))
         try:

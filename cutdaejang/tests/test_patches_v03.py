@@ -138,6 +138,35 @@ def test_wait_cap_exhausts(tmp_path):
         engine.synth_sentence("상한 테스트")
 
 
+def test_daily_quota_fails_over_immediately(tmp_path):
+    """v0.50.2 — 하루 한도 429는 기다려봤자 소용없음 → 대기 0초로 즉시 폴백.
+
+    사용자 로그: 한도 끝난 날 문장마다 120초를 기다린 뒤에야 내장 음성으로 넘어갔다.
+    """
+    daily = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": [{
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        "violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}],
+    }]}}
+
+    class DailyQuotaProvider:
+        name = "gemini"
+        model = "fake"
+
+        def synthesize(self, text, voice, out_path):
+            raise TTSHTTPError(429, daily, json.dumps(daily))
+
+    clk = FakeClock()
+    engine = TTSEngine(DailyQuotaProvider(), tmp_path / "c", sleep=clk.sleep,
+                       limiter=RateLimiter(8, clock=clk.now, sleep=clk.sleep))
+    with pytest.raises(tts_engine.TTSExhausted, match="무료 한도 소진"):
+        engine.synth_sentence("하루 한도 문장")
+    assert clk.slept == []  # 120초 대기 없이 즉시
+
+    # 분당 한도(RetryInfo만 있는 429)는 기존대로 기다렸다 재시도 — 회귀 방지
+    assert tts_engine.is_daily_quota(TTSHTTPError(429, RETRY_PAYLOAD, json.dumps(RETRY_PAYLOAD))) is False
+    assert tts_engine.is_daily_quota(TTSHTTPError(429, None, '"quotaId": "...PerDay..."')) is True
+
+
 @requires_ffmpeg
 def test_fallback_chain_falls_to_stub(tmp_path):
     class AlwaysAuthFail:

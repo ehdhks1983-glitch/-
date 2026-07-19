@@ -98,6 +98,22 @@ def parse_retry_delay_s(err: TTSHTTPError) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
+def is_daily_quota(err: TTSHTTPError) -> bool:
+    """429가 '하루 한도' 소진인지 — 분당 한도와 달리 기다려도 소용없다 (v0.50.2).
+
+    사용자 로그: 하루 한도가 끝난 날은 문장마다 120초를 꼬박 기다린 뒤에야
+    다음 목소리로 넘어갔다. 한도 종류를 구분해 즉시 폴백한다.
+    """
+    try:
+        for detail in err.payload["error"]["details"]:
+            for v in detail.get("violations", []):
+                if "perday" in str(v.get("quotaId", "")).lower():
+                    return True
+    except (TypeError, KeyError):
+        pass
+    return bool(re.search(r"per[\s_]?day|daily", err.text[:2000], re.IGNORECASE))
+
+
 # ─────────────────────────── 레이트리미터 ───────────────────────────
 
 
@@ -612,6 +628,11 @@ class TTSEngine:
                     ) from e
                 if e.code != 429 and e.code < 500:
                     raise  # 4xx 기타는 재시도 무의미
+                if e.code == 429 and is_daily_quota(e):
+                    raise TTSExhausted(
+                        f"{self.provider.name} 오늘의 무료 한도 소진 — 즉시 다음 목소리로 "
+                        "넘어갑니다 (한국시간 오후 4~5시쯤 리셋)", raw=e.text
+                    ) from e
                 if attempt >= max_retries:
                     break
                 delay = parse_retry_delay_s(e) if e.code == 429 else None

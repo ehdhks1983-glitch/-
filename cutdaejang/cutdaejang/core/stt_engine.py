@@ -125,6 +125,8 @@ class GeminiSTT:
                 }
             ]
         }
+        if "2.5" in self.model:  # 씽킹이 짧은 받아쓰기 출력을 통째로 삼키는 것 방지 (v0.50.2)
+            payload["generationConfig"] = {"thinkingConfig": {"thinkingBudget": 0}}
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -137,11 +139,17 @@ class GeminiSTT:
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "replace")[:300]
             raise STTError(f"Gemini STT 오류 {e.code}: {body}") from e
-        try:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except (KeyError, IndexError):
-            # 200이지만 candidates 없음(안전 차단·쿼터) — 빈 자막이 캐시에 박히지 않게 오류로
-            raise STTError(f"Gemini STT 빈 응답: {json.dumps(data)[:200]}") from None  # 무음/인식 실패 → 빈 자막 (구간은 유지)
+        cands = data.get("candidates") or []
+        parts = ((cands[0].get("content") or {}).get("parts") or []) if cands else []
+        text = " ".join(p.get("text", "") for p in parts if p.get("text")).strip()
+        if text:
+            return text
+        # 출력 없이 정상 종료(STOP) = 알아들을 말이 없는 구간 → 자막 없이 유지 (v0.50.2 —
+        # 예전엔 오류로 던져 구간마다 경고가 쌓였다. 사용자 로그 8건)
+        if cands and str(cands[0].get("finishReason", "")).upper() == "STOP":
+            return ""
+        # candidates 자체가 없음(안전 차단·쿼터) — 빈 자막이 캐시에 박히지 않게 오류로
+        raise STTError(f"Gemini STT 빈 응답: {json.dumps(data)[:200]}")
 
 
 class OpenAISTT:

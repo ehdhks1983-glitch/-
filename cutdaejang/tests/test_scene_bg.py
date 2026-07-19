@@ -169,6 +169,43 @@ def test_gemini_image_model_fallback(monkeypatch, tmp_path):
         prov2.generate("장면", str(tmp_path / "c.png"), canvas)
 
 
+@requires_ffmpeg
+def test_gemini_image_text_reply_retry(monkeypatch, tmp_path):
+    """v0.50.2 — 모델이 그림 대신 말로 답하면 '이미지만' 지시를 붙여 1회 재시도."""
+    from cutdaejang.core import background_generator as bgm
+
+    calls = []
+
+    def fake_post(url, payload, headers):
+        calls.append(payload["contents"][0]["parts"][0]["text"])
+        if len(calls) == 1:  # 사용자 로그 재현: 텍스트로 응답
+            return {"candidates": [{"content": {"parts": [{"text": "어떤 그림을 원하세요?"}]}}]}
+        import base64
+        png = tmp_path / "src.png"
+        if not png.exists():
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "color=c=teal:s=90x160:d=0.1", "-frames:v", "1", str(png)])
+        return {"candidates": [{"content": {"parts": [
+            {"inlineData": {"data": base64.b64encode(png.read_bytes()).decode()}}]}}]}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(bgm, "_http_post_json", fake_post)
+    canvas = Canvas(w=90, h=160, fps=30)
+    prov = bgm.GeminiImage(model="gemini-2.5-flash-image")
+    out = prov.generate("장면", str(tmp_path / "o.png"), canvas)
+    assert out and len(calls) == 2
+    assert "이미지 1장만" in calls[1] and "이미지 1장만" not in calls[0]
+
+    # 두 번 다 말로 답하면 실패 (재시도는 1회만 — 무한 루프 방지)
+    calls.clear()
+    monkeypatch.setattr(bgm, "_http_post_json", lambda u, p, h: (
+        calls.append(1) or {"candidates": [{"content": {"parts": [{"text": "질문입니다"}]}}]}))
+    prov2 = bgm.GeminiImage(model="gemini-2.5-flash-image")
+    with pytest.raises(bgm.BackgroundError, match="예상 밖"):
+        prov2.generate("장면", str(tmp_path / "o2.png"), canvas)
+    assert len(calls) == 2
+
+
 def test_scene_prompt_character_injection():
     """v0.50 — 캐릭터 프리셋 키/직접 묘사가 프롬프트에 주입되는지."""
     t = bg.scene_prompt_text("바다를 바라본다", "일러스트", "해골")
