@@ -455,3 +455,66 @@ def test_generate_batch_rejects_empty(server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(req, timeout=10)
     assert exc.value.code == 400
+
+
+def test_template_save_apply_delete(server):
+    """v0.43 📋 템플릿 — 저장(허용 키만) → state 노출 → 삭제."""
+    data = _post(server, "/api/template", {"name": "요리 쇼츠", "params": {
+        "layout": "keep", "bgm": "따뜻한.mp3", "bgm_db": -9, "transition": "fade",
+        "narr_fit": "loop", "quality": "ultra", "speed": 1.15,
+        "video_path": "C:/개인폴더/영상.mp4",   # 작업별 입력 — 저장되면 안 됨
+        "gemini_key": "AIza-비밀",              # 키 — 저장되면 안 됨
+    }})
+    assert data.get("ok") and "요리 쇼츠" in data["templates"]
+    saved = data["templates"]["요리 쇼츠"]
+    assert saved["transition"] == "fade" and saved["layout"] == "keep"
+    assert "video_path" not in saved and "gemini_key" not in saved
+
+    # state.settings.ui.templates 로 화면에 노출 (새로고침 후 목록 복원용)
+    state = json.loads(_get(server, "/api/state").read())
+    assert "요리 쇼츠" in ((state.get("settings") or {}).get("ui") or {}).get("templates", {})
+
+    # 삭제 → 목록에서 사라짐 (deep_merge가 못 지우는 케이스 — save_settings_replace 검증)
+    data2 = _post(server, "/api/template", {"op": "delete", "name": "요리 쇼츠"})
+    assert data2.get("ok") and "요리 쇼츠" not in data2["templates"]
+    state2 = json.loads(_get(server, "/api/state").read())
+    assert "요리 쇼츠" not in ((state2.get("settings") or {}).get("ui") or {}).get("templates", {})
+
+    # 이름 없으면 400
+    try:
+        _post(server, "/api/template", {"name": "  "})
+        raise AssertionError("400이어야 함")
+    except urllib.error.HTTPError as e:
+        assert e.code == 400
+
+
+def test_edit_photo_transition_fade_and_branding(server, tmp_path):
+    """v0.43 — 사진 영상에 전환(fade) 적용 + 설정의 인트로가 완성본 앞에 붙는지."""
+    from cutdaejang.utils import ffmpeg as ff
+
+    imgs_dir = tmp_path / "photos"
+    imgs_dir.mkdir()
+    for i, c in enumerate(["white", "white"]):
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                "-i", f"color=c={c}:s=640x1136:d=0.1", "-frames:v", "1",
+                str(imgs_dir / f"{i}.png")])
+    intro = tmp_path / "intro.png"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+            "-i", "color=c=red:s=640x1136:d=0.1", "-frames:v", "1", str(intro)])
+    _post(server, "/api/settings", {"settings": {"branding": {"intro": str(intro)}}})
+    try:
+        data = _post(server, "/api/edit", {
+            "photo_path": str(imgs_dir), "photo_sec": 4, "transition": "fade",
+            "auto_edit": True, "auto_target_sec": 0, "layout": "shorts",
+            "stt_provider": "stub",
+        })
+        job = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=300)
+        assert job["status"] in ("ok", "partial")
+        out = job.get("mp4")
+        assert out
+        # 인트로(2.5초) + 본편(4초) — 브랜딩이 실제로 붙어 길이가 늘었는지 실측
+        dur_s = ff.probe_duration_us(out) / 1e6
+        assert 5.9 <= dur_s <= 7.2, f"인트로 포함 길이가 이상함: {dur_s:.2f}s"
+        assert "인트로" in (job.get("note") or "") or "인트로" in (job.get("tts_warn") or "")
+    finally:  # 다른 테스트가 브랜딩 영향을 받지 않게 원상복구
+        _post(server, "/api/settings", {"settings": {"branding": {"intro": "", "outro": ""}}})

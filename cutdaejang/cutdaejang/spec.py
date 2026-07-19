@@ -86,6 +86,7 @@ class Style:
     hook_band: bool = True         # 상단 제목 뒤 배경 띠 (기본 켬)
     wrap_chars: int = 16           # 자막 한 줄 최대 글자수(넘으면 2줄로 자동 줄바꿈). 0=끔
     hook_scale: float = 1.0        # 상단 제목 크기 배수 (0.6~1.6, UI 크기 선택)
+    anim: str = "none"             # 자막 등장 애니메이션: none | pop (살짝 커지며 등장)
 
 
 @dataclass

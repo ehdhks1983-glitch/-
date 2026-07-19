@@ -155,3 +155,84 @@ def test_photos_to_video_divides_duration(tmp_path):
     assert abs(ff.probe_duration_us(out) - 9_000_000) < 400_000
     assert ff.probe_video_size(out) == (1080, 1920)
     assert ff.has_audio_stream(out)  # 무음 트랙 (내레이션·BGM 얹기용)
+
+
+# ─────────── v0.43: 전환 효과(fade) + 인트로/아웃트로 ───────────
+
+
+def _lum_at(video: str, t: float) -> int:
+    """t초 프레임의 평균 밝기 (0~255) — 페이드 dip 검증용."""
+    import subprocess
+
+    out = subprocess.run(
+        [ff.ffmpeg_bin(), "-v", "error", "-ss", str(t), "-i", str(video),
+         "-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+        capture_output=True, check=True).stdout
+    return out[0] if out else -1
+
+
+@requires_ffmpeg
+def test_cut_and_concat_fade_keeps_duration_and_dips(tmp_path):
+    src = tmp_path / "white.mp4"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", "color=c=white:s=320x180:d=6",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(src)])
+    segs = [(0, 2_000_000), (2_000_000, 4_000_000), (4_000_000, 6_000_000)]
+    plain = ve.cut_and_concat(str(src), segs, str(tmp_path / "p.mp4"))
+    faded = ve.cut_and_concat(str(src), segs, str(tmp_path / "f.mp4"), transition="fade")
+    # 길이 불변 (자막 싱크 유지의 핵심)
+    assert abs(ff.probe_duration_us(plain) - ff.probe_duration_us(faded)) < 80_000
+    # 구간 경계(2s)는 어두워지고, 중간(1s)·시작(0s)은 밝음
+    assert _lum_at(faded, 1.0) > 200
+    assert _lum_at(faded, 2.0) < _lum_at(faded, 1.0) - 60
+    assert _lum_at(faded, 0.02) > 200  # 영상 처음에는 페이드 없음
+
+
+@requires_ffmpeg
+def test_photos_to_video_fade_transition(tmp_path):
+    from cutdaejang.core.video_editor import photos_to_video
+
+    imgs = []
+    for i, c in enumerate(["white", "white"]):
+        p = tmp_path / f"w{i}.png"
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                "-i", f"color=c={c}:s=320x568:d=0.1", "-frames:v", "1", str(p)])
+        imgs.append(str(p))
+    out = str(tmp_path / "slide.mp4")
+    photos_to_video(imgs, 4_000_000, out, size=(320, 568), transition="fade")
+    assert abs(ff.probe_duration_us(out) - 4_000_000) < 400_000
+    # 사진 경계(2s)에서 dip, 사진 중간(1s)은 밝음
+    assert _lum_at(out, 2.0) < _lum_at(out, 1.0) - 40
+
+
+@requires_ffmpeg
+def test_attach_branding_intro_outro(tmp_path):
+    main = tmp_path / "main.mp4"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", "color=c=blue:s=320x180:d=3",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(main)])
+    intro = tmp_path / "intro.png"  # 사진 인트로 → 2.5초 정지 클립
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+            "-i", "color=c=red:s=800x600:d=0.1", "-frames:v", "1", str(intro)])
+    outro = tmp_path / "outro.mp4"  # 무음·다른 해상도 아웃트로
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=640x360:d=1.5",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(outro)])
+    out = ve.attach_branding(str(main), str(intro), str(outro), str(tmp_path / "b.mp4"))
+    assert out != str(main)
+    dur_s = ff.probe_duration_us(out) / 1e6
+    assert 6.6 <= dur_s <= 7.4  # 2.5 + 3 + 1.5
+    assert ff.probe_video_size(out) == (320, 180)  # 본편 해상도 기준
+    assert ff.has_audio_stream(out)
+
+
+def test_attach_branding_skips_when_missing(tmp_path):
+    main = tmp_path / "m.mp4"
+    main.write_bytes(b"x")
+    # 둘 다 비었으면 원본 그대로 (ffmpeg 호출 없음 — 가짜 파일이어도 통과해야 함)
+    assert ve.attach_branding(str(main), "", "  ", str(tmp_path / "o.mp4")) == str(main)
+    # 경로가 있어도 파일이 없으면 건너뜀
+    assert ve.attach_branding(str(main), str(tmp_path / "없음.mp4"), "",
+                              str(tmp_path / "o2.mp4")) == str(main)

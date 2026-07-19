@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from cutdaejang.core.render_engine.ass_writer import ass_color, escape_ass_text, write_ass
 from tests.test_spec import make_valid_spec
 
@@ -205,3 +207,26 @@ def test_band_seam_fix_two_layer():
     faded = band_event_lines("Default", "0:00:00.00", "0:00:03.00",
                              "{\\fad(100,60)}" + colored, band_on=True, fade=True)
     assert "\\fad(100,60)" in faded[0] and "\\1a&HFF&" in faded[0]
+
+
+def test_pop_anim_two_layer_band(tmp_path):
+    """v0.43 자막 팝 — \\t 스케일 태그, 띠는 유령 레이어로 고정(요동 없음)."""
+    from cutdaejang.spec import Canvas, Style, Subtitle, TimelineSpec
+
+    spec = TimelineSpec(
+        canvas=Canvas(w=1080, h=1920), duration_us=3_000_000,
+        style=Style(anim="pop", band=True, fade=True),
+        subtitles=[
+            Subtitle(text="팝 [노랑]강조[/] 줄", start_us=0, end_us=1_500_000),
+            Subtitle(text="색 없는 줄", start_us=1_500_000, end_us=3_000_000),
+        ])
+    text = Path(write_ass(spec, tmp_path / "pop.ass")).read_text(encoding="utf-8")
+    assert "\\t(0,130,\\fscx100" in text
+    d = [ln for ln in text.splitlines() if ln.startswith("Dialogue") and ",Default," in ln]
+    assert len(d) == 4  # 팝이 있으면 색 유무와 무관하게 두 줄 다 2층(띠+글자)
+    ghosts = [ln for ln in d if "\\1a&HFF&" in ln]
+    assert ghosts and all("\\fscx" not in g for g in ghosts)  # 띠는 팝 없이 고정
+
+    spec.style.anim = "none"
+    text2 = Path(write_ass(spec, tmp_path / "nopop.ass")).read_text(encoding="utf-8")
+    assert "\\t(0,130" not in text2

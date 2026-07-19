@@ -34,9 +34,39 @@ _LOCK = threading.Lock()
 _EDIT_LAST_KEYS = (
     "layout", "auto_subtitle", "cut_silence", "denoise", "orig_audio",
     "bgm", "bgm_db", "hook_scale", "narr_voice", "narr_style", "narr_subs_only",
-    "stt_provider", "whisper_model", "speed", "quality", "narr_fit",
+    "stt_provider", "whisper_model", "speed", "quality", "narr_fit", "transition",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
 )
+
+
+def _attach_branding(job_id: str, mp4: str, job_dir: Path, tag: str = "") -> str:
+    """설정에 인트로/아웃트로가 있으면 완성본 앞뒤에 붙인다 (v0.43).
+
+    실패해도 작업은 성공으로 유지(원본 반환) — 브랜딩은 부가 기능이니까.
+    """
+    settings = config.load_settings()
+    br = settings.get("branding") or {}
+    intro, outro = (br.get("intro") or "").strip(), (br.get("outro") or "").strip()
+    if not intro and not outro:
+        return mp4
+    from ..core import video_editor  # noqa: PLC0415
+    try:
+        _set_job(job_id, note="인트로/아웃트로 붙이는 중…")
+        out = video_editor.attach_branding(
+            mp4, intro, outro, str(job_dir / f"branded{tag}.mp4"))
+        if out != mp4 and Path(out).is_file():
+            os.replace(out, mp4)  # 파일명 유지 → 히스토리·재생 링크 그대로
+            w = "🎬 인트로/아웃트로를 붙였어요"
+            prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+            if w not in prev:
+                _set_job(job_id, tts_warn=f"{prev} · {w}" if prev else w)
+    except Exception as be:  # noqa: BLE001
+        logging.getLogger("cutdaejang").warning("인트로/아웃트로 붙이기 실패(무시): %s", be)
+        prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+        w = "⚠ 인트로/아웃트로 붙이기에 실패해 본편만 저장했어요 (설정의 경로·파일을 확인하세요)"
+        if w not in prev:
+            _set_job(job_id, tts_warn=f"{prev} · {w}" if prev else w)
+    return mp4
 
 
 def _set_job(job_id: str, **fields) -> None:
@@ -229,12 +259,15 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
         )
         bg_disp = _bg_display(image_provider, bg_skip, result.bg_source or "")
         logging.getLogger("cutdaejang").info("배경: %s", bg_disp)
+        mp4_path = result.mp4.out_path if (result.mp4 and result.mp4.ok) else None
+        if mp4_path and Path(mp4_path).exists():  # 🎬 인트로/아웃트로 (v0.43)
+            _attach_branding(job_id, mp4_path, Path(result.job_dir))
         _set_job(
             job_id,
             status=result.status,
             stage="done",
             frac=1.0,
-            note="",
+            note=(_get_job(job_id) or {}).get("tts_warn") or "",
             title=result.title,
             job_dir=result.job_dir,
             mp4=result.mp4.out_path if (result.mp4 and result.mp4.ok) else None,
@@ -285,7 +318,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 (Path(workdir) / job_id).mkdir(parents=True, exist_ok=True)
                 video = photos_to_video(
                     imgs, int(photo_sec * 1e6),
-                    str(Path(workdir) / job_id / "slideshow.mp4"))
+                    str(Path(workdir) / job_id / "slideshow.mp4"),
+                    transition=(params.get("transition") or "none"))
             except Exception as ve:  # noqa: BLE001
                 _set_job(job_id, status="failed", errors=[str(ve)])
                 return
@@ -343,7 +377,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             ranges = edit_mode.spread_ranges(analysis.cut_us, tgt_auto * 1_000_000)
             analysis.cut_video = ve.cut_and_concat(
                 analysis.cut_video, ranges,
-                str(Path(workdir) / job_id / "auto_montage.mp4"))
+                str(Path(workdir) / job_id / "auto_montage.mp4"),
+                transition=(params.get("transition") or "none"))
             from ..utils import ffmpeg as ff  # noqa: PLC0415
             analysis.cut_us = ff.probe_duration_us(analysis.cut_video)
             _set_job(job_id, tts_warn=(
@@ -554,6 +589,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                      note=f"고른 {len(keep)}개 구간만 남겨 쇼츠로 자르는 중…")
             cut_video, subs = edit_mode.rebuild_from_keep(
                 cut_video, subs, keep, str(Path(workdir) / job_id / "short.mp4"),
+                transition=(ep.get("transition") or "none"),
             )
         narration_wav = None
         if ep.get("narration") and subs:
@@ -659,6 +695,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         )
         logging.getLogger("cutdaejang").info(
             "렌더 %s: %s", "완료" if result.ok else "부분 실패", out)
+        if Path(out).exists():  # 🎬 인트로/아웃트로 (설정에 있으면, v0.43)
+            _attach_branding(job_id, out, Path(workdir) / job_id)
         _set_job(
             job_id,
             status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
@@ -749,6 +787,7 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 if kind == "subs":
                     clip_video, clip_subs = edit_mode.rebuild_from_keep(
                         cut_video, subs, item, str(job_dir / f"short_{gi}.mp4"),
+                        transition=(ep.get("transition") or "none"),
                     )
                 else:  # 시간 구간 분할 (자막 없음)
                     clip_video = video_editor.cut_and_concat(
@@ -765,6 +804,7 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                         job_id, stage="render", frac=b + f / n),
                 )
                 if Path(out).exists():
+                    _attach_branding(job_id, out, job_dir, tag=f"_{gi}")  # 🎬 각 쇼츠에도
                     outs.append(out)
                 errors += r.errors
             except Exception as ce:  # 한 클립 실패해도 나머지는 계속
@@ -851,6 +891,7 @@ def _run_batch(job_id: str, topics: list, params: dict, workdir: str) -> None:
                     job_id=sub_id,
                 )
                 if result.mp4 and result.mp4.ok:
+                    _attach_branding(job_id, result.mp4.out_path, Path(result.job_dir))
                     outs.append(result.mp4.out_path)
                 errors += [f"[{topic}] {e}" for e in result.errors]
                 _record_history(workdir, result, opts)  # 개별 영상은 히스토리에서 재생
@@ -1270,6 +1311,25 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "path": saved_to})
             except OSError as e:
                 self._send_json({"error": f"설정 저장 실패: {e}"}, 500)
+        elif path == "/api/template":  # 📋 편집 세팅 템플릿 (v0.43)
+            name = (params.get("name") or "").strip()[:40]
+            if not name:
+                self._send_json({"error": "템플릿 이름을 입력하세요"}, 400)
+                return
+            tpls = dict((config.load_settings().get("ui") or {}).get("templates") or {})
+            if params.get("op") == "delete":
+                tpls.pop(name, None)
+            else:
+                data = params.get("params") or {}
+                if len(tpls) >= 20 and name not in tpls:
+                    self._send_json({"error": "템플릿은 20개까지예요 — 안 쓰는 것을 지워주세요"}, 400)
+                    return
+                tpls[name] = {k: data[k] for k in _EDIT_LAST_KEYS if k in data}
+            try:
+                config.save_settings_replace("ui.templates", tpls)
+                self._send_json({"ok": True, "templates": tpls})
+            except OSError as e:
+                self._send_json({"error": f"템플릿 저장 실패: {e}"}, 500)
         elif path == "/api/keys":
             if params.get("action") == "clear":
                 config.clear_api_keys()
@@ -1878,7 +1938,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.42)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.43)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -1915,6 +1975,16 @@ _HTML = """<!doctype html>
     <div class="backrow">
       <button class="ghost" onclick="showHome(event)">← 처음으로</button>
       <b id="editTitleLabel">✂️ 내 영상 편집</b>
+    </div>
+
+    <div class="chk" style="gap:8px;flex-wrap:wrap">
+      <span class="hint">📋 내 세팅 템플릿</span>
+      <select id="tplSel" style="width:auto;padding:6px 8px" onchange="applyTemplate()">
+        <option value="">템플릿…</option>
+      </select>
+      <button class="ghost" style="padding:5px 10px" onclick="saveTemplate(event)">💾 지금 세팅을 템플릿으로</button>
+      <button class="ghost" style="padding:5px 10px" onclick="deleteTemplate(event)" title="고른 템플릿 삭제">🗑</button>
+      <span class="hint">— 꾸미기·완성 방식을 이름으로 저장해두고 언제든 한 번에 불러와요</span>
     </div>
 
     <div id="videoBlock">
@@ -2075,6 +2145,20 @@ _HTML = """<!doctype html>
         </select>
         <span class="hint">배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
       </div>
+    </details>
+
+    <details class="opt" id="optFx">
+      <summary>🎬 전환 효과 <span class="hint">— 장면·사진이 바뀔 때 부드럽게</span></summary>
+      <div class="chk" style="gap:8px;margin-top:4px">
+        <span>장면이 바뀔 때</span>
+        <select id="transSel" style="width:auto;padding:6px 8px">
+          <option value="none" selected>그냥 컷 (기본)</option>
+          <option value="fade">페이드 — 살짝 어두워졌다 밝아지며</option>
+        </select>
+      </div>
+      <div class="hint">사진 슬라이드, 핵심 구간·몽타주·여러 쇼츠로 나눌 때 구간 경계에 적용돼요.
+        영상 길이와 자막 싱크는 그대로 유지됩니다. (무음 컷 경계에는 넣지 않아요 — 말 흐름 유지)</div>
+      <div class="hint">🎞 인트로/아웃트로는 ⚙ 설정 → 「내 채널 정보·브랜딩」에 파일을 넣으면 모든 완성 영상에 자동으로 붙어요.</div>
     </details>
 
     <details class="opt" id="optWm">
@@ -2504,6 +2588,11 @@ _HTML = """<!doctype html>
         <div><label>강조 색</label><input type="color" id="setHlColor" style="height:40px;padding:4px"></div>
       </div>
       <div class="chk"><input type="checkbox" id="setFade"><span>자막 등장 페이드</span></div>
+      <div class="chk" style="gap:8px"><span>자막 등장 애니메이션</span>
+        <select id="setSubAnim" style="width:auto;padding:6px 8px">
+          <option value="none">없음</option>
+          <option value="pop">팝 — 살짝 커지며 등장 (쇼츠 감성)</option>
+        </select></div>
       <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
       <div class="chk"><input type="checkbox" id="setBand"><span>자막에도 배경 띠 (하단 자막 뒤에도 어두운 띠)</span></div>
     </details>
@@ -2536,12 +2625,20 @@ _HTML = """<!doctype html>
     </details>
 
     <details class="opt">
-      <summary>📦 내 채널 정보 <span class="hint">— 업로드 키트 문구를 내 채널 톤에 맞춰줘요 (선택)</span></summary>
+      <summary>📦 내 채널 정보·브랜딩 <span class="hint">— 업로드 키트 문구 톤 + 인트로/아웃트로 (선택)</span></summary>
       <div class="row" style="margin-top:4px">
         <div><label>채널명</label><input type="text" id="setChName" placeholder="예) 곰대리의 자동화"></div>
         <div><label>채널 주제</label><input type="text" id="setChTopic" placeholder="예) 블로그·유튜브 자동화 꿀팁"></div>
         <div><label>타깃 시청자</label><input type="text" id="setChAudience" placeholder="예) 부업 시작하는 3040 직장인"></div>
       </div>
+      <div class="row" style="margin-top:6px">
+        <div><label>🎞 인트로 파일 <span class="hint">(영상 또는 사진 — 사진은 2.5초)</span></label>
+          <input type="text" id="setIntroPath" placeholder="예) C:\\내채널\\인트로.mp4 — 비우면 없음"></div>
+        <div><label>🎞 아웃트로 파일</label>
+          <input type="text" id="setOutroPath" placeholder="예) C:\\내채널\\구독요청.mp4 — 비우면 없음"></div>
+      </div>
+      <div class="hint">넣으면 <b>모든 완성 영상</b>(AI 생성·편집·사진·배치·여러 쇼츠) 앞뒤에 자동으로 붙어요.
+        해상도가 달라도 본편 크기에 맞춰줍니다. 파일이 없으면 조용히 건너뛰어요.</div>
     </details>
 
     <button onclick="saveSettings()">설정 저장</button>
@@ -2669,7 +2766,7 @@ function applyEditLast(el){
   set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
   set('hookSizeSel', el.hook_scale); set('photoSec', el.photo_sec);
   set('narrStyleSel', el.narr_style); chk('narrSubsOnly', el.narr_subs_only);
-  set('narrFitSel', el.narr_fit);
+  set('narrFitSel', el.narr_fit); set('transSel', el.transition);
   if(el.narr_voice && [...$('narrVoiceSel').options].some(o => o.value === el.narr_voice))
     $('narrVoiceSel').value = el.narr_voice;
   chk('autoSubChk', el.auto_subtitle); chk('cutSilenceChk', el.cut_silence);
@@ -2772,6 +2869,7 @@ async function startEdit(){
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
+    transition: (($('transSel')||{}).value)||'none',
     orig_audio: $('origAudioSel').value,
     bgm: $('bgmEditSel').value, bgm_db: +$('bgmVolSel').value,
     wm_path: ($('wmPath')||{}).value||'', wm_pos: ($('wmPos')||{}).value||'tr',
@@ -3550,6 +3648,7 @@ function resetEditForm(ev){
   set('editHook',''); set('hookSizeSel','1'); set('editHookTopic','');
   const hc = $('editHookCands'); if(hc) hc.innerHTML='';
   set('narrTopic',''); chk('narrSubsOnly',false); set('narrStyleSel','정보형'); set('narrFitSel','freeze');
+  set('transSel','none');
   const nv = $('narrVoiceSel'); if(nv && nv.options.length) nv.selectedIndex = 0;
   set('editScript',''); chk('autoSubChk',true); chk('cutSilenceChk',true);
   set('denoiseSel',''); window._origTouched = false; set('origAudioSel','keep');
@@ -3567,7 +3666,7 @@ function resetEditForm(ev){
   fetch('/api/settings', {method:'POST', body: JSON.stringify({settings:{ui:{edit_last:{
     layout:'shorts', auto_subtitle:true, cut_silence:true, denoise:'', orig_audio:'keep',
     bgm:'', bgm_db:-14, hook_scale:1, narr_voice:'', narr_style:'', narr_subs_only:false,
-    stt_provider:'', whisper_model:'small', speed:1, quality:'standard',
+    stt_provider:'', whisper_model:'small', speed:1, quality:'standard', transition:'none',
     auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
     wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
 }
@@ -3602,6 +3701,7 @@ function fillSettings(s){
   $('setOutline').value = s.subtitle.outline;
   $('setMarginV').value = s.subtitle.margin_v;
   $('setWrapChars').value = s.subtitle.wrap_chars != null ? s.subtitle.wrap_chars : 16;
+  $('setSubAnim').value = s.subtitle.anim || 'none';
   $('setFade').checked = !!s.subtitle.fade;
   $('setHookBand').checked = s.subtitle.hook_band !== false;
   $('setBand').checked = !!s.subtitle.band;
@@ -3617,6 +3717,69 @@ function fillSettings(s){
   $('setChName').value = ch.name || '';
   $('setChTopic').value = ch.topic || '';
   $('setChAudience').value = ch.audience || '';
+  const br = s.branding || {};
+  $('setIntroPath').value = br.intro || '';
+  $('setOutroPath').value = br.outro || '';
+  window._templates = ((s.ui || {}).templates) || {};
+  refreshTplSel('');
+}
+
+// ── 📋 편집 세팅 템플릿 (v0.43) ──
+function refreshTplSel(cur){
+  const sel = $('tplSel'); if(!sel) return;
+  sel.innerHTML = '';
+  sel.add(new Option('템플릿…', ''));
+  Object.keys(window._templates || {}).forEach(nm => sel.add(new Option(nm, nm)));
+  sel.value = (cur && (window._templates || {})[cur]) ? cur : '';
+}
+
+function collectTplParams(){
+  return {
+    layout: pick('editLayout'), auto_subtitle: $('autoSubChk').checked,
+    cut_silence: $('cutSilenceChk').checked, denoise: $('denoiseSel').value,
+    orig_audio: $('origAudioSel').value, bgm: $('bgmEditSel').value,
+    bgm_db: +$('bgmVolSel').value, hook_scale: +(($('hookSizeSel')||{}).value)||1,
+    narr_voice: (($('narrVoiceSel')||{}).value)||'', narr_style: (($('narrStyleSel')||{}).value)||'',
+    narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
+    narr_fit: (($('narrFitSel')||{}).value)||'freeze',
+    transition: (($('transSel')||{}).value)||'none',
+    stt_provider: $('sttSel').value||'', whisper_model: (($('whisperModelSel')||{}).value)||'small',
+    speed: +$('editSpeedSel').value||1, quality: (($('autoQualitySel')||{}).value)||'standard',
+    auto_edit: pick('editFinish')==='auto', auto_multi: (($('autoMultiSel')||{}).value)==='multi',
+    auto_target_sec: +$('autoTargetSec').value||0, photo_sec: +(($('photoSec')||{}).value)||15,
+    wm_pos: (($('wmPos')||{}).value)||'tr', wm_scale: +(($('wmScale')||{}).value)||0.14,
+  };
+}
+
+async function saveTemplate(ev){
+  ev.preventDefault();
+  const n = (prompt('템플릿 이름 (예: 요리 쇼츠, 브이로그 톤)', $('tplSel').value || '') || '').trim();
+  if(!n) return;
+  const data = await (await fetch('/api/template', {method:'POST',
+    body: JSON.stringify({name: n, params: collectTplParams()})})).json();
+  if(data.error){ alert(data.error); return; }
+  window._templates = data.templates || {};
+  refreshTplSel(n);
+  alert('저장했어요! 다음부터 목록에서 「' + n + '」을 고르면 이 세팅이 한 번에 적용됩니다.');
+}
+
+async function deleteTemplate(ev){
+  ev.preventDefault();
+  const n = $('tplSel').value;
+  if(!n){ alert('지울 템플릿을 먼저 목록에서 고르세요'); return; }
+  if(!confirm('템플릿 「' + n + '」을 지울까요?')) return;
+  const data = await (await fetch('/api/template', {method:'POST',
+    body: JSON.stringify({op:'delete', name: n})})).json();
+  if(data.error){ alert(data.error); return; }
+  window._templates = data.templates || {};
+  refreshTplSel('');
+}
+
+function applyTemplate(){
+  const n = $('tplSel').value;
+  const t = (window._templates || {})[n];
+  if(!n || !t) return;
+  applyEditLast(t);
 }
 
 async function saveSettings(){
@@ -3625,7 +3788,7 @@ async function saveSettings(){
                margin_v: +$('setMarginV').value, fade: $('setFade').checked,
                highlight_color: $('setHlColor').value.toUpperCase(),
                hook_band: $('setHookBand').checked, band: $('setBand').checked,
-               wrap_chars: +$('setWrapChars').value},
+               wrap_chars: +$('setWrapChars').value, anim: $('setSubAnim').value},
     bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,
          ai_image: $('setAiImage').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
@@ -3633,6 +3796,7 @@ async function saveSettings(){
     tts: {rpm_limit: +$('setRpm').value},
     channel: {name: $('setChName').value.trim(), topic: $('setChTopic').value.trim(),
               audience: $('setChAudience').value.trim()},
+    branding: {intro: $('setIntroPath').value.trim(), outro: $('setOutroPath').value.trim()},
   }};
   const data = await (await fetch('/api/settings', {method:'POST', body: JSON.stringify(body)})).json();
   alert(data.ok ? '저장했습니다. 다음 작업부터 적용됩니다.' : ('저장 실패: ' + data.error));

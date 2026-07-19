@@ -555,7 +555,7 @@ def _remap_subs_to_ranges(kept: List[Subtitle], ranges: List[tuple]) -> List[Sub
 
 def rebuild_from_keep(
     cut_video: str, subtitles: List[Subtitle], keep_idx: List[int], out_path: str,
-    pad_us: int = 150_000,
+    pad_us: int = 150_000, transition: str = "none",
 ) -> tuple:
     """검토화면에서 고른 자막(keep_idx)만 남겨 컷 영상을 다시 자른다 → 진짜 쇼츠 길이.
 
@@ -573,7 +573,8 @@ def rebuild_from_keep(
             ranges[-1] = (ranges[-1][0], max(ranges[-1][1], b))
         else:
             ranges.append((a, b))
-    new_video = video_editor.cut_and_concat(cut_video, ranges, out_path)
+    new_video = video_editor.cut_and_concat(cut_video, ranges, out_path,
+                                            transition=transition)
     return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
 
 

@@ -44,6 +44,7 @@ DEFAULTS: dict = {
     },
     "ui": {                           # 화면이 기억하는 것들
         "edit_last": {},              # 마지막 편집 폼 세팅 — 다음 실행 때 자동 복원 (v0.38)
+        "templates": {},              # 이름 → 편집 폼 세팅 스냅샷 (v0.43 템플릿)
     },
     "channel": {                      # 📦 업로드 키트 맞춤용 내 채널 정보 (선택, v0.39)
         "name": "",
@@ -72,6 +73,11 @@ DEFAULTS: dict = {
         "band": False,                # 자막 뒤 배경 띠 (유튜브 썸네일 스타일)
         "hook_band": True,            # 상단 제목 뒤 배경 띠 (기본 켬)
         "wrap_chars": 16,             # 자막 한 줄 최대 글자수(넘으면 2줄). 0=끔
+        "anim": "none",               # 자막 등장 애니메이션: none | pop (v0.43)
+    },
+    "branding": {                     # 인트로/아웃트로 (v0.43) — 영상 또는 사진 경로
+        "intro": "",
+        "outro": "",
     },
     "edit": {                         # 내 영상 편집 모드 (기획안 v1.5)
         "stt_provider": "whisper",   # whisper(로컬) | gemini | openai | stub
@@ -129,15 +135,33 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def save_settings(overrides: dict, path: Optional[str] = None) -> str:
-    """현재 설정에 overrides를 병합해 파일로 저장 (설정 화면용). 저장 경로 반환."""
-    target = None
+def _settings_target(path: Optional[str] = None) -> Path:
     for candidate in _settings_candidates(path):
         if candidate and Path(candidate).is_file():
-            target = Path(candidate)
-            break
-    target = target or (project_root() / "settings.json")
+            return Path(candidate)
+    return project_root() / "settings.json"
+
+
+def save_settings(overrides: dict, path: Optional[str] = None) -> str:
+    """현재 설정에 overrides를 병합해 파일로 저장 (설정 화면용). 저장 경로 반환."""
+    target = _settings_target(path)
     merged = deep_merge(load_settings(str(target) if target.is_file() else None), overrides)
+    _atomic_write(target, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
+    return str(target)
+
+
+def save_settings_replace(dotted_key: str, value, path: Optional[str] = None) -> str:
+    """설정의 한 노드(예: "ui.templates")를 병합 없이 통째로 교체해 저장.
+
+    deep_merge는 키를 지울 수 없어서 — 템플릿 삭제(v0.43) 같은 '빼기'는 이걸 쓴다.
+    """
+    target = _settings_target(path)
+    merged = load_settings(str(target) if target.is_file() else None)
+    node = merged
+    parts = dotted_key.split(".")
+    for p in parts[:-1]:
+        node = node.setdefault(p, {})
+    node[parts[-1]] = value
     _atomic_write(target, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
     return str(target)
 

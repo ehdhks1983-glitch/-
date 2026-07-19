@@ -99,6 +99,7 @@ def build_style(settings: dict) -> Style:
         band=sub.get("band", False),
         hook_band=sub.get("hook_band", True),
         wrap_chars=sub.get("wrap_chars", 16),
+        anim=sub.get("anim", "none"),
     )
 
 

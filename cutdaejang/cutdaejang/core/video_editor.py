@@ -160,13 +160,21 @@ def remap_to_cut_timeline(segments: List[Tuple[int, int]]) -> List[Tuple[int, in
     return out
 
 
+TRANSITION_FADE_S = 0.14  # 구간 경계 페이드 길이 (짧은 dip — 길이 불변, 자막 싱크 유지)
+
+
 def cut_and_concat(
-    video_path: str, segments: List[Tuple[int, int]], out_path: str, fps: int = 30
+    video_path: str, segments: List[Tuple[int, int]], out_path: str, fps: int = 30,
+    transition: str = "none",
 ) -> str:
     """발화 구간만 잘라 이어붙인 영상 생성. trim+concat 재인코딩.
 
     오디오 트랙이 없는 영상(마이크 없는 화면 녹화)은 영상만 잘라 붙인다 —
     이후 렌더 단계가 무음 트랙을 알아서 붙이므로 결과는 동일.
+
+    transition="fade" (v0.43): 구간 경계마다 화면만 살짝 어두워졌다 밝아지는 페이드.
+    각 구간 안에서 fade in/out 하므로 전체 길이가 변하지 않아 자막 싱크가 유지된다.
+    소리는 건드리지 않는다(말이 끊겨 들리지 않게). 영상 처음·끝에는 넣지 않는다.
     """
     if not segments:
         raise ValueError("자를 발화 구간이 없습니다")
@@ -175,9 +183,17 @@ def cut_and_concat(
 
     parts = []
     labels = []
+    fd = TRANSITION_FADE_S
     for i, (s, e) in enumerate(segments):
         ss, se = us_to_seconds_str(s), us_to_seconds_str(e)
-        seg = f"[0:v]trim=start={ss}:end={se},setpts=PTS-STARTPTS[v{i}]"
+        vchain = f"[0:v]trim=start={ss}:end={se},setpts=PTS-STARTPTS"
+        if transition == "fade" and len(segments) > 1:
+            dur_s = (e - s) / 1e6
+            if i > 0 and dur_s > fd * 2:
+                vchain += f",fade=t=in:st=0:d={fd}"
+            if i < len(segments) - 1 and dur_s > fd * 2:
+                vchain += f",fade=t=out:st={max(0.0, dur_s - fd):.3f}:d={fd}"
+        seg = vchain + f"[v{i}]"
         if has_audio:
             seg += f";[0:a]atrim=start={ss}:end={se},asetpts=PTS-STARTPTS[a{i}]"
         parts.append(seg)
@@ -256,11 +272,13 @@ def resolve_photo_inputs(path_str: str) -> List[str]:
 
 
 def photos_to_video(images: List[str], total_us: int, out_path: str,
-                    size: Tuple[int, int] = (1080, 1920), fps: int = 30) -> str:
+                    size: Tuple[int, int] = (1080, 1920), fps: int = 30,
+                    transition: str = "none") -> str:
     """사진들 → 슬라이드쇼 영상. 전체 길이를 장수로 균등 분배 (5장·15초 → 장당 3초).
 
     각 사진은 블러 배경 + 원본 비율 유지로 세로 캔버스에 배치(가로 사진도 자연스럽게).
     오디오는 무음 트랙(뒤에서 내레이션·BGM을 얹기 좋게).
+    transition="fade" (v0.43): 사진이 바뀔 때 살짝 어두워졌다 밝아지는 전환 (길이 불변).
     """
     if not images:
         raise ValueError("사진이 없습니다")
@@ -277,17 +295,24 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
         images = picked
     w, h = size
     per_s = total_s_req / len(images)
+    fd = min(0.3, per_s / 4)  # 사진 전환 페이드 — 장당 시간이 짧으면 비례 축소
     args = [ff.ffmpeg_bin(), "-y", "-v", "error"]
     parts = []
     for i, img in enumerate(images):
         args += ["-loop", "1", "-t", f"{per_s:.3f}", "-i", str(img)]
-        parts.append(
+        chain = (
             f"[{i}:v]split=2[bg{i}][fg{i}];"
             f"[bg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},boxblur=24:2,eq=brightness=-0.1[bgb{i}];"
             f"[fg{i}]scale={w}:{h}:force_original_aspect_ratio=decrease[fgs{i}];"
-            f"[bgb{i}][fgs{i}]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={fps}[v{i}]"
+            f"[bgb{i}][fgs{i}]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={fps}"
         )
+        if transition == "fade" and len(images) > 1:
+            if i > 0:
+                chain += f",fade=t=in:st=0:d={fd:.3f}"
+            if i < len(images) - 1:
+                chain += f",fade=t=out:st={max(0.0, per_s - fd):.3f}:d={fd:.3f}"
+        parts.append(chain + f"[v{i}]")
     total_s = per_s * len(images)
     args += ["-f", "lavfi", "-t", f"{total_s:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
     fc = (";".join(parts) + ";"
@@ -296,6 +321,57 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
     args += ["-filter_complex", fc, "-map", "[v]", "-map", f"{len(images)}:a",
              "-c:v", "libx264", "-preset", "fast", "-crf", "20",
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out_path)]
+    ff.run(args)
+    return str(out_path)
+
+
+def attach_branding(video: str, intro: str, outro: str, out_path: str,
+                    fps: int = 30, still_s: float = 2.5) -> str:
+    """본편 앞뒤에 인트로/아웃트로를 붙인다 (v0.43 채널 브랜딩).
+
+    - intro/outro: 영상 파일 또는 사진(png/jpg — still_s초 정지 클립으로).
+      빈 문자열/없는 파일은 조용히 건너뛰고, 둘 다 없으면 원본 경로를 그대로 반환.
+    - 해상도가 달라도 본편 크기에 맞춰 축소 + 패딩(검정)으로 안전하게 이어붙인다.
+    - 소리: 소리 있는 클립은 그대로, 없는 클립은 무음 트랙을 깔아 concat 오류 방지.
+    """
+    def _ok(p: str) -> bool:
+        return bool((p or "").strip()) and Path(p.strip().strip('"')).is_file()
+
+    intro = intro.strip().strip('"') if _ok(intro) else ""
+    outro = outro.strip().strip('"') if _ok(outro) else ""
+    if not intro and not outro:
+        return video
+    w, h = ff.probe_video_size(video)
+    clips = [c for c in (intro, video, outro) if c]
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-nostdin"]
+    parts, labels, aux = [], [], []
+    for i, clip in enumerate(clips):
+        is_img = Path(clip).suffix.lower() in IMAGE_EXTS
+        if is_img:
+            args += ["-loop", "1", "-t", f"{still_s:.3f}", "-i", str(clip)]
+        else:
+            args += ["-i", str(clip)]
+        parts.append(
+            f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p[v{i}]"
+        )
+        if not is_img and ff.has_audio_stream(clip):
+            parts.append(f"[{i}:a]aresample=44100,aformat=channel_layouts=stereo[a{i}]")
+        else:  # 사진·무음 클립 → 그 길이만큼 무음 트랙
+            dur_s = still_s if is_img else ff.probe_duration_us(clip) / 1e6
+            aux.append((len(clips) + len(aux), dur_s))
+            parts.append(
+                f"[{aux[-1][0]}:a]atrim=duration={dur_s:.3f},"
+                f"aformat=channel_layouts=stereo[a{i}]")
+        labels.append(f"[v{i}][a{i}]")
+    for _idx, _dur in aux:
+        args += ["-f", "lavfi", "-t", f"{_dur:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
+    fc = (";".join(parts) + ";" + "".join(labels)
+          + f"concat=n={len(clips)}:v=1:a=1[v][a]")
+    args += ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+             "-movflags", "+faststart", str(out_path)]
     ff.run(args)
     return str(out_path)
 

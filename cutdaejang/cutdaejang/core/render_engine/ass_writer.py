@@ -185,6 +185,10 @@ def dialogue_text(sub, style) -> str:
         body = escape_ass_text(wrap_text(sub.text, getattr(style, "wrap_chars", 0)))
     if style.fade:
         body = "{\\fad(100,60)}" + body
+    if getattr(style, "anim", "none") == "pop":
+        # 살짝 작게 시작해 130ms 만에 원래 크기로 — 등장 팝 (v0.43).
+        # 띠(band) 모드에서는 유령 레이어가 태그를 걷어내므로 띠는 고정, 글자만 팝.
+        body = "{\\fscx86\\fscy86\\t(0,130,\\fscx100\\fscy100)}" + body
     return body
 
 
@@ -201,7 +205,9 @@ def band_event_lines(style_name: str, start: str, end: str, body: str,
     박스 없이 위 레이어에 얹는다. 색 없는 줄은 원래도 한 장이라 그대로 둔다.
     """
     prefix = f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,"
-    if not (band_on and "\\1c" in body):
+    # 색 강조(\1c)나 팝 애니메이션(\fscx)이 있으면 2층: 띠는 태그 없는 유령 레이어로
+    # 고정해 그리고(이음새·박스 요동 방지), 글자만 위 레이어에서 색·팝을 적용한다.
+    if not (band_on and ("\\1c" in body or "\\fscx" in body)):
         return [prefix + body]
     ghost = _OVERRIDE_RE.sub("", body)          # 색·페이드 태그 제거 → 단일 run
     fad = "\\fad(100,60)" if fade else ""
