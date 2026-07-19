@@ -164,10 +164,19 @@ def test_upload_kit_stub_and_file(server, tmp_path):
     assert len(kit["keywords"]) == 10 and len(kit["hashtags"]) == 3
     assert kit["category"]  # 카테고리 항상 존재
     assert any("쇼츠" in c or "세로" in c for c in kit["checklist"])  # 쇼츠 자동 인식 안내
-    # 파일 저장 확인
+    # v0.47: 제목 옆 태그 + 플랫폼별 섹션
+    assert 2 <= len(kit["title_tags"]) <= 3
+    assert kit["tiktok"]["caption"] and 3 <= len(kit["tiktok"]["hashtags"]) <= 5
+    assert kit["instagram"]["caption"] and kit["naver_clip"]["title"]
+    assert len(kit["naver_clip"]["tags"]) >= 8 and kit["threads"]["post"]
+    assert kit["threads"]["topic"]  # 스레드는 토픽 태그 1개
+    # 파일 저장 확인 (플랫폼 섹션 포함)
     assert kit_res["path"].endswith("업로드킷.txt")
     saved = Path(kit_res["path"]).read_text(encoding="utf-8")
     assert "제목 후보" in saved and "태그" in saved and "카테고리" in saved
+    for sec in ("【틱톡】", "【인스타그램 릴스】", "【네이버 클립】", "【스레드】"):
+        assert sec in saved, sec
+    assert "#" in saved.split("1. ")[1].splitlines()[0]  # 제목 옆 태그가 붙어 저장
 
 
 def test_upload_kit_requires_finished_video(server):
@@ -571,3 +580,17 @@ def test_eleven_voices_listing_and_cache(monkeypatch):
     voices = te.list_elevenlabs_voices()
     assert [v["voice_id"] for v in voices] == ["v1", "v3", "v2"]  # 클론 먼저, 이름순
     assert voices[0]["category"] == "cloned"
+
+
+def test_upload_kit_on_generated_job(server):
+    """v0.47 회귀 — 완전 자동 '생성' 영상의 키트: script.json 대본(dict 문장)을 읽다
+    서버가 죽던 잠복 버그. 이제 정상 생성 + 플랫폼 섹션 포함."""
+    res = _post(server, "/api/generate", {
+        "topic": "생성 키트 회귀", "auto": True,
+        "script_provider": "stub", "tts_provider": "stub",
+    })
+    job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert job["status"] == "ok", job.get("errors")
+    k = _post(server, "/api/upload_kit", {"job_id": res["job_id"]})
+    assert k["kit"]["titles"] and k["kit"]["tiktok"]["caption"]
+    assert k["kit"]["threads"]["post"]

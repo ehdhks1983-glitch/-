@@ -596,3 +596,24 @@ def test_tts_auto_pronounce(tmp_path):
     prov2 = Capture()
     tts_engine.TTSEngine(prov2, tmp_path / "c2", settings=off).synth_sentence("2026년 AI")
     assert prov2.texts == ["2026년 AI"]  # 끄면 원문 그대로
+
+
+def test_normalize_kit_platforms():
+    """v0.47 — 지저분한 모델 응답을 안전한 플랫폼별 키트로 정규화."""
+    from cutdaejang.core.script_generator import normalize_kit
+
+    n = normalize_kit({
+        "titles": ["t" * 100], "title_tags": ["#쇼츠", " 꿀팁 ", "#셋", "#넷"],
+        "hashtags": ["#Shorts", "꿀팁", "정리", "잉여"], "category": "없는카테고리",
+        "tiktok": {"caption": "c" * 500, "hashtags": list("abcdefg")},
+        "threads": {"post": "p" * 600, "topic": "#토픽"},
+    })
+    assert n["title_tags"] == ["쇼츠", "꿀팁", "셋"]      # ＃ 제거 + 최대 3개
+    assert len(n["titles"][0]) == 60
+    assert n["hashtags"] == ["Shorts", "꿀팁", "정리"]
+    assert n["category"] == "인물/블로그"                 # 목록 밖 → 기본값
+    assert len(n["tiktok"]["hashtags"]) == 5 and len(n["tiktok"]["caption"]) == 300
+    assert len(n["threads"]["post"]) == 500 and n["threads"]["topic"] == "토픽"
+    # 누락 플랫폼도 빈 구조로 항상 존재 (UI가 안전하게 그림)
+    assert n["instagram"] == {"caption": "", "hashtags": []}
+    assert n["naver_clip"] == {"title": "", "tags": []}

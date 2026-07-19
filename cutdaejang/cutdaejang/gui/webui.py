@@ -885,14 +885,34 @@ def _bgm_credit(bgm_name: str) -> str:
 
 def _kit_text(kit: dict, title: str) -> str:
     """업로드 키트를 붙여넣기 좋은 텍스트 파일로 (job 폴더에 저장)."""
-    lines = ["=" * 46, f"📦 유튜브 업로드 키트 — {title or '완성 영상'}", "=" * 46, ""]
-    lines += ["── 제목 후보 (하나 골라 복사) ──"]
-    lines += [f"{i}. {t}" for i, t in enumerate(kit.get("titles", []), 1)]
+    ttags = " ".join(f"#{t}" for t in kit.get("title_tags", []))
+    lines = ["=" * 46, f"📦 업로드 키트 — {title or '완성 영상'}", "=" * 46, ""]
+    lines += ["【유튜브】", "── 제목 후보 (하나 골라 복사 — 제목 옆 태그 포함) ──"]
+    lines += [f"{i}. {t}" + (f" {ttags}" if ttags else "")
+              for i, t in enumerate(kit.get("titles", []), 1)]
     lines += ["", "── 설명문 (설명란에 그대로 붙여넣기) ──", kit.get("description", "")]
     lines += ["", "── 태그 (태그란에 통째로 붙여넣기) ──", ", ".join(kit.get("tags", []))]
     lines += ["", "── 핵심 키워드 10 ──", " · ".join(kit.get("keywords", []))]
     lines += ["", "── 카테고리 ──",
               f"{kit.get('category', '')} — {kit.get('category_reason', '')}"]
+    tk = kit.get("tiktok") or {}
+    if tk.get("caption"):
+        lines += ["", "【틱톡】 (캡션 — 해시태그 3~5개, fyp류 금지)", tk["caption"],
+                  " ".join(f"#{t}" for t in tk.get("hashtags", []))]
+    ig = kit.get("instagram") or {}
+    if ig.get("caption"):
+        lines += ["", "【인스타그램 릴스】 (첫 줄이 미리보기에 노출)", ig["caption"],
+                  " ".join(f"#{t}" for t in ig.get("hashtags", []))]
+    nc = kit.get("naver_clip") or {}
+    if nc.get("title"):
+        lines += ["", "【네이버 클립】 (검색형 제목 + 태그 10~12개)",
+                  f"제목: {nc['title']}",
+                  "태그: " + " ".join(f"#{t}" for t in nc.get("tags", []))]
+    th = kit.get("threads") or {}
+    if th.get("post"):
+        lines += ["", "【스레드】 (태그는 토픽 1개만 지원)", th["post"]]
+        if th.get("topic"):
+            lines += [f"토픽 태그: {th['topic']}"]
     lines += ["", "── 업로드 체크리스트 ──"]
     lines += [f"□ {c}" for c in kit.get("checklist", [])]
     return "\n".join(lines) + "\n"
@@ -1045,6 +1065,21 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802
+        # 전역 가드 (v0.47) — 핸들러가 예외로 죽으면 브라우저엔 'Failed to fetch'만 남는다
+        # → 항상 JSON 오류로 응답하고 전체 스택은 로그에 (진단 리포트로 확인 가능)
+        try:
+            self._do_post_inner()
+        except Exception as e:  # noqa: BLE001
+            import traceback  # noqa: PLC0415
+
+            logging.getLogger("cutdaejang").error(
+                "API 처리 오류 %s\n%s", self.path, traceback.format_exc())
+            try:
+                self._send_json({"error": f"서버 내부 오류: {e} — 하단 🪵 로그 참고"}, 500)
+            except Exception:  # noqa: BLE001 — 이미 응답을 보낸 경우 등
+                pass
+
+    def _do_post_inner(self) -> None:
         path = self.path.split("?", 1)[0]
         try:
             params = self._read_json()
@@ -1473,9 +1508,13 @@ class _Handler(BaseHTTPRequestHandler):
             sj = Path(workdir) / job_id / "script.json"
             if sj.is_file():
                 try:
+                    # sentences는 [{"text",...}] 형식 — 문자열 join하면 크래시 (완전 자동
+                    # 생성 영상의 키트가 여기로 옴. v0.47에서 발견·수정한 잠복 버그)
+                    raw_sents = json.loads(sj.read_text(encoding="utf-8")).get("sentences", [])
                     transcript = "\n".join(
-                        json.loads(sj.read_text(encoding="utf-8")).get("sentences", []))
-                except (OSError, json.JSONDecodeError):
+                        (s.get("text", "") if isinstance(s, dict) else str(s))
+                        for s in raw_sents)
+                except (OSError, json.JSONDecodeError, AttributeError, TypeError):
                     pass
         if not title:
             try:
@@ -1527,6 +1566,7 @@ class _Handler(BaseHTTPRequestHandler):
         if credit:
             checks.append("BGM 크레딧이 설명문 끝에 자동 포함됐어요 (무료 음원 표기 의무)")
         checks.append("태그는 유튜브 스튜디오 [세부정보 → 태그]에 통째로 붙여넣기 (쉼표 그대로)")
+        checks.append("틱톡·인스타·네이버 클립·스레드 문구는 아래 접힌 칸에서 복사 (같은 영상 그대로 재업로드 OK)")
         kit["checklist"] = checks
         kit["is_shorts"] = is_shorts
         # 파일로도 저장 — 업로드할 때 열어서 복붙
@@ -1999,7 +2039,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.46)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.47)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2605,10 +2645,10 @@ _HTML = """<!doctype html>
       <button class="ghost" style="margin-top:10px" onclick="toggleKit(event)">📦 업로드 키트 (제목·태그·설명 자동)</button>
       <button class="ghost" style="margin-top:10px" onclick="toggleThumb(event)">🖼️ 유튜브 썸네일 만들기 (16:9)</button>
       <div id="kitBox" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
-        <div style="font-weight:700;font-size:14px">📦 유튜브 업로드 키트</div>
+        <div style="font-weight:700;font-size:14px">📦 업로드 키트 <span class="hint">— 유튜브 · 틱톡 · 인스타 · 네이버 클립 · 스레드</span></div>
         <div class="hint" id="kitStatus" style="margin-top:4px"></div>
         <div id="kitBody" class="hidden">
-          <b style="font-size:13px">📌 제목 후보 <span class="hint">(클릭하면 복사돼요)</span></b>
+          <b style="font-size:13px">📌 제목 후보 <span class="hint">(클릭하면 제목+옆 태그까지 통째로 복사돼요)</span></b>
           <div id="kitTitles" class="hookcands"></div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
             <b style="font-size:13px">📝 설명문</b>
@@ -2624,6 +2664,28 @@ _HTML = """<!doctype html>
           <textarea id="kitTags" style="min-height:48px;margin-top:4px"></textarea>
           <div class="hint" id="kitKeywords" style="margin-top:8px"></div>
           <div class="hint" id="kitCategory" style="margin-top:4px"></div>
+
+          <details class="opt" style="margin-top:10px">
+            <summary>🎵 틱톡 <span class="hint">— 캡션+해시태그 (150자·태그 3~5개)</span>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitTiktok')">📋 복사</button></summary>
+            <textarea id="kitTiktok" style="min-height:72px;margin-top:4px"></textarea>
+          </details>
+          <details class="opt">
+            <summary>📸 인스타그램 릴스 <span class="hint">— 첫 줄이 미리보기에 노출</span>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitInsta')">📋 복사</button></summary>
+            <textarea id="kitInsta" style="min-height:88px;margin-top:4px"></textarea>
+          </details>
+          <details class="opt">
+            <summary>🟢 네이버 클립 <span class="hint">— 검색형 제목 + 태그 10~12개</span>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitNaver')">📋 복사</button></summary>
+            <textarea id="kitNaver" style="min-height:72px;margin-top:4px"></textarea>
+          </details>
+          <details class="opt">
+            <summary>🧵 스레드 <span class="hint">— 대화체 + 토픽 태그 1개만</span>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitThreads')">📋 복사</button></summary>
+            <textarea id="kitThreads" style="min-height:64px;margin-top:4px"></textarea>
+          </details>
+
           <div class="hint" id="kitChecklist" style="white-space:pre-line;margin-top:8px;color:#cdd3e0"></div>
           <div class="hint" id="kitPath" style="margin-top:8px"></div>
           <button class="ghost" style="margin-top:8px" onclick="makeKit(event)">🔄 다시 만들기</button>
@@ -3757,18 +3819,34 @@ function renderKit(data){
     ? '⚠ 제미나이 키가 없어 예시 문구입니다 — 키를 넣으면 영상 내용으로 만들어져요.'
     : '✅ 완성! 항목마다 복사해서 유튜브 스튜디오에 붙여넣으세요.';
   const tb = $('kitTitles'); tb.innerHTML = '';
+  // v0.47: 제목 옆에 붙는 해시태그 2~3개 — 유튜브 관행대로 "제목 #태그 #태그"를 통째 복사
+  const ttags = (kit.title_tags || []).map(t => '#' + t).join(' ');
   (kit.titles || []).forEach(t => {
+    const full = ttags ? (t + ' ' + ttags) : t;
     const b = document.createElement('button');
-    b.textContent = t;
+    b.textContent = full;
     b.onclick = async (e) => {
       e.preventDefault();
-      try{ await navigator.clipboard.writeText(t); b.textContent = '✓ 복사됨 — ' + t; }
+      try{ await navigator.clipboard.writeText(full); b.textContent = '✓ 복사됨 — ' + full; }
       catch(err){ alert('복사 실패 — 드래그해서 복사하세요'); }
     };
     tb.appendChild(b);
   });
   $('kitDesc').value = kit.description || '';
   $('kitTags').value = (kit.tags || []).join(', ');
+  // v0.47: 플랫폼별 섹션 (틱톡·인스타·네이버 클립·스레드)
+  const NL = String.fromCharCode(10);
+  const hash = a => (a || []).map(t => '#' + t).join(' ');
+  const tk = kit.tiktok || {};
+  $('kitTiktok').value = tk.caption ? (tk.caption + NL + NL + hash(tk.hashtags)) : '';
+  const ig = kit.instagram || {};
+  $('kitInsta').value = ig.caption ? (ig.caption + NL + NL + hash(ig.hashtags)) : '';
+  const nc = kit.naver_clip || {};
+  $('kitNaver').value = nc.title
+    ? ('제목: ' + nc.title + NL + '태그: ' + hash(nc.tags)) : '';
+  const th = kit.threads || {};
+  $('kitThreads').value = th.post
+    ? (th.post + (th.topic ? (NL + NL + '토픽 태그: ' + th.topic) : '')) : '';
   $('kitKeywords').innerHTML = '<b>🔑 키워드 10:</b> ' + (kit.keywords || []).join(' · ');
   $('kitCategory').innerHTML = '<b>📂 카테고리:</b> ' + (kit.category || '') +
     (kit.category_reason ? (' — ' + kit.category_reason) : '');
@@ -3779,7 +3857,7 @@ function renderKit(data){
   $('kitBody').classList.remove('hidden');
 }
 async function copyKit(ev, id){
-  ev.preventDefault();
+  ev.preventDefault(); ev.stopPropagation();   // summary 안 버튼 — 접힘 토글 방지
   try{
     await navigator.clipboard.writeText($(id).value);
     const btn = ev.target; btn.textContent = '✓ 복사됨';

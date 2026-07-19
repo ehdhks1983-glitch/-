@@ -539,23 +539,38 @@ YT_CATEGORIES = (
     "자동차", "반려동물/동물",
 )
 
-UPLOAD_KIT_PROMPT = """너는 한국 유튜브 SEO·업로드 전문가다. 아래 영상의 장면 캡처{with_tr}를 보고,
-유튜브 스튜디오에 그대로 붙여넣을 업로드 문구를 만든다.
+UPLOAD_KIT_PROMPT = """너는 한국 숏폼 SEO·업로드 전문가다. 아래 영상의 장면 캡처{with_tr}를 보고,
+유튜브·틱톡·인스타그램 릴스·네이버 클립·스레드에 그대로 붙여넣을 업로드 문구를 만든다.
 {channel}
 [영상 정보] 길이 {dur}초 · 형태: {shape}{hook}
 {transcript}
 
-규칙:
-- 제목: 3~5개, 각 45자 이내. 검색어가 앞쪽에, 궁금증 유발. 낚시(내용에 없는 과장) 금지.
-- 설명문: 첫 줄은 검색·클릭을 부르는 한 문장(가장 중요), 이어서 내용 요약 2~3문장,
-  마지막 줄에 해시태그 3개. 전체 500자 이내. 이모지는 1~3개만.
-- 태그: 15~20개, 구체적 검색어 위주(단어·짧은 구), 전체 400자 이내.
-- 키워드: 이 영상의 핵심 검색 키워드 정확히 10개.
-- 해시태그: 설명문에 넣을 3개 (＃ 없이 단어만).
-- 카테고리: 다음 중 정확히 하나만 — {cats}
+규칙 (2026 플랫폼 권장 반영):
+[유튜브]
+- titles: 3~5개, 각 40~60자 지향(모바일 잘림 방지). 핵심 검색어를 앞쪽에, 궁금증 유발. 낚시 금지.
+- title_tags: 제목 뒤에 붙일 짧은 해시태그 2~3개(각 8자 이내 단어, ＃ 없이) —
+  제목과 합쳐 100자를 넘지 않게.
+- description: 첫 125자 안에 핵심 키워드 + 클릭을 부르는 문장(검색 미리보기 노출 구간),
+  이어서 내용 요약 2~3문장, 마지막 줄에 해시태그 3개. 전체 500자 이내. 이모지 1~3개.
+- tags: 유튜브 스튜디오 태그란용 구체적 검색어 15~20개 (전체 400자 이내).
+- keywords: 핵심 검색 키워드 정확히 10개.
+- hashtags: 설명문 마지막 줄용 3개(＃ 없이 단어만). 쇼츠면 첫 번째는 반드시 "Shorts".
+- category: 다음 중 정확히 하나만 — {cats}
+[틱톡] tiktok.caption: 150자 이내(핵심 키워드를 문장에 자연스럽게, 이모지 1~2개, 행동 유도 1개).
+  tiktok.hashtags: 3~5개(넓은 태그 2~3 + 틈새 태그 1~2, ＃ 없이. fyp·viral 같은 무의미 태그 금지)
+[인스타그램 릴스] instagram.caption: 첫 줄은 125자 안에 끝나는 훅, 빈 줄 하나, 본문 2~3줄 + 행동 유도.
+  instagram.hashtags: 3~5개(＃ 없이)
+[네이버 클립] naver_clip.title: 검색형 제목 30자 이내(핵심 키워드를 맨 앞에).
+  naver_clip.tags: 10~12개(대중 태그 + 틈새 태그 조합, ＃ 없이)
+[스레드] threads.post: 200자 이내 대화체(첫 문장이 승부, 마지막은 답글을 부르는 질문).
+  threads.topic: 토픽 태그 딱 1개(스레드는 태그를 1개만 지원)
 JSON만 출력:
-{{"titles": ["..."], "description": "...", "tags": ["..."], "keywords": ["..."],
-  "hashtags": ["..."], "category": "...", "category_reason": "한 문장"}}"""
+{{"titles": ["..."], "title_tags": ["..."], "description": "...", "tags": ["..."],
+  "keywords": ["..."], "hashtags": ["..."], "category": "...", "category_reason": "한 문장",
+  "tiktok": {{"caption": "...", "hashtags": ["..."]}},
+  "instagram": {{"caption": "...", "hashtags": ["..."]}},
+  "naver_clip": {{"title": "...", "tags": ["..."]}},
+  "threads": {{"post": "...", "topic": "..."}}}}"""
 
 
 def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: int = 0,
@@ -591,17 +606,45 @@ def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: in
         out = json.loads(text)
     except (KeyError, IndexError, json.JSONDecodeError) as e:
         raise ScriptError(f"업로드 키트 응답 형식 예상 밖: {json.dumps(data)[:250]}") from e
+    return normalize_kit(out)
+
+
+def _norm_words(lst, n: int, each: int = 30) -> list:
+    """해시태그/태그 목록 정규화 — ＃ 제거·공백 정리·개수 제한."""
+    out = []
+    for x in (lst or []):
+        s = str(x).lstrip("#").strip()
+        if s:
+            out.append(s[:each])
+    return out[:n]
+
+
+def normalize_kit(out: dict) -> dict:
+    """모델 응답을 안전한 키트 구조로 정규화 (v0.47 플랫폼별 섹션 포함)."""
     cat = str(out.get("category", "")).strip()
     if cat not in YT_CATEGORIES:  # 목록 밖이면 기본값으로 (붙여넣기 실패 방지)
         cat = "인물/블로그"
+    tk = out.get("tiktok") or {}
+    ig = out.get("instagram") or {}
+    nc = out.get("naver_clip") or {}
+    th = out.get("threads") or {}
     return {
         "titles": [str(x)[:60] for x in out.get("titles", [])][:5],
+        "title_tags": _norm_words(out.get("title_tags"), 3, each=12),  # 제목 옆 2~3개
         "description": str(out.get("description", ""))[:1200],
         "tags": [str(x).strip()[:30] for x in out.get("tags", []) if str(x).strip()][:20],
         "keywords": [str(x).strip() for x in out.get("keywords", []) if str(x).strip()][:10],
-        "hashtags": [str(x).lstrip("#").strip() for x in out.get("hashtags", [])][:3],
+        "hashtags": _norm_words(out.get("hashtags"), 3),
         "category": cat,
         "category_reason": str(out.get("category_reason", ""))[:200],
+        "tiktok": {"caption": str(tk.get("caption", ""))[:300],
+                   "hashtags": _norm_words(tk.get("hashtags"), 5)},
+        "instagram": {"caption": str(ig.get("caption", ""))[:1000],
+                      "hashtags": _norm_words(ig.get("hashtags"), 5)},
+        "naver_clip": {"title": str(nc.get("title", ""))[:40],
+                       "tags": _norm_words(nc.get("tags"), 12)},
+        "threads": {"post": str(th.get("post", ""))[:500],
+                    "topic": str(th.get("topic", "")).lstrip("#").strip()[:30]},
     }
 
 
@@ -613,14 +656,26 @@ def suggest_upload_kit_stub(transcript: str = "", hook: str = "") -> dict:
     return {
         "titles": [f"{base} — 핵심만 30초 정리", f"{base}, 몰라서 손해봤던 것",
                    f"{base} 이렇게 하면 됩니다"],
+        "title_tags": ["쇼츠", "꿀팁"],
         "description": (f"{base}의 핵심을 짧게 담았습니다.\n"
                         "처음 보는 분도 따라 할 수 있게 순서대로 정리했어요.\n"
-                        "#쇼츠 #꿀팁 #정리"),
+                        "#Shorts #꿀팁 #정리"),
         "tags": ["쇼츠", "꿀팁", "튜토리얼", "정리", "요약", "하는법", "초보",
                  "가이드", "추천", "자동화"],
         "keywords": ["쇼츠", "꿀팁", "하는법", "정리", "요약", "초보 가이드",
                      "추천", "자동화", "튜토리얼", "노하우"],
-        "hashtags": ["쇼츠", "꿀팁", "정리"],
+        "hashtags": ["Shorts", "꿀팁", "정리"],
         "category": "노하우/스타일",
         "category_reason": "방법·팁을 알려주는 실용 영상이라 노하우/스타일이 적합합니다.",
+        "tiktok": {"caption": f"{base}, 이것만 알면 끝 ✅ 저장해두고 따라 해보세요!",
+                   "hashtags": ["꿀팁", "자기계발", "정리법", "라이프핵"]},
+        "instagram": {"caption": (f"{base}, 이것만 알면 끝!\n\n"
+                                  "핵심만 순서대로 담았어요. 저장해두고 하나씩 따라 해보세요 🙌"),
+                      "hashtags": ["릴스", "꿀팁", "자기계발", "정리"]},
+        "naver_clip": {"title": f"{base} 핵심 정리",
+                       "tags": ["꿀팁", "정리", "하는법", "노하우", "자기계발",
+                                "일상꿀팁", "생활정보", "초보가이드", "요약", "튜토리얼"]},
+        "threads": {"post": (f"{base}, 다들 어렵게 생각하는데 핵심은 하나예요. "
+                             "여러분은 어떤 방법 쓰세요?"),
+                    "topic": "꿀팁"},
     }
