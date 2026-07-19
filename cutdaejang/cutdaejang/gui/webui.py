@@ -247,19 +247,26 @@ def _bg_display(image_provider, bg_skip: str, src: str) -> str:
 
 
 def _apply_bg_style(params: dict, settings: dict) -> dict:
-    """생성 폼에서 고른 장면 그림체를 설정에 반영(기억)하고 병합해 돌려줌 (v0.45)."""
+    """생성 폼에서 고른 장면 그림체·마스코트를 설정에 반영(기억)하고 병합 (v0.45/0.50)."""
+    over = {}
     style = (params.get("bg_style") or "").strip()
-    if not style:
+    if style:
+        over["image_style"] = style
+    if "bg_character" in params:  # 빈 문자열 = 캐릭터 없음(해제)도 기억
+        over["character"] = str(params.get("bg_character") or "").strip()
+    if not over:
         return settings
-    if style != settings["bg"].get("image_style"):
+    cur = settings["bg"]
+    if any(cur.get(k) != v for k, v in over.items()):
         try:
-            config.save_settings({"bg": {"image_style": style}})
+            config.save_settings({"bg": over})
         except OSError:
             pass
-    return config.deep_merge(settings, {"bg": {"image_style": style}})
+    return config.deep_merge(settings, {"bg": over})
 
 
-def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> None:
+def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str,
+                  scene_images: Optional[list] = None) -> None:
     settings = _apply_bg_style(params, config.load_settings())
     opts = _job_options(params, settings)
     try:
@@ -271,6 +278,7 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
             progress_cb=lambda stage, frac: _set_job(job_id, stage=stage, frac=frac),
             status_cb=lambda msg: _set_job(job_id, note=msg),
             job_id=job_id,
+            scene_images=scene_images,
         )
         bg_disp = _bg_display(image_provider, bg_skip, result.bg_source or "")
         logging.getLogger("cutdaejang").info("배경: %s", bg_disp)
@@ -928,6 +936,47 @@ def _kit_text(kit: dict, title: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> None:
+    """🖼 장면 검토 1단계 (v0.50) — 그림을 먼저 만들어 보여주고 확정을 기다린다.
+
+    실패하면(전부 생성 불가 등) 검토 없이 기존 파이프라인으로 안전하게 넘어간다.
+    """
+    try:
+        settings = _apply_bg_style(params, config.load_settings())
+        provider, _skip = _ai_image_setup(params, settings)
+        job_dir = Path(workdir) / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "script.json").write_text(script.to_json(), encoding="utf-8")
+        if provider is None:
+            _run_pipeline(job_id, script, params, workdir)
+            return
+        from .. import presets  # noqa: PLC0415
+
+        prompts = [sp or s for sp, s in zip(script.scene_prompts, script.sentences)]
+        imgs = background_generator.generate_scene_images(
+            prompts, provider, job_dir / "scenes", presets.CANVAS_SHORTS,
+            style=settings["bg"].get("image_style", "일러스트"),
+            character=settings["bg"].get("character", ""),
+            on_note=lambda m: _set_job(job_id, note=m),
+            on_progress=lambda i, n: _set_job(
+                job_id, stage="background", frac=i / max(n, 1),
+                note=f"장면 그림 {min(i + 1, n)}/{n} 만드는 중…"),
+        )
+        if not any(imgs):  # 전부 실패 → 검토 화면 의미 없음, 기존 흐름으로
+            _set_job(job_id, note="장면 그림 생성이 모두 실패해 기본 배경으로 진행합니다")
+            _run_pipeline(job_id, script, params, workdir)
+            return
+        scenes = [{"i": i, "prompt": prompts[i], "ok": bool(p), "text": script.sentences[i]}
+                  for i, p in enumerate(imgs)]
+        _set_job(job_id, status="review_scenes", stage="review", frac=1.0, note="",
+                 scenes=scenes)
+    except Exception as e:
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error("장면 준비 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed", errors=[str(e)])
+
+
 def _run_batch(job_id: str, topics: list, params: dict, workdir: str) -> None:
     """📦 배치 (v0.42) — 주제 여러 개를 순차 생성해 mp4 N개. 한 개 실패해도 계속."""
     outs, errors = [], []
@@ -1060,6 +1109,19 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_video(path.split("/", 2)[2])
         elif path.startswith("/cutvideo/"):
             self._serve_cutvideo(path.split("/", 2)[2])
+        elif path.startswith("/scene/"):  # 🖼 장면 검토 이미지 (v0.50): /scene/<job>/<n>
+            parts = path.split("/", 3)
+            job = _get_job(parts[2] if len(parts) > 2 else "")
+            try:
+                n = int(parts[3])
+            except (IndexError, ValueError):
+                n = -1
+            p = (Path(self.server.workdir) / (job or {}).get("id", "") /  # type: ignore[attr-defined]
+                 "scenes" / f"scene_{n + 1:02d}.png") if job and n >= 0 else None
+            if p and p.is_file():
+                self._serve_file(str(p))
+            else:
+                self._send_json({"error": "장면 이미지 없음"}, 404)
         elif path.startswith("/thumbnail/"):
             job = _get_job(path.split("/", 2)[2])
             tp = job.get("thumbnail") if job else None
@@ -1141,18 +1203,41 @@ class _Handler(BaseHTTPRequestHandler):
             if not sentences:
                 self._send_json({"error": "문장이 비어 있습니다"}, 400)
                 return
+            # 장면 프롬프트는 검토 폼에 없으니 디스크 script.json에서 복원 (v0.50)
+            scene_prompts: list = []
+            sj = Path(workdir) / job["id"] / "script.json"
+            if sj.is_file():
+                try:
+                    old = Script.from_json_text(sj.read_text(encoding="utf-8"))
+                    scene_prompts = old.scene_prompts
+                except Exception:  # noqa: BLE001
+                    pass
             script = Script(
                 title=params.get("title") or job.get("title", ""),
                 sentences=sentences,
                 highlights=highlights,
                 background_prompt=(job.get("script") or {}).get("background_prompt", ""),
+                scene_prompts=scene_prompts,
             )
-            _set_job(job["id"], status="running", stage="tts", frac=0.0)
-            threading.Thread(
-                target=_run_pipeline,
-                args=(job["id"], script, job.get("params", {}), workdir),
-                daemon=True,
-            ).start()
+            settings = config.load_settings()
+            provider, _skip = _ai_image_setup(job.get("params", {}), settings)
+            # 🖼 장면 검토 (v0.50) — 키·설정이 되면 그림을 먼저 보여주고 확정받는다
+            if (provider is not None and settings["bg"].get("scene_images", True)
+                    and len(script.sentences) > 1):
+                _set_job(job["id"], status="running", stage="background", frac=0.0,
+                         note="장면 그림을 준비하는 중…")
+                threading.Thread(
+                    target=_prepare_scenes,
+                    args=(job["id"], script, job.get("params", {}), workdir),
+                    daemon=True,
+                ).start()
+            else:
+                _set_job(job["id"], status="running", stage="tts", frac=0.0)
+                threading.Thread(
+                    target=_run_pipeline,
+                    args=(job["id"], script, job.get("params", {}), workdir),
+                    daemon=True,
+                ).start()
             self._send_json({"ok": True})
         elif path == "/api/edit":
             video = (params.get("video_path") or "").strip().strip('"')
@@ -1419,6 +1504,70 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"lines": [pronounce_ko(l) for l in params.get("lines", [])]})
         elif path == "/api/eleven_voices":  # 🎙 일레븐랩스 계정 보이스 목록 (v0.46)
             self._eleven_voices()
+        elif path == "/api/scene_regen":  # 🖼 장면 검토 — 한 장면만 다시 (v0.50)
+            job = _get_job(params.get("job_id", ""))
+            if not job or job.get("status") != "review_scenes":
+                self._send_json({"error": "장면 검토 중인 작업이 아닙니다"}, 400)
+                return
+            scenes = job.get("scenes") or []
+            try:
+                idx = int(params.get("index"))
+                scene = scenes[idx]
+            except (TypeError, ValueError, IndexError):
+                self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
+                return
+            settings = config.load_settings()
+            provider, _skip = _ai_image_setup(job.get("params", {}), settings)
+            if provider is None:
+                self._send_json({"error": "Gemini 키가 없어 다시 그릴 수 없습니다"}, 400)
+                return
+            from .. import presets  # noqa: PLC0415
+
+            prompt = (params.get("prompt") or scene.get("prompt") or "").strip()
+            scenes_dir = Path(workdir) / job["id"] / "scenes"
+            ref = None
+            if settings["bg"].get("character", "").strip():  # 캐릭터 일관성 참조
+                for s2 in scenes:
+                    if s2.get("ok") and s2["i"] != idx:
+                        cand = scenes_dir / f"scene_{s2['i'] + 1:02d}.png"
+                        if cand.is_file():
+                            ref = str(cand)
+                            break
+            try:
+                full = background_generator.scene_prompt_text(
+                    prompt, settings["bg"].get("image_style", "일러스트"),
+                    settings["bg"].get("character", ""))
+                background_generator_path = provider.generate(
+                    full, str(scenes_dir / f"scene_{idx + 1:02d}.png"),
+                    presets.CANVAS_SHORTS, ref_png=ref)
+                scene["prompt"], scene["ok"] = prompt, bool(background_generator_path)
+                _set_job(job["id"], scenes=scenes)
+                self._send_json({"ok": True})
+            except Exception as e:  # noqa: BLE001
+                self._send_json({"error": f"다시 그리기 실패: {str(e)[:200]}"}, 500)
+        elif path == "/api/confirm_scenes":  # 🖼 장면 검토 확정 → 렌더 (v0.50)
+            job = _get_job(params.get("job_id", ""))
+            if not job or job.get("status") != "review_scenes":
+                self._send_json({"error": "장면 검토 중인 작업이 아닙니다"}, 400)
+                return
+            sj = Path(workdir) / job["id"] / "script.json"
+            try:
+                script = Script.from_json_text(sj.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                self._send_json({"error": "대본 파일을 읽을 수 없습니다"}, 500)
+                return
+            scenes_dir = Path(workdir) / job["id"] / "scenes"
+            imgs = []
+            for i in range(len(job.get("scenes") or [])):
+                p = scenes_dir / f"scene_{i + 1:02d}.png"
+                imgs.append(str(p) if p.is_file() else None)
+            _set_job(job["id"], status="running", stage="tts", frac=0.0, note="")
+            threading.Thread(
+                target=_run_pipeline,
+                args=(job["id"], script, job.get("params", {}), workdir, imgs),
+                daemon=True,
+            ).start()
+            self._send_json({"ok": True})
         elif path == "/api/settings":
             try:
                 saved_to = config.save_settings(params.get("settings") or {})
@@ -2076,7 +2225,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.49)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.50)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2536,6 +2685,21 @@ _HTML = """<!doctype html>
         </select>
         <span class="hint">전 장면에 같은 그림체로 통일돼요</span>
       </div>
+      <div class="chk" style="gap:8px;flex-wrap:wrap">
+        <span>마스코트</span>
+        <select id="genCharSel" style="width:auto;padding:6px 8px" onchange="onGenCharChange()">
+          <option value="" selected>없음</option>
+          <option value="해골">☠️ 해골 캐릭터 (경제·지식 채널 감성)</option>
+          <option value="고양이">🐱 고양이</option>
+          <option value="곰돌이">🐻 곰돌이</option>
+          <option value="직장인">🧑‍💼 직장인</option>
+          <option value="스틱맨">✏️ 스틱맨</option>
+          <option value="custom">✍ 직접 쓰기</option>
+        </select>
+        <input type="text" id="genCharCustom" class="hidden" style="flex:1;min-width:180px;padding:6px 8px"
+               placeholder="예) 파란 모자를 쓴 유머러스한 해골">
+        <span class="hint">🆕 v0.50 — 모든 장면에 같은 캐릭터가 등장해요 (첫 그림을 참조로 일관성 유지)</span>
+      </div>
       <div class="hint">🆕 v0.45 — 대본의 문장(장면)마다 AI가 그림을 그려 말 타이밍에 맞춰 넘어갑니다
         (장면마다 살짝 줌 + 부드러운 전환). Gemini 키가 있으면 자동 적용,
         없으면 기본 그라데이션 배경으로 만들어져요. 이미지 비용은 무료 키 한도 안이면 0원.
@@ -2574,6 +2738,13 @@ _HTML = """<!doctype html>
         <span class="hint">예: 2026년→이천이십육년, AI→에이아이 — TTS 오독 방지</span>
       </div>
       <button onclick="confirmScript()">이 대본으로 계속</button>
+    </div>
+
+    <div id="sceneBox" class="hidden">
+      <div style="font-weight:700">🖼 장면 그림 확인 <span class="hint">— 문장마다 이 그림이 배경으로 들어가요</span></div>
+      <div class="hint" style="margin-top:4px">마음에 안 드는 장면은 <b>묘사를 고치고 [🔄 다시 그리기]</b> → 다 되면 맨 아래 <b>[✅ 이 그림들로 완성]</b></div>
+      <div id="sceneGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-top:10px"></div>
+      <button style="margin-top:12px" onclick="confirmScenes()">✅ 이 그림들로 영상 완성</button>
     </div>
 
     <div id="subEditBox" class="hidden">
@@ -3643,9 +3814,14 @@ async function generate(){
     tts_style: prov === 'gemini' ? $('styleSel').value : '',
     bgm: $('bgmSel').value, hook: $('genHook').value,
     bg_style: (($('genBgStyle')||{}).value)||'',
+    bg_character: (($('genCharSel')||{}).value) === 'custom'
+      ? ((($('genCharCustom')||{}).value)||'').trim()
+      : ((($('genCharSel')||{}).value)||''),
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
   };
+  window._scenesLoaded = false;
+  $('sceneBox').classList.add('hidden');
   let endpoint = '/api/generate';
   if(($('batchChk')||{}).checked){
     const topics = ($('topicBatch').value||'').split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean);
@@ -4051,6 +4227,7 @@ function resetGenForm(ev){
   set('bgmSel',''); set('voiceSel', ($('voiceSel').options[0]||{}).value || '');
   set('styleSel', ($('styleSel').options[0]||{}).value || '');
   set('genBgStyle','일러스트');
+  set('genCharSel',''); set('genCharCustom',''); onGenCharChange();
 }
 
 function updateLogs(lines){
@@ -4194,7 +4371,63 @@ async function confirmScript(){
     sentences: $('rvSentences').value.split('\\n'),
   })});
   $('reviewBox').classList.add('hidden');
+  window._scenesLoaded = false;
   timer = timer || setInterval(poll, 900);
+}
+
+// ── 🖼 장면 그림 검토 (v0.50) — 그리드 렌더·장면별 재생성·확정 ──
+function renderScenes(job){
+  const grid = $('sceneGrid'); grid.innerHTML = '';
+  (job.scenes || []).forEach(s => {
+    const cell = document.createElement('div');
+    cell.style.cssText = 'border:1px solid #2c3350;border-radius:10px;padding:6px;background:#12141c';
+    const img = document.createElement('img');
+    img.style.cssText = 'width:100%;border-radius:8px;aspect-ratio:9/16;object-fit:cover;background:#0d0f14';
+    img.src = s.ok ? ('/scene/' + encodeURIComponent(job.id) + '/' + s.i + '?t=' + Date.now()) : '';
+    img.alt = '장면 ' + (s.i + 1);
+    const cap = document.createElement('div');
+    cap.className = 'hint';
+    cap.style.marginTop = '4px';
+    cap.textContent = (s.i + 1) + '. ' + (s.text || '');
+    const ta = document.createElement('textarea');
+    ta.style.cssText = 'min-height:52px;font-size:12px;margin-top:4px';
+    ta.value = s.prompt || '';
+    ta.id = 'scnP' + s.i;
+    const btn = document.createElement('button');
+    btn.className = 'ghost';
+    btn.style.cssText = 'margin-top:4px;padding:4px 8px;font-size:12px';
+    btn.textContent = s.ok ? '🔄 다시 그리기' : '🔄 그리기 (실패했던 장면)';
+    btn.onclick = (e) => regenScene(e, s.i);
+    cell.append(img, cap, ta, btn);
+    grid.appendChild(cell);
+  });
+  $('sceneBox').classList.remove('hidden');
+}
+
+async function regenScene(ev, i){
+  ev.preventDefault();
+  const btn = ev.target; const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '그리는 중… (10초 안팎)';
+  try{
+    const data = await (await fetch('/api/scene_regen', {method:'POST',
+      body: JSON.stringify({job_id: currentJob, index: i, prompt: $('scnP' + i).value})})).json();
+    if(data.error){ alert(data.error); return; }
+    const img = btn.parentElement.querySelector('img');
+    img.src = '/scene/' + encodeURIComponent(currentJob) + '/' + i + '?t=' + Date.now();
+    btn.textContent = '🔄 다시 그리기';
+  } finally { btn.disabled = false; if(btn.textContent.includes('중')) btn.textContent = old; }
+}
+
+async function confirmScenes(){
+  const data = await (await fetch('/api/confirm_scenes', {method:'POST',
+    body: JSON.stringify({job_id: currentJob})})).json();
+  if(data.error){ alert(data.error); return; }
+  $('sceneBox').classList.add('hidden');
+  timer = timer || setInterval(poll, 900);
+}
+
+function onGenCharChange(){
+  $('genCharCustom').classList.toggle('hidden', $('genCharSel').value !== 'custom');
 }
 
 async function poll(){
@@ -4227,6 +4460,13 @@ async function poll(){
     const bgst = ((state.settings || {}).bg || {}).image_style;
     if(bgst && $('genBgStyle') && [...$('genBgStyle').options].some(o => o.value === bgst))
       $('genBgStyle').value = bgst;
+    // v0.50: 마스코트 캐릭터 복원 (프리셋 키면 선택, 아니면 직접 쓰기로)
+    const bgc = ((state.settings || {}).bg || {}).character || '';
+    if(bgc && $('genCharSel')){
+      if([...$('genCharSel').options].some(o => o.value === bgc)) $('genCharSel').value = bgc;
+      else { $('genCharSel').value = 'custom'; $('genCharCustom').value = bgc; }
+      onGenCharChange();
+    }
     initHookChips();
     const mv = ((state.settings || {}).tts || {});
     if(mv.voice_elevenlabs) addMyVoiceOption(mv.voice_elevenlabs_name || '내 목소리');
@@ -4276,6 +4516,11 @@ async function poll(){
       $('rvSentences').value = job.script.sentences
         .map((t, i) => hls[i] ? `${t} | ${hls[i]}` : t).join('\\n');
     }
+  }
+  if(job.status === 'review_scenes' && !window._scenesLoaded){   // 🖼 장면 검토 (v0.50)
+    clearInterval(timer); timer = null;
+    window._scenesLoaded = true;
+    renderScenes(job);
   }
   if(job.status === 'review_subtitle' && !window._subLoaded){
     clearInterval(timer); timer = null;

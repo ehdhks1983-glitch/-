@@ -167,3 +167,57 @@ def test_gemini_image_model_fallback(monkeypatch, tmp_path):
     prov2 = bgm.GeminiImage(model="gemini-2.5-flash-image")
     with pytest.raises(bgm.BackgroundError, match="429"):
         prov2.generate("장면", str(tmp_path / "c.png"), canvas)
+
+
+def test_scene_prompt_character_injection():
+    """v0.50 — 캐릭터 프리셋 키/직접 묘사가 프롬프트에 주입되는지."""
+    t = bg.scene_prompt_text("바다를 바라본다", "일러스트", "해골")
+    assert "해골 캐릭터" in t and "같은 모습" in t and "이 캐릭터가 바다를" in t
+    t2 = bg.scene_prompt_text("웃는다", "3D", "파란 모자 쓴 문어")
+    assert "파란 모자 쓴 문어" in t2
+    t3 = bg.scene_prompt_text("장면", "일러스트", "")
+    assert "주인공" not in t3  # 캐릭터 없으면 기존 그대로
+
+
+@requires_ffmpeg
+def test_generate_scene_images_uses_ref_for_character(tmp_path):
+    """v0.50 — 캐릭터 모드에서 첫 성공작을 참조(ref_png)로 다음 장면에 전달."""
+    canvas = Canvas(w=90, h=160, fps=30)
+
+    class RefCapture(FakeImage):
+        def __init__(self):
+            super().__init__()
+            self.refs = []
+        def generate(self, prompt, out_path, canvas, ref_png=None):
+            self.refs.append(ref_png)
+            return super().generate(prompt, out_path, canvas)
+
+    prov = RefCapture()
+    bg.generate_scene_images(["a", "b", "c"], prov, tmp_path / "s", canvas,
+                             character="해골")
+    assert prov.refs[0] is None and prov.refs[1] and prov.refs[2]  # 2번째부터 참조
+    prov2 = RefCapture()
+    bg.generate_scene_images(["a", "b"], prov2, tmp_path / "s2", canvas, character="")
+    assert prov2.refs == [None, None]  # 캐릭터 없으면 참조 안 씀
+
+
+@requires_ffmpeg
+def test_run_job_with_pregenerated_scene_images(tmp_path):
+    """v0.50 — 장면 검토에서 확정한 이미지를 run_job에 넘기면 생성 없이 사용."""
+    from cutdaejang.core import orchestrator
+    from cutdaejang.core.orchestrator import JobOptions
+
+    canvas = Canvas(w=1080, h=1920, fps=30)
+    prov = FakeImage()
+    imgs = [prov.generate(f"장면{i}", str(tmp_path / f"pre_{i}.png"), canvas)
+            for i in range(4)]
+    counter = FakeImage()  # 렌더 중 추가 생성 호출이 없어야 함 (기본 배경 1장 제외)
+    res = orchestrator.run_job(
+        tmp_path / "jobs", StubScript().generate("사전 이미지"),
+        opts=JobOptions(tts_chain=["stub"], auto_mode=True),
+        image_provider=counter, scene_images=imgs)
+    assert res.status == "ok", res.errors
+    assert res.bg_source == "ai_scenes:4/4"
+    assert len(counter.calls) == 1  # prepare_background(기본 배경)만 — 장면 생성 없음
+    spec = TimelineSpec.load(f"{res.job_dir}/spec.json")
+    assert spec.background.type == "video"

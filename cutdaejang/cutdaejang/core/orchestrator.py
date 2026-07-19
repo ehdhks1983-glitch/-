@@ -133,8 +133,13 @@ def run_job(
     progress_cb: Optional[Callable[[str, float], None]] = None,
     status_cb: Optional[Callable[[str], None]] = None,
     job_id: Optional[str] = None,
+    scene_images: Optional[list] = None,
 ) -> JobResult:
-    """확정된 대본으로 ③TTS→④타임라인→⑤배경→⑥출력(A/B)을 수행한다."""
+    """확정된 대본으로 ③TTS→④타임라인→⑤배경→⑥출력(A/B)을 수행한다.
+
+    scene_images: 장면 검토 화면(v0.50)에서 미리 만들어 확정한 이미지 경로 목록.
+    주어지면 장면 생성 없이 그대로 슬라이드 배경으로 쓴다 (None 항목은 이웃 채움).
+    """
     opts = opts or JobOptions()
     settings = settings or config.load_settings()
     if opts.tts_style:
@@ -212,16 +217,25 @@ def run_job(
         )
         # v0.45: 장면별 AI 이미지 배경 — 문장 타이밍(오디오 클립)에 맞춰 이미지가 넘어감.
         # 키 없음/설정 꺼짐/사용자 배경/문장 1개면 기존 단일 배경 유지. 실패는 이웃으로 채움.
-        if (image_provider is not None and bg_cfg.get("scene_images", True)
-                and not opts.user_background and len(spec.audio) > 1):
+        # v0.50: scene_images가 오면(장면 검토에서 확정) 생성 없이 그대로 사용.
+        use_scene_mode = (bg_cfg.get("scene_images", True) and not opts.user_background
+                          and len(spec.audio) > 1
+                          and (image_provider is not None or scene_images))
+        if use_scene_mode:
             style = bg_cfg.get("image_style", "일러스트")
             prompts = [sp or s for sp, s in zip(script.scene_prompts, script.sentences)]
-            note(f"장면별 AI 이미지 {len(prompts)}장 생성 중… (그림체: {style})")
-            imgs = background_generator.generate_scene_images(
-                prompts, image_provider, job_dir / "scenes", canvas, style=style,
-                on_note=note,
-                on_progress=lambda i, n: report("background", i / max(n, 1)),
-            )
+            if scene_images:
+                imgs = list(scene_images)[: len(prompts)]
+                imgs += [None] * (len(prompts) - len(imgs))
+            else:
+                character = bg_cfg.get("character", "")
+                note(f"장면별 AI 이미지 {len(prompts)}장 생성 중… (그림체: {style})")
+                imgs = background_generator.generate_scene_images(
+                    prompts, image_provider, job_dir / "scenes", canvas, style=style,
+                    character=character,
+                    on_note=note,
+                    on_progress=lambda i, n: report("background", i / max(n, 1)),
+                )
             ok_n = sum(1 for p in imgs if p)
             if ok_n >= max(2, len(imgs) // 3):  # 충분히 성공했을 때만 슬라이드 배경
                 filled = background_generator.fill_scene_gaps(imgs, base=bg_path)

@@ -66,6 +66,7 @@ DEFAULTS: dict = {
         "image_model": "gemini-2.5-flash-image",  # 정식명 (없으면 자동 폴백, v0.46.1)
         "scene_images": True,         # 문장(장면)마다 새 이미지 (v0.45. 끄면 1장+줌)
         "image_style": "일러스트",     # 장면 그림체 — background_generator.IMAGE_STYLES 키
+        "character": "",              # 마스코트 캐릭터 (v0.50) — 프리셋 키 또는 직접 묘사
     },
     "subtitle": {
         "font_size": 84,             # 유튜브 쇼츠 기본 (v0.23 상향)

@@ -656,6 +656,71 @@ def test_edit_render_custom_margin_v(server, tmp_path):
     assert bright_ratio_at(low, 0.33) < 0.02, "기본 위치인데 상단에 자막이 있음"
 
 
+def test_scene_review_flow(server, monkeypatch):
+    """v0.50 — 장면 검토: 확정 → 그림 준비 → review_scenes → 한 장 재생성 → 확정 → 완성.
+
+    가짜 이미지 제공자로 전체 왕복을 검증: 검토 확정 후 렌더에서 장면을
+    다시 만들지 않고(생성 호출 수 고정) 확정본 그대로 쓰는지까지.
+    """
+    from cutdaejang.gui import webui
+    from cutdaejang.utils import ffmpeg as ff
+
+    calls = []  # (prompt, ref_png)
+
+    class FakeImg:
+        def generate(self, prompt, out_path, canvas, ref_png=None):
+            calls.append((prompt, ref_png))
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                    "-i", f"color=c=orange:s={canvas.w}x{canvas.h}:d=0.1",
+                    "-frames:v", "1", str(out_path)])
+            return str(out_path)
+
+    fake = FakeImg()
+    monkeypatch.setattr(webui, "_ai_image_setup", lambda params, settings: (fake, ""))
+    _post(server, "/api/settings", {"settings": {"bg": {"character": "해골"}}})
+    try:
+        res = _post(server, "/api/generate", {
+            "topic": "장면 검토 흐름", "auto": False,
+            "script_provider": "stub", "tts_provider": "stub",
+        })
+        _wait_status(server, res["job_id"], {"awaiting_review"})
+        _post(server, "/api/confirm", {
+            "job_id": res["job_id"], "title": "장면 검토 제목",
+            "sentences": ["첫 장면 문장입니다.", "둘째 장면 문장입니다.", "셋째 장면 문장입니다."],
+        })
+        job = _wait_status(server, res["job_id"], {"review_scenes", "ok", "failed"})
+        assert job["status"] == "review_scenes", job.get("errors")
+        scenes = job["scenes"]
+        assert len(scenes) == 3 and all(s["ok"] for s in scenes)
+        assert scenes[0]["prompt"] and scenes[0]["text"].startswith("첫")
+        # 캐릭터 설정 → 2번째 장면부터 첫 성공작을 참조로 전달 (일관성)
+        assert calls[0][1] is None and calls[1][1] and calls[2][1]
+        # 검토 이미지가 브라우저로 서빙되는지
+        png = _get(server, f"/scene/{res['job_id']}/0").read()
+        assert png[:4] == b"\x89PNG"
+
+        # 한 장면만 프롬프트 고쳐 다시 그리기 — 다른 성공작을 참조로 사용
+        regen = _post(server, "/api/scene_regen", {
+            "job_id": res["job_id"], "index": 1, "prompt": "파도가 몰아치는 밤바다"})
+        assert regen.get("ok")
+        assert "파도가 몰아치는" in calls[3][0] and calls[3][1]
+        state = json.loads(_get(server, "/api/state").read())
+        j = next(x for x in state["jobs"] if x["id"] == res["job_id"])
+        assert j["scenes"][1]["prompt"] == "파도가 몰아치는 밤바다"
+
+        # 확정 → 렌더 (장면 재생성 없이 확정본 사용)
+        n_before = len(calls)
+        assert _post(server, "/api/confirm_scenes", {"job_id": res["job_id"]}).get("ok")
+        done = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=300)
+        assert done["status"] == "ok", done.get("errors")
+        assert done["title"] == "장면 검토 제목"
+        assert "AI 장면 이미지 3/3장" in (done.get("bg_source") or "")
+        # 렌더 중 추가 생성은 기본 배경 1장뿐 — 장면 3장을 다시 만들지 않음
+        assert len(calls) == n_before + 1
+    finally:
+        _post(server, "/api/settings", {"settings": {"bg": {"character": ""}}})
+
+
 def test_thumbnail_api_position(server, tmp_path):
     """v0.49 — 썸네일 글자 위치(pos_x/pos_y)가 실제로 반영되는지 픽셀 실측."""
     import subprocess

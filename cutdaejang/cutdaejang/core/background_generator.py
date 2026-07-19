@@ -87,7 +87,8 @@ class GeminiImage:
         if not self.api_key:
             raise BackgroundError("GEMINI_API_KEY가 설정되어 있지 않습니다")
 
-    def generate(self, prompt: str, out_path: str, canvas: Canvas) -> str:
+    def generate(self, prompt: str, out_path: str, canvas: Canvas,
+                 ref_png: Optional[str] = None) -> str:
         if self._working_model:
             candidates = [self._working_model]
         else:
@@ -95,7 +96,7 @@ class GeminiImage:
         last: Optional[BackgroundError] = None
         for model in candidates:
             try:
-                result = self._generate_with(model, prompt, out_path, canvas)
+                result = self._generate_with(model, prompt, out_path, canvas, ref_png=ref_png)
                 if self._working_model != model:
                     self._working_model = model
                     if model != self.model:
@@ -112,24 +113,28 @@ class GeminiImage:
                     raise  # 모델 문제가 아니면(한도·네트워크 등) 다른 모델을 시도해도 소용없음
         raise last if last else BackgroundError("이미지 생성 실패")
 
-    def _generate_with(self, model: str, prompt: str, out_path: str, canvas: Canvas) -> str:
+    def _generate_with(self, model: str, prompt: str, out_path: str, canvas: Canvas,
+                       ref_png: Optional[str] = None) -> str:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model}:generateContent"
         )
+        parts: list = [
+            {
+                "text": (
+                    f"{prompt}\n\n세로형(9:16) 유튜브 쇼츠 배경 이미지. "
+                    "글자 없이, 하단 1/3은 자막이 올라갈 수 있게 단순하게."
+                )
+            }
+        ]
+        if ref_png and Path(ref_png).is_file():  # 캐릭터 일관성 참조 (v0.50)
+            parts.append({"inlineData": {
+                "mimeType": "image/png",
+                "data": base64.b64encode(Path(ref_png).read_bytes()).decode(),
+            }})
+            parts[0]["text"] += "\n(첨부한 이미지와 같은 캐릭터·같은 그림체를 유지할 것)"
         payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": (
-                                f"{prompt}\n\n세로형(9:16) 유튜브 쇼츠 배경 이미지. "
-                                "글자 없이, 하단 1/3은 자막이 올라갈 수 있게 단순하게."
-                            )
-                        }
-                    ]
-                }
-            ],
+            "contents": [{"parts": parts}],
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
         try:
@@ -152,6 +157,17 @@ class GeminiImage:
 
 # ─────────── v0.45: 장면별 이미지 → 슬라이드 배경 영상 ───────────
 
+# 마스코트 캐릭터 프리셋 (v0.50) — 모든 장면에 같은 캐릭터가 등장해 채널 아이덴티티.
+# UI(genCharSel)와 키를 맞춘다. "직접"은 사용자가 쓴 묘사를 그대로 사용.
+CHARACTER_PRESETS = {
+    "해골": "유머러스한 흰 해골 캐릭터 (동그란 눈, 귀여운 만화체)",
+    "고양이": "귀여운 주황 고양이 캐릭터 (큰 눈, 통통한 몸)",
+    "곰돌이": "포근한 갈색 곰돌이 캐릭터 (둥근 얼굴, 순한 표정)",
+    "직장인": "안경 쓴 젊은 직장인 캐릭터 (단정한 셔츠, 만화체)",
+    "스틱맨": "단순한 검은 선으로 그린 스틱맨 캐릭터 (표정 풍부)",
+}
+
+
 # 그림체 프리셋 — UI(genBgStyle)와 키를 맞춘다. 프롬프트 앞에 붙어 전 장면 통일.
 IMAGE_STYLES = {
     "일러스트": "따뜻한 플랫 벡터 일러스트 스타일, 부드러운 색감",
@@ -163,31 +179,60 @@ IMAGE_STYLES = {
 }
 
 
+def scene_prompt_text(prompt: str, style: str = "일러스트", character: str = "") -> str:
+    """장면 프롬프트 조립 — 그림체 + (있으면) 마스코트 캐릭터 + 장면 묘사 (v0.50)."""
+    parts = []
+    style_text = IMAGE_STYLES.get(style, "")
+    if style_text:
+        parts.append(style_text)
+    ch = (character or "").strip()
+    ch = CHARACTER_PRESETS.get(ch, ch)  # 프리셋 키면 상세 묘사로 치환
+    if ch:
+        parts.append(f"주인공: {ch} — 모든 장면에 같은 모습·같은 그림체로 등장")
+    p = (prompt or "").strip()
+    if p:
+        parts.append(p if not ch else f"장면: 이 캐릭터가 {p}")
+    return ". ".join(parts)
+
+
 def generate_scene_images(
     prompts: list,
     provider: GeminiImage,
     out_dir,
     canvas: Canvas,
     style: str = "일러스트",
+    character: str = "",
     on_note: Optional[callable] = None,
     on_progress: Optional[callable] = None,
 ) -> list:
     """장면 묘사 목록 → 이미지 경로 목록 (실패한 장면은 None — 호출측이 이웃으로 채움).
 
-    스타일 프리셋을 앞에 붙여 전 장면 그림체를 통일한다. 한 장 실패가 전체를
-    막지 않는다 (None으로 두고 계속).
+    스타일·캐릭터를 앞에 붙여 전 장면을 통일하고, 캐릭터 모드에서는 첫 성공
+    이미지를 참조로 넘겨 다음 장면들의 캐릭터·그림체 일관성을 높인다 (v0.50).
+    한 장 실패가 전체를 막지 않는다 (None으로 두고 계속).
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    style_text = IMAGE_STYLES.get(style, "")
     paths = []
+    ref: Optional[str] = None
     for i, prompt in enumerate(prompts):
         if on_progress:
             on_progress(i, len(prompts))
-        p = (prompt or "").strip()
-        full = f"{style_text}. {p}" if style_text and p else (style_text or p)
+        full = scene_prompt_text(prompt, style, character)
         try:
-            paths.append(provider.generate(full, str(out_dir / f"scene_{i + 1:02d}.png"), canvas))
+            out = provider.generate(full, str(out_dir / f"scene_{i + 1:02d}.png"),
+                                    canvas, ref_png=ref)
+            paths.append(out)
+            if ref is None and (character or "").strip():
+                ref = out  # 첫 성공작을 참조로 — 캐릭터 일관성
+        except TypeError:  # 테스트 대역 등 ref_png 미지원 제공자
+            try:
+                paths.append(provider.generate(full, str(out_dir / f"scene_{i + 1:02d}.png"),
+                                               canvas))
+            except Exception as e:  # noqa: BLE001
+                paths.append(None)
+                if on_note:
+                    on_note(f"장면 {i + 1} 이미지 실패 → 이웃 장면으로 대체 ({str(e)[:80]})")
         except Exception as e:  # noqa: BLE001 — 한 장 실패는 이웃 이미지로 대체
             paths.append(None)
             if on_note:
