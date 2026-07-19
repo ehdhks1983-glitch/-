@@ -120,16 +120,6 @@ def _env_check() -> dict:
     return {"ffmpeg": ffmpeg_ok, "font": font_ok}
 
 
-def default_drafts_dir() -> str:
-    """Windows 표준 CapCut Drafts 경로 자동 감지 (없으면 빈 문자열)."""
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        p = Path(local) / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft"
-        if p.is_dir():
-            return str(p)
-    return ""
-
-
 def _apply_keys(params: dict) -> None:
     """UI에서 입력한 API 키를 환경변수로 반영. save_key면 파일에도 저장(선택 기능)."""
     for field, env, name in (
@@ -157,11 +147,8 @@ def _tts_chain(params: dict, settings: dict) -> list:
 
 def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
     settings = settings or config.load_settings()
-    outputs = ["mp4"]
-    if params.get("draft"):
-        outputs.append("draft")
     return JobOptions(
-        outputs=tuple(outputs),
+        outputs=("mp4",),
         auto_mode=bool(params.get("auto", True)),
         tts_chain=_tts_chain(params, settings),
         voice=params.get("voice", ""),
@@ -169,7 +156,6 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
         bgm=params.get("bgm", ""),
         hook=(params.get("hook") or "").strip(),
         target_sec=int(params.get("target_sec") or 60),
-        drafts_dir=(params.get("drafts_dir") or "").strip() or None,
         render=RenderOptions(use_gpu=params.get("gpu", "auto")),
     )
 
@@ -191,7 +177,6 @@ def _record_history(workdir: str, result, opts: JobOptions) -> None:
             duration_us=json.loads(spec_json)["duration_us"] if spec_json else 0,
             spec_json=spec_json,
             out_mp4=result.mp4.out_path if result.mp4 else None,
-            out_draft=result.draft_path or None,
             error="; ".join(result.errors) or None,
             tts_provider=result.tts_provider or None,
         )
@@ -253,7 +238,6 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str) -> No
             title=result.title,
             job_dir=result.job_dir,
             mp4=result.mp4.out_path if (result.mp4 and result.mp4.ok) else None,
-            draft=result.draft_path or None,
             tts_provider=result.tts_provider,
             requested_tts=params.get("tts_provider", ""),
             bg_source=bg_disp,
@@ -483,10 +467,47 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                  errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
+def _apply_trim(cut_video: str, subs: list, keep, trim, job_dir: Path):
+    """앞뒤 트림 (v0.41 브루식 편집) — 영상을 자르고 자막을 시프트, keep 번호 재매핑.
+
+    trim=(시작μs, 끝μs). 끝 0은 "영상 끝까지". 범위 밖 자막은 버리고 걸친 자막은 클램프.
+    반환: (새 영상, 새 자막 목록, 재매핑된 keep, 안내 문구).
+    """
+    try:
+        t0, t1 = int(trim[0] or 0), int(trim[1] or 0)
+    except (TypeError, ValueError, IndexError):
+        return cut_video, subs, keep, ""
+    if t0 <= 0 and t1 <= 0:
+        return cut_video, subs, keep, ""
+    from ..core import video_editor  # noqa: PLC0415
+    from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+    dur = ff.probe_duration_us(cut_video)
+    t0 = max(0, min(t0, dur))
+    t1 = min(t1, dur) if t1 > 0 else dur
+    if t1 <= t0 + 300_000 or (t0 <= 0 and t1 >= dur):
+        return cut_video, subs, keep, ""
+    job_dir.mkdir(parents=True, exist_ok=True)
+    video = video_editor.cut_and_concat(cut_video, [(t0, t1)], str(job_dir / "trimmed.mp4"))
+    new_subs, idx_map = [], {}
+    for i, s in enumerate(subs):
+        if s.end_us <= t0 or s.start_us >= t1:
+            continue
+        s.start_us = max(0, s.start_us - t0)
+        s.end_us = min(s.end_us, t1) - t0
+        if s.end_us > s.start_us:
+            idx_map[i] = len(new_subs)
+            new_subs.append(s)
+    if keep is not None:
+        keep = [idx_map[i] for i in keep if i in idx_map]
+    note = f"✂️ 앞뒤 트림: {t0 / 1e6:.1f}초 ~ {t1 / 1e6:.1f}초 사용"
+    return video, new_subs, keep, note
+
+
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     cut_video: str, workdir: str, keep: Optional[list] = None,
                     speed: float = 1.0, quality: str = "standard",
-                    denoise=False) -> None:
+                    denoise=False, trim=(0, 0)) -> None:
     """2단계: (수정된) 자막으로 최종 렌더. keep이 일부면 그 구간만 남겨 쇼츠로 재컷."""
     try:
         from ..core import edit_mode  # noqa: PLC0415
@@ -498,6 +519,11 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         _set_job(job_id, status="running", stage="render", frac=0.0, note=note,
                  subtitles=subtitles_dicts)
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
+        cut_video, subs, keep, trim_note = _apply_trim(
+            cut_video, subs, keep, trim, Path(workdir) / job_id)
+        if trim_note:
+            prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+            _set_job(job_id, tts_warn=f"{prev} · {trim_note}" if prev else trim_note)
         out = str(Path(workdir) / job_id / "edited.mp4")
         job = _get_job(job_id) or {}
         ep = job.get("edit_params") or {}
@@ -642,7 +668,7 @@ _SPLIT_MAX = 30  # 분할 쇼츠 상한 — 초장편 영상이 수백 개 렌�
 def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                    cut_video: str, workdir: str, target_sec: float = 30.0,
                    speed: float = 1.0, quality: str = "standard",
-                   denoise=False) -> None:
+                   denoise=False, trim=(0, 0)) -> None:
     """긴 영상을 목표 길이 단위 쇼츠 여러 개로 분할 렌더 (edited_1..N.mp4).
 
     자막이 있으면 자막 흐름 단위로, 없으면 시간 기준 균등 분할(v0.38 완전 자동용).
@@ -655,6 +681,11 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
 
         settings = config.load_settings()
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
+        cut_video, subs, _, trim_note = _apply_trim(
+            cut_video, subs, None, trim, Path(workdir) / job_id)
+        if trim_note:
+            prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+            _set_job(job_id, tts_warn=f"{prev} · {trim_note}" if prev else trim_note)
         groups = edit_mode.split_into_clips(subs, target_sec=target_sec)
         plan: list = [("subs", g) for g in groups]
         if not plan:  # 자막 없음 → 시간 기준 균등 분할
@@ -953,11 +984,16 @@ class _Handler(BaseHTTPRequestHandler):
             quality = params.get("quality") or "standard"
             # 잡음 제거는 편집 폼에서 정한 값(edit_params)을 따름
             denoise = ep.get("denoise") or False
+            try:  # ✂️ 앞뒤 트림 (v0.41 브루식 편집)
+                trim = (int(params.get("trim_start_us") or 0),
+                        int(params.get("trim_end_us") or 0))
+            except (TypeError, ValueError):
+                trim = (0, 0)
             threading.Thread(
                 target=_do_edit_render,
                 args=(job["id"], params.get("subtitles") or [], hook,
                       ep.get("layout", "shorts"), job.get("cut_video"), workdir,
-                      keep, speed, quality, denoise),
+                      keep, speed, quality, denoise, trim),
                 daemon=True,
             ).start()
             self._send_json({"ok": True})
@@ -1007,13 +1043,18 @@ class _Handler(BaseHTTPRequestHandler):
                 speed = float(params.get("speed") or 1.0)
             except (TypeError, ValueError):
                 target, speed = 30.0, 1.0
+            try:
+                trim = (int(params.get("trim_start_us") or 0),
+                        int(params.get("trim_end_us") or 0))
+            except (TypeError, ValueError):
+                trim = (0, 0)
             threading.Thread(
                 target=_do_edit_split,
                 args=(job["id"], params.get("subtitles") or [],
                       params.get("hook", ep.get("hook", "")),
                       ep.get("layout", "shorts"), job.get("cut_video"), workdir,
                       target, speed, params.get("quality") or "standard",
-                      ep.get("denoise") or False),
+                      ep.get("denoise") or False, trim),
                 daemon=True,
             ).start()
             self._send_json({"ok": True})
@@ -1476,7 +1517,6 @@ class _Handler(BaseHTTPRequestHandler):
                     "has_mp4": bool(r["out_mp4"] and Path(r["out_mp4"]).exists()),
                     "has_spec": bool(r["spec_json"]),
                     "tts_provider": r["tts_provider"] or "",
-                    "draft": r["out_draft"] or "",
                 }
                 for r in store.list(limit=30)
                 if r["id"] not in active_ids
@@ -1487,7 +1527,6 @@ class _Handler(BaseHTTPRequestHandler):
         return {
             "jobs": jobs,
             "history": history,
-            "drafts_dir": default_drafts_dir(),
             "keys": {
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
@@ -1756,7 +1795,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.40.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.41)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2150,19 +2189,11 @@ _HTML = """<!doctype html>
     </details>
 
     <details class="opt">
-      <summary>⚙️ 세부 설정 <span class="hint">— 대본 미리 확인 · 캡컷 연동</span></summary>
+      <summary>⚙️ 세부 설정 <span class="hint">— 완성 전에 대본을 확인하고 싶다면</span></summary>
       <label style="margin-top:4px">완성 방식</label>
       <div class="toggle">
         <label><input type="radio" name="mode" value="auto" checked><span>자동 (한 번에 완성)</span></label>
         <label><input type="radio" name="mode" value="review"><span>검토 (대본 확인 후)</span></label>
-      </div>
-      <div class="chk">
-        <input type="checkbox" id="draftChk">
-        <span>캡컷 draft도 생성 (출력 A — 캡컷 설치 PC)</span>
-      </div>
-      <div id="draftRow" class="hidden">
-        <label>캡컷 Drafts 폴더</label>
-        <input type="text" id="draftsDir" placeholder="자동 감지 실패 시 직접 입력">
       </div>
     </details>
 
@@ -2194,7 +2225,7 @@ _HTML = """<!doctype html>
     <div id="subEditBox" class="hidden">
       <div style="font-weight:700;margin-bottom:4px">✏️ 자막 확인하고 완성하기</div>
       <div class="hint" style="font-size:13px;color:#cdd3e0">① 아래 자막에서 <b>틀린 글자만 고치세요</b> (칸을 누르면 영상이 멈춰요) → ② 쇼츠로 줄이려면 ✂️ 줄에서 구간을 고르거나 [✨ AI 핵심 추천] → ③ 맨 아래 <b>[✅ 완성]</b> 버튼</div>
-      <div class="hint">각 줄 <b>▶</b>=그 지점부터 듣기 · <b>✂</b>=줄 나누기 · <b>스페이스바</b>=재생/정지 · 💛 강조는 문장 끝에 <b>| 단어</b>, 색은 <b>[노랑]글자[/]</b></div>
+      <div class="hint">각 줄 <b>▶</b>=듣기 · <b>✂</b>=줄 나누기 · <b>🗑</b>=<b>자막+영상 구간 통째 삭제</b>(브루식 — 체크박스 다시 켜면 복구) · <b>✕</b>=자막만 삭제(영상 유지) · <b>스페이스바</b>=재생/정지 · 💛 강조 <b>| 단어</b>, 색 <b>[노랑]글자[/]</b></div>
       <div class="playbar">
         <video id="cutPlayer" controls playsinline></video>
         <div class="playrow">
@@ -2210,6 +2241,14 @@ _HTML = """<!doctype html>
           </select>
           <span class="hint">← 스페이스바로 정지</span>
         </div>
+      </div>
+      <div class="shortsbar">
+        <b style="font-size:13px">✂️ 앞뒤 트림</b>
+        <span class="hint">영상을 원하는 지점에 멈춘 뒤</span>
+        <button class="ghost" onclick="setTrimStart(event)">⏮ 여기부터 시작</button>
+        <button class="ghost" onclick="setTrimEnd(event)">⏭ 여기서 끝</button>
+        <span class="hint" id="trimInfo" style="color:#7a9bff;font-weight:700">전체 사용</span>
+        <button class="ghost" onclick="clearTrim(event)">해제</button>
       </div>
       <div class="shortsbar">
         <b style="font-size:13px">✂️ 쇼츠로 줄이기</b>
@@ -2424,7 +2463,7 @@ _HTML = """<!doctype html>
 let currentJob = null, timer = null;
 const $ = id => document.getElementById(id);
 const STAGE_KO = {script:'대본 생성', tts:'목소리 합성(TTS)', background:'배경 준비',
-                  timeline:'타임라인 계산', render:'영상 렌더링', draft:'캡컷 draft 조립',
+                  timeline:'타임라인 계산', render:'영상 렌더링',
                   review:'대본 검토 대기', done:'완료',
                   analyze:'무음 구간 분석', cut:'무음 잘라내기', stt:'음성 인식(자막 만들기)'};
 
@@ -2433,7 +2472,6 @@ document.querySelectorAll('input[name=prov]').forEach(r => r.onchange = () => {
   $('keyRow').classList.toggle('hidden', !isGemini || window._hasGeminiKey);
   $('geminiOpts').classList.toggle('hidden', !isGemini);
 });
-$('draftChk').onchange = () => $('draftRow').classList.toggle('hidden', !$('draftChk').checked);
 
 function pick(name){ return document.querySelector(`input[name=${name}]:checked`).value; }
 
@@ -2703,7 +2741,8 @@ function renderSubRows(){
       `<input type="text" style="flex:1" value="${(sub.text||'').replace(/"/g,'&quot;')}" onfocus="pauseCut()" oninput="window._subs[${i}].text=this.value">`+
       `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆</button>`+
       `<button class="ghost" title="이 줄을 둘로 나누기" onclick="splitSub(${i})">✂</button>`+
-      `<button class="ghost" title="삭제" onclick="delSub(${i})">✕</button>`;
+      `<button class="ghost" title="자막+영상 구간 통째 삭제 (브루식 — 체크박스로 복구)" onclick="dropSeg(${i})">🗑</button>`+
+      `<button class="ghost" title="자막만 삭제 (영상은 유지)" onclick="delSub(${i})">✕</button>`;
     box.appendChild(row);
   });
   updateKeepInfo();
@@ -2999,6 +3038,48 @@ function mergeSub(i){
   s.splice(i,1); renderSubRows();
 }
 function delSub(i){ window._subs.splice(i,1); renderSubRows(); }
+function dropSeg(i){  // 브루식: 자막 줄과 그 영상 구간을 함께 삭제 (keep 해제 = 렌더 때 잘림)
+  const s=window._subs[i]; if(!s) return;
+  s.keep=false; renderSubRows(); updateKeepInfo();
+}
+// ── ✂️ 앞뒤 트림 (v0.41) — 재생 위치를 시작/끝점으로 ──
+function setTrimStart(ev){
+  ev.preventDefault();
+  const p=$('cutPlayer');
+  if(!p || !p.src){ alert('먼저 영상을 재생해 원하는 위치에 멈춰주세요'); return; }
+  const us=Math.round(p.currentTime*1e6);
+  if(window._trimEnd && us >= window._trimEnd){ alert('시작점은 끝점보다 앞이어야 해요'); return; }
+  window._trimStart=us; applyTrimMarks();
+}
+function setTrimEnd(ev){
+  ev.preventDefault();
+  const p=$('cutPlayer');
+  if(!p || !p.src){ alert('먼저 영상을 재생해 원하는 위치에 멈춰주세요'); return; }
+  const us=Math.round(p.currentTime*1e6);
+  if(us <= (window._trimStart||0)){ alert('끝점은 시작점보다 뒤여야 해요'); return; }
+  window._trimEnd=us; applyTrimMarks();
+}
+function clearTrim(ev){
+  if(ev)ev.preventDefault();
+  window._trimStart=0; window._trimEnd=0;
+  (window._subs||[]).forEach(s=>{ if(s._trimDrop){ s.keep=true; delete s._trimDrop; } });
+  renderSubRows(); updateTrimInfo();
+}
+function applyTrimMarks(){
+  // 트림 범위 밖 자막 줄은 자동으로 체크 해제(영상도 잘림을 눈으로 보여줌), 범위 복귀 시 복구
+  const t0=window._trimStart||0, t1=window._trimEnd||0;
+  (window._subs||[]).forEach(s=>{
+    const out=(t0 && s.end_us<=t0) || (t1 && s.start_us>=t1);
+    if(out){ if(s.keep!==false){ s.keep=false; s._trimDrop=true; } }
+    else if(s._trimDrop){ s.keep=true; delete s._trimDrop; }
+  });
+  renderSubRows(); updateTrimInfo();
+}
+function updateTrimInfo(){
+  const el=$('trimInfo'); if(!el) return;
+  const t0=window._trimStart||0, t1=window._trimEnd||0;
+  el.textContent=(!t0 && !t1) ? '전체 사용' : '사용: '+fmtTime(t0)+' ~ '+(t1?fmtTime(t1):'끝');
+}
 function addSubRow(ev){
   ev.preventDefault();
   const s=window._subs, last=s.length?s[s.length-1].end_us:0;
@@ -3020,7 +3101,7 @@ async function renderSplit(ev){
   const speed=parseFloat(($('outSpeed')||{}).value||'1');
   const quality=($('outQuality')||{}).value||'standard';
   const res=await fetch('/api/edit_split',{method:'POST',body:JSON.stringify(
-    {job_id:currentJob, subtitles:subs, target_sec:target, hook:$('editHook').value, speed, quality})});
+    {job_id:currentJob, subtitles:subs, target_sec:target, hook:$('editHook').value, speed, quality, trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0)})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -3036,7 +3117,7 @@ async function renderEdited(){
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
   const quality=($('outQuality')||{}).value || 'standard';
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1})});
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0)})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -3056,7 +3137,6 @@ async function generate(){
     bgm: $('bgmSel').value, hook: $('genHook').value,
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
-    draft: $('draftChk').checked, drafts_dir: $('draftsDir').value,
   };
   const res = await fetch('/api/generate', {method:'POST', body: JSON.stringify(body)});
   const data = await res.json();
@@ -3466,7 +3546,6 @@ async function confirmScript(){
 async function poll(){
   const state = await (await fetch('/api/state')).json();
   window._hasGeminiKey = state.keys.gemini;
-  if(!$('draftsDir').value && state.drafts_dir) $('draftsDir').value = state.drafts_dir;
 
   window._isWin = (state.platform || '').startsWith('win');
   window._hasElevenKey = !!(state.keys && state.keys.elevenlabs);
@@ -3538,6 +3617,8 @@ async function poll(){
   if(job.status === 'review_subtitle' && !window._subLoaded){
     clearInterval(timer); timer = null;
     window._subLoaded = true;
+    window._trimStart = 0; window._trimEnd = 0;
+    if($('trimInfo')) $('trimInfo').textContent = '전체 사용';
     // 강조 단어가 있으면 "문장 | 단어" 형태로 보여줘 그 자리에서 수정 가능
     window._subs = (job.subtitles || []).map(s => ({
       text: s.highlight ? (s.text + ' | ' + s.highlight) : s.text,
@@ -3558,6 +3639,8 @@ async function poll(){
   const provKo = {gemini:'Gemini', openai:'OpenAI', windows:'Windows 내장 음성', stub:'테스트 톤'};
   if(job.status === 'ok' || job.status === 'partial'){
     clearInterval(timer); timer = null;
+    // 완료 화면에도 안내(트림·핵심 구간·TTS 경고)를 남김 — 진행 중에만 보이던 문제 수정 (v0.41)
+    $('noteText').textContent = job.note || '';
     $('stageText').innerHTML = job.status === 'ok'
       ? '<span class="ok-badge">✔ 완료 — 자가검증 통과</span>'
       : '<span class="fail-badge">부분 완료</span>';
@@ -3575,7 +3658,7 @@ async function poll(){
           job.mp4s.map((p,i)=>('  '+(i+1)+') '+p)).join('<br>') +
           '<br><span class="hint">(위 플레이어는 1번 쇼츠. 나머지는 [📂 폴더 열기]에서 확인)</span>';
       } else {
-        $('outPaths').textContent = 'mp4: ' + job.mp4 + (job.draft ? '  |  draft: ' + job.draft : '');
+        $('outPaths').textContent = 'mp4: ' + job.mp4;
       }
     }
     showErrors(job.errors);

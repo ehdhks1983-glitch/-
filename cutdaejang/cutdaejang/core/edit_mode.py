@@ -77,6 +77,60 @@ def build_subtitles(cut_segments: List[tuple], texts: List[str]) -> List[Subtitl
     return subs
 
 
+def transcribe_segments_timed(
+    video_path: str,
+    segments: List[tuple],
+    stt: STTEngine,
+    workdir: Path,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> List[list]:
+    """각 발화 구간을 문장 단위 타임스탬프로 전사 (v0.41 — whisper).
+
+    반환: 구간과 1:1 대응하는 [(구간 내 상대 시작μs, 끝μs, 텍스트), ...] 리스트.
+    제공자가 타임스탬프를 지원하지 않으면 기존 전사로 폴백해 구간 전체를 한 조각으로.
+    """
+    out: List[list] = []
+    seg_dir = workdir / "segments"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    for i, (s, e) in enumerate(segments):
+        wav = seg_dir / f"seg{i:03d}.wav"
+        video_editor.extract_segment_audio(video_path, s, e, str(wav))
+        pieces: list = []
+        try:
+            timed = stt.transcribe_timed(str(wav))
+            if timed is None:  # 타임스탬프 미지원 제공자(gemini 등) → 구간=한 조각
+                text = stt.transcribe(str(wav)).strip()
+                timed = [(0, e - s, text)] if text else []
+            pieces = timed
+        except Exception as ex:  # 한 구간 실패는 빈 자막으로 (영상은 살림)
+            log.warning("구간 %d STT 실패: %s", i, ex)
+        out.append(pieces)
+        if on_progress:
+            on_progress(i + 1, len(segments))
+    return out
+
+
+def build_subtitles_timed(
+    cut_segments: List[tuple], pieces_per_segment: List[list],
+    min_piece_us: int = 200_000,
+) -> List[Subtitle]:
+    """구간별 문장 조각 → 컷 타임라인 절대 시각 자막 (v0.41).
+
+    조각 시각은 구간 내 상대값 → 컷 구간 시작에 더해 절대화하고 구간 밖은 잘라낸다.
+    너무 짧은 조각(기본 0.2초 미만)은 표시 의미가 없어 버린다.
+    """
+    subs: List[Subtitle] = []
+    for (s, e), pieces in zip(cut_segments, pieces_per_segment):
+        seg_len = e - s
+        for rel_start, rel_end, text in sorted(pieces or []):
+            a = max(0, min(int(rel_start), seg_len))
+            b = max(0, min(int(rel_end), seg_len))
+            if not str(text).strip() or (b - a) < min_piece_us:
+                continue
+            subs.append(Subtitle(text=str(text).strip(), start_us=s + a, end_us=s + b))
+    return subs
+
+
 def align_script_to_segments(
     lines: List[str], cut_segments: List[tuple], total_us: Optional[int] = None
 ) -> List[Subtitle]:
@@ -448,11 +502,15 @@ def analyze_video(
         note(f"입력한 대본 {len(subtitles)}줄을 영상 타이밍에 배치했습니다 (음성 인식 생략)")
     elif auto_subtitle and stt is not None:
         report("stt", 0.0)
-        texts = transcribe_segments(
+        # v0.41: 문장 단위 타임스탬프 — 긴 발화 구간도 문장별로 자막이 바뀐다
+        pieces = transcribe_segments_timed(
             video_path, segments, stt, work,
             on_progress=lambda i, n: report("stt", i / n),
         )
-        subtitles = build_subtitles(cut_segments, texts)
+        subtitles = build_subtitles_timed(cut_segments, pieces)
+        n_pieces = sum(len(p) for p in pieces)
+        if n_pieces > len(segments):
+            note(f"문장 단위 타임스탬프로 자막 {n_pieces}줄 (구간 {len(segments)}개)")
         stt_calls = stt.stats["calls"]
         halluc = stt.stats.get("hallucinations", 0)
         if not subtitles:

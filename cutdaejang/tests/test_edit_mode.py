@@ -801,3 +801,82 @@ def test_render_watermark_overlay(tmp_path):
     r2 = render_from_analysis(str(v), [], str(tmp_path / "o2.mp4"), layout="keep",
                               quality="draft", watermark={"path": "없는파일.png"})
     assert r2.ok
+
+
+# ── v0.41: 문장 단위 타임스탬프 ──
+
+class FakeTimedSTT:
+    """whisper처럼 문장 타임스탬프를 주는 가짜 제공자 (환각 1조각 포함)."""
+
+    name = "faketimed"
+
+    def transcribe(self, audio_path, language="ko"):
+        return "폴백 텍스트"
+
+    def transcribe_timed(self, audio_path, language="ko"):
+        dur = ff.probe_duration_us(str(audio_path)) / 1e6
+        mid = max(0.3, dur / 2)
+        return [
+            (0.05, mid, "첫 문장입니다"),
+            (mid + 0.05, max(mid + 0.3, dur - 0.02), "둘째 문장입니다"),
+            (0.0, 0.05, "시청해주셔서 감사합니다"),  # 환각 + 0.2초 미만 → 걸러짐
+        ]
+
+
+def test_stt_engine_timed_filter_and_cache(talk_video, tmp_path):
+    """엔진 timed 경로: μs 변환·환각 제거·JSON 캐시 적중."""
+    from cutdaejang.core import video_editor
+    from cutdaejang.core.stt_engine import STTEngine
+
+    wav = tmp_path / "piece.wav"
+    video_editor.extract_segment_audio(talk_video, 0, 1_500_000, str(wav))
+    eng = STTEngine(FakeTimedSTT(), tmp_path / "cache")
+    out = eng.transcribe_timed(str(wav))
+    assert [t for _, _, t in out] == ["첫 문장입니다", "둘째 문장입니다"]  # 환각 제외
+    assert all(isinstance(a, int) and b > a for a, b, _ in out)
+    assert eng.stats["hallucinations"] == 1
+    out2 = eng.transcribe_timed(str(wav))  # 캐시 적중 (재호출 없음)
+    assert out2 == out and eng.stats["cache_hits"] == 1
+
+
+def test_timed_unsupported_provider_falls_back(talk_video, tmp_path):
+    """타임스탬프 미지원(StubSTT) → None → 구간 전체 한 조각 폴백."""
+    from cutdaejang.core.edit_mode import transcribe_segments_timed
+
+    eng = _engine(tmp_path)
+    assert eng.transcribe_timed(str(talk_video)) is None
+    pieces = transcribe_segments_timed(
+        talk_video, [(0, 1_500_000)], eng, tmp_path / "w")
+    assert len(pieces) == 1 and len(pieces[0]) == 1
+    rel_s, rel_e, text = pieces[0][0]
+    assert (rel_s, rel_e) == (0, 1_500_000) and text.strip()
+
+
+def test_build_subtitles_timed_mapping():
+    """상대 조각 → 컷 타임라인 절대 시각 + 구간 밖 클램프 + 짧은 조각 제거."""
+    from cutdaejang.core.edit_mode import build_subtitles_timed
+
+    cut_segments = [(0, 2_000_000), (2_000_000, 5_000_000)]
+    pieces = [
+        [(100_000, 900_000, "가"), (950_000, 1_990_000, "나")],
+        [(0, 1_500_000, "다"), (1_500_000, 9_000_000, "라"),  # 구간 길이 3초로 클램프
+         (2_950_000, 2_990_000, "짧음")],                       # 0.2초 미만 → 제거
+    ]
+    subs = build_subtitles_timed(cut_segments, pieces)
+    assert [s.text for s in subs] == ["가", "나", "다", "라"]
+    assert (subs[2].start_us, subs[2].end_us) == (2_000_000, 3_500_000)
+    assert subs[3].end_us == 5_000_000  # 구간 끝으로 클램프
+
+
+def test_analyze_video_sentence_timestamps(talk_video, tmp_path):
+    """analyze_video가 발화 구간 1개당 문장 2줄을 만든다 (기존: 구간=1줄)."""
+    from cutdaejang.core.edit_mode import analyze_video
+    from cutdaejang.core.stt_engine import STTEngine
+
+    analysis = analyze_video(
+        talk_video, tmp_path / "w", STTEngine(FakeTimedSTT(), tmp_path / "c"))
+    assert analysis.segments == 3
+    assert len(analysis.subtitles) == 6  # 구간마다 2문장
+    assert any("문장 단위" in n for n in analysis.notes)
+    for s in analysis.subtitles:  # 절대 시각·순서 정상
+        assert 0 <= s.start_us < s.end_us <= analysis.cut_us + 100_000

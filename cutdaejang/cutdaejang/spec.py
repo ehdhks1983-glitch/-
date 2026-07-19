@@ -1,4 +1,4 @@
-"""Timeline Spec (IR) — 두 출력 경로(draft_builder / render_engine)의 단일 진실 원천.
+"""Timeline Spec (IR) — 렌더 경로(render_engine)의 단일 진실 원천.
 
 기획안 §3.2의 JSON 형태를 그대로 직렬화/역직렬화한다. 모든 시간은 μs 정수.
 검증·직렬화 후 jobs 테이블에 저장되어 "재생성" 시 어느 출력으로든 재빌드 가능해야 한다.

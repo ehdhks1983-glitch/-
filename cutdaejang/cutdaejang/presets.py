@@ -1,6 +1,6 @@
 """공통 스타일·배치 프리셋 — A(draft)/B(직접 렌더) 출력 간 시각적 일관성의 기준점 (기획안 §1.4, §7-4).
 
-draft_builder와 render_engine(ass_writer)은 여기 정의된 값에서 각자 포맷으로 변환한다.
+render_engine(ass_writer)이 여기 정의된 값에서 ASS 포맷으로 변환한다.
 """
 
 from __future__ import annotations

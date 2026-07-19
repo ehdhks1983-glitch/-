@@ -4,15 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cutdaejang"
-version = "0.40.1"
-description = "컷대장 — CapCut 쇼츠·영상 조립 자동화 (대본→TTS→배경→자막→draft/mp4)"
+version = "0.41.0"
+description = "컷대장 — 유튜브 쇼츠·영상 자동 제작 (대본→TTS→배경→자막→mp4)"
 requires-python = ">=3.10"
 # 런타임 의존성 없음(표준 라이브러리만) — PyInstaller 패키징·고객 PC 설치 문제 최소화.
-# FFmpeg/ffprobe(libass 포함 빌드)는 외부 바이너리로 동봉한다 (기획안 §4, §10).
+# FFmpeg/ffprobe(libass 포함 빌드)는 외부 바이너리로 동봉한다.
 dependencies = []
 
 [project.optional-dependencies]
-draft = ["pycapcut"]        # 출력 A: CapCut draft 조립
 dev = ["pytest>=7"]
 
 [project.scripts]

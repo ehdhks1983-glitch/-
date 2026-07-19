@@ -46,9 +46,6 @@ if not exist "windows\ffmpeg\bin\ffmpeg.exe" (
     exit /b 1
 )
 
-rem ---------- 3) 캡컷 draft용 pycapcut - 선택 사항 ----------
-python -m pip install -q pycapcut
-if errorlevel 1 echo [i] pycapcut 설치 실패 — 캡컷 draft 출력만 비활성. mp4 출력은 정상.
 
 rem ---------- 4) 최종 진단 ----------
 set "CUTDAEJANG_FFMPEG=%CD%\windows\ffmpeg\bin\ffmpeg.exe"

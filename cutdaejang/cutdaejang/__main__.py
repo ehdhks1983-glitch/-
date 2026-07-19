@@ -80,13 +80,6 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         present = bool(os.environ.get(key))
         print(("✅" if present else "ℹ️ ") + f" {label} API 키: {'설정됨' if present else '없음 (해당 제공자 사용 불가)'}")
 
-    try:
-        import pycapcut  # noqa: F401, PLC0415
-
-        print("✅ pycapcut 설치됨 (출력 A 사용 가능)")
-    except ImportError:
-        print("ℹ️  pycapcut 없음 — 출력 A(draft) 비활성, 출력 B(mp4)는 정상")
-
     print("\n진단 결과:", "정상" if ok else "조치 필요")
     return 0 if ok else 1
 
@@ -109,7 +102,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         hook=(getattr(args, "hook", "") or "").replace("\\n", "\n"),
         user_background=args.background,
         main_video_path=args.main_video,
-        drafts_dir=args.drafts_dir,
         render=RenderOptions(crf=args.crf, use_gpu=args.gpu),
     )
 
@@ -148,8 +140,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     if result.mp4:
         print(f"  mp4: {result.mp4.out_path} "
               f"(인코더 {result.mp4.encoder}, 실측 {result.mp4.measured_duration_us / 1e6:.2f}s)")
-    if result.draft_path:
-        print(f"  draft: {result.draft_path}")
     for e in result.errors:
         print(f"  ⚠ {e}")
     return 0 if result.status == "ok" else 1
@@ -172,7 +162,6 @@ def _record_history(args, result, opts) -> None:
             duration_us=json.loads(spec_json)["duration_us"] if spec_json else 0,
             spec_json=spec_json,
             out_mp4=result.mp4.out_path if result.mp4 else None,
-            out_draft=result.draft_path or None,
             error="; ".join(result.errors) or None,
             tts_provider=result.tts_provider or None,
         )
@@ -278,7 +267,7 @@ def main(argv=None) -> int:
     run_p.add_argument("--topic", help="쇼츠 주제")
     run_p.add_argument("--script-file", help="검토 완료된 대본 JSON")
     run_p.add_argument("--auto", action="store_true", help="자동 모드 (검토 게이트 스킵, 기본 OFF)")
-    run_p.add_argument("--outputs", default="mp4", help="mp4,draft (기본 mp4)")
+    run_p.add_argument("--outputs", default="mp4", help="mp4 (캡컷 draft 출력은 제거됨)")
     run_p.add_argument("--script-provider", choices=tuple(SCRIPT_PROVIDERS), default="gemini")
     run_p.add_argument("--tts", choices=tuple(TTS_PROVIDERS), default="gemini",
                        help="gemini 선택 시 settings.json의 폴백 체인 적용")
@@ -290,7 +279,6 @@ def main(argv=None) -> int:
     run_p.add_argument("--target-sec", type=int, default=60)
     run_p.add_argument("--background", help="사용자 배경 이미지 경로")
     run_p.add_argument("--main-video", help="메인 영상 파일 경로")
-    run_p.add_argument("--drafts-dir", help="CapCut Drafts 폴더 (출력 A)")
     run_p.set_defaults(func=cmd_run)
 
     demo_p = sub.add_parser("demo", help="오프라인 데모 (키 불필요)")
@@ -302,7 +290,6 @@ def main(argv=None) -> int:
     demo_p.add_argument("--target-sec", type=int, default=30)
     demo_p.add_argument("--background", default=None)
     demo_p.add_argument("--main-video", default=None)
-    demo_p.add_argument("--drafts-dir", default=None)
     demo_p.set_defaults(func=cmd_demo, tts_style="")
 
     edit_p = sub.add_parser("edit", help="내 영상 → 무음컷 + 자동자막 (v1.5)")

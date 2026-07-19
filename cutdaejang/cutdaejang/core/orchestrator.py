@@ -32,7 +32,7 @@ _BGM_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 
 @dataclass
 class JobOptions:
-    outputs: tuple = ("mp4",)            # "mp4"(출력 B) / "draft"(출력 A)
+    outputs: tuple = ("mp4",)            # mp4 전용 (캡컷 draft 출력은 v0.41에서 제거)
     auto_mode: bool = False
     tts_chain: List[str] = field(default_factory=lambda: ["stub"])
     voice: str = ""
@@ -43,7 +43,6 @@ class JobOptions:
     hook: str = ""                       # 상단 제목(훅). 비면 대본 제목 사용
     user_background: Optional[str] = None
     main_video_path: Optional[str] = None
-    drafts_dir: Optional[str] = None
     render: RenderOptions = field(default_factory=RenderOptions)
 
 
@@ -56,7 +55,6 @@ class JobResult:
     script_path: str = ""
     spec_path: str = ""
     mp4: Optional[RenderResult] = None
-    draft_path: str = ""
     tts_provider: str = ""               # 실제 사용된 제공자 (폴백 추적)
     bg_source: str = ""                  # 배경 출처: user/ai/ai_fail:사유/local (v0.40)
     fallback_note: Optional[str] = None
@@ -231,25 +229,9 @@ def run_job(
             except Exception as e:  # noqa: BLE001 — A/B 독립: mp4 실패가 draft를 막지 않게
                 result.errors.append(f"mp4 렌더 실패: {e}")
 
-        if "draft" in opts.outputs:
-            report("draft", 0.0)
-            try:
-                from .draft_builder import build_draft  # noqa: PLC0415
-
-                if not opts.drafts_dir:
-                    raise ValueError("outputs에 draft가 있지만 drafts_dir가 설정되지 않았습니다")
-                draft = build_draft(spec, opts.drafts_dir, f"cutdaejang_{job_id}")
-                result.draft_path = draft.draft_path
-                if not draft.ok:
-                    result.errors += [f"draft 자가검증: {p}" for p in draft.problems]
-            except Exception as e:  # draft 실패는 mp4 산출을 무효화하지 않는다
-                result.errors.append(f"draft 생성 실패: {e}")
 
         mp4_ok = ("mp4" not in opts.outputs) or (result.mp4 is not None and result.mp4.ok)
-        draft_ok = ("draft" not in opts.outputs) or bool(result.draft_path)
-        result.status = "ok" if (mp4_ok and draft_ok and not result.errors) else (
-            "partial" if (mp4_ok or draft_ok) else "failed"
-        )
+        result.status = "ok" if (mp4_ok and not result.errors) else "partial"
     except Exception as e:
         log.exception("작업 실패: %s", job_id)
         result.errors.append(str(e))

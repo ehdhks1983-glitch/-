@@ -363,3 +363,32 @@ def test_diagnostic_report(server):
     assert report.exists()
     text = report.read_text(encoding="utf-8")
     assert "컷대장 진단 리포트" in text and "ffmpeg" in text
+
+
+def test_edit_render_with_trim_and_vrew_delete(server, tmp_path):
+    """v0.41: 앞뒤 트림 + keep 재매핑 — 5.5초 영상을 1~4초만 사용해 완성."""
+    from pathlib import Path
+    from cutdaejang.utils import ffmpeg as ff
+
+    video = _make_talk_video(tmp_path / "trim.mp4")  # 5.5초
+    data = _post(server, "/api/edit", {
+        "video_path": video, "layout": "keep",
+        "auto_subtitle": True, "cut_silence": False,
+        "script": "하나\n둘\n셋\n넷\n다섯",   # 대본 5줄 → 1.1초 간격 배치
+    })
+    job = _wait_status(server, data["job_id"], {"review_subtitle", "failed"}, timeout=180)
+    assert job["status"] == "review_subtitle", job.get("errors")
+    subs = job["subtitles"]
+    assert len(subs) == 5
+
+    res = _post(server, "/api/edit_render", {
+        "job_id": data["job_id"], "subtitles": subs, "hook": "",
+        "keep": None, "speed": 1, "quality": "draft",
+        "trim_start_us": 1_000_000, "trim_end_us": 4_000_000,
+    })
+    assert res.get("ok")
+    done = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert done["status"] == "ok", done.get("errors")
+    dur = ff.probe_duration_us(done["mp4"]) / 1e6
+    assert 2.5 <= dur <= 3.6, dur  # 3초 구간만 사용
+    assert "트림" in (done.get("note") or "")
