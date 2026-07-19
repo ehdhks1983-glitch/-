@@ -594,3 +594,18 @@ def test_upload_kit_on_generated_job(server):
     k = _post(server, "/api/upload_kit", {"job_id": res["job_id"]})
     assert k["kit"]["titles"] and k["kit"]["tiktok"]["caption"]
     assert k["kit"]["threads"]["post"]
+
+
+def test_thumbnail_api_preset(server, tmp_path):
+    """v0.48 — 썸네일 프리셋 API: 임팩트 스타일이 UI 선택값으로 만들어지는지."""
+    from cutdaejang.utils import ffmpeg as ff
+
+    bg = tmp_path / "tb.png"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+            "-i", "color=c=0x224466:s=1280x720:d=0.1", "-frames:v", "1", str(bg)])
+    data = _post(server, "/api/thumbnail", {
+        "title": "프리셋 테스트 | 테스트", "bg_path": str(bg), "preset": "임팩트"})
+    assert data.get("ok") and data["path"].endswith("thumbnail.png")
+    assert ff.probe_video_size(data["path"]) == (1280, 720)
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="thumbStyleSel"' in html and 'id="thumbAiBg"' in html

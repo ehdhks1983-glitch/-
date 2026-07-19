@@ -1287,11 +1287,27 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             out_dir = Path(job["job_dir"]) if job and job.get("job_dir") else Path(bg).parent
             out = str(out_dir / "thumbnail.png")
+            preset = (params.get("preset") or "깔끔").strip()
+            if params.get("ai_bg") and os.environ.get("GEMINI_API_KEY"):
+                # 🖼 AI 배경 연출 (v0.48) — 집중선·스포트라이트 판. 실패하면 영상 프레임으로
+                try:
+                    from ..spec import Canvas  # noqa: PLC0415
+                    prov = background_generator.GeminiImage(
+                        model=config.load_settings()["bg"].get("image_model"))
+                    bg = prov.generate(
+                        (f"유튜브 썸네일 배경: {title}. 만화 집중선이나 스포트라이트처럼 "
+                         "시선을 확 모으는 임팩트 연출, 중앙에 큰 글자를 올릴 여백, "
+                         "채도 높고 대비 강하게. 글자·문자·로고는 절대 넣지 말 것"),
+                        str(out_dir / "thumb_ai_bg.png"), Canvas(w=1280, h=720))
+                except Exception as be:  # noqa: BLE001
+                    logging.getLogger("cutdaejang").warning(
+                        "썸네일 AI 배경 실패 → 영상 프레임 사용: %s", be)
             try:
                 thumb.make_thumbnail(
                     bg, title, out, highlight=params.get("highlight", ""),
                     badge=(params.get("badge") or "").strip(),
                     style=build_style(config.load_settings()),
+                    preset=preset,
                 )
                 if job:
                     _set_job(job["id"], thumbnail=out)
@@ -2039,7 +2055,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.47)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.48)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2699,6 +2715,17 @@ _HTML = """<!doctype html>
           <button class="ghost" style="white-space:nowrap" onclick="suggestThumb(event)">✨ AI 카피 추천</button>
         </div>
         <div id="thumbCands" class="hookcands"></div>
+        <div class="chk" style="gap:8px;margin-top:6px;flex-wrap:wrap">
+          <span>스타일</span>
+          <select id="thumbStyleSel" style="width:auto;padding:6px 8px">
+            <option value="임팩트" selected>💥 임팩트 — 노랑 입체+기울임 (추천)</option>
+            <option value="포인트">🎨 포인트 — 줄마다 색 교차</option>
+            <option value="입체3D">🧱 입체 3D — 빨강 돌출 기둥</option>
+            <option value="깔끔">⬜ 깔끔 — 반투명 띠 (기존)</option>
+          </select>
+          <input type="checkbox" id="thumbAiBg">
+          <span class="hint">🖼 AI 배경 연출 — 집중선·스포트라이트 판을 AI가 그림 (Gemini 키)</span>
+        </div>
         <div class="row" style="margin-top:6px">
           <div>
             <label style="margin-top:0">우상단 배지 <span class="hint">(선택 · 초록 라벨)</span></label>
@@ -3785,7 +3812,9 @@ async function makeThumb(ev){
   try{
     const data=await (await fetch('/api/thumbnail',{method:'POST',
       body:JSON.stringify({job_id:currentJob, title,
-        badge:($('thumbBadge')||{}).value||'', bg_path:($('thumbBg')||{}).value||''})})).json();
+        badge:($('thumbBadge')||{}).value||'', bg_path:($('thumbBg')||{}).value||'',
+        preset:(($('thumbStyleSel')||{}).value)||'임팩트',
+        ai_bg:(($('thumbAiBg')||{}).checked)||false})})).json();
     if(data.error){ alert(data.error); return; }
     $('thumbImg').src=(data.url||'')+'?t='+Date.now();
     $('thumbPath').textContent='저장됨: '+(data.path||'');
