@@ -1,8 +1,8 @@
 """한글 발음 표기 치환 — TTS 오독 방지 (기획안 §6 탭②, §7-6).
 
-숫자·단위·영어 약어를 한글 읽기로 바꾼다. 검토 화면의 [발음 변환] 버튼이 호출하며,
-자동 치환은 하지 않는다(엔진 자체 숫자 읽기가 대체로 정확해 무조건 변환이 오히려
-오독을 만들 수 있음 — 사용자가 결과를 보고 확정하는 흐름).
+숫자·단위·영어 약어를 한글 읽기로 바꾼다. 검토 화면의 [발음 변환] 버튼이 호출하고,
+v0.46.1부터는 TTS 합성 직전에도 자동 적용된다(자막은 원문 유지, 소리만 변환 —
+사용자 발음 부정확 리포트 반영. 설정 tts.auto_pronounce=false로 끌 수 있음).
 
 규칙 요약:
   - 한자어 수사(sino): 년·월·일·분·초·원·퍼센트·미터 등 → 이천이십육년, 삼십분
@@ -93,12 +93,13 @@ _RE_DECIMAL_UNIT = re.compile(rf"(\d+)\.(\d+)\s?(?:({_SINO_UNITS})|%)")
 _RE_DECIMAL = re.compile(r"(\d+)\.(\d+)")
 _RE_MONTH = re.compile(r"(?<![\d.])(\d{1,2})월")
 _RE_NATIVE = re.compile(rf"(?<![\d.])(\d{{1,2}})\s?({_NATIVE_COUNTERS})")
-_RE_SINO_UNIT = re.compile(rf"(?<![\d.])([\d,]+)\s?(?:({_SINO_UNITS})|%)")
-_RE_BARE_NUMBER = re.compile(r"(?<![\d.,])([\d,]{1,15})(?![\d.,])")
+_RE_SINO_UNIT = re.compile(rf"(?<![\d.])(\d[\d,]*)\s?(?:({_SINO_UNITS})|%)")
+# 숫자 최소 1개 필수 — "습관, 삼십" 같은 맨 쉼표가 매칭돼 int('') 크래시하던 버그 수정 (v0.46.1)
+_RE_BARE_NUMBER = re.compile(r"(?<![\d.,])(\d[\d,]{0,14})(?![\d.,])")
 
 
 def _digits(raw: str) -> int:
-    return int(raw.replace(",", ""))
+    return int(raw.replace(",", "") or "0")
 
 
 def pronounce_ko(text: str) -> str:

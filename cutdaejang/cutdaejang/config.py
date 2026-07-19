@@ -30,6 +30,7 @@ DEFAULTS: dict = {
         "sovits_ref_audio": "",                 # 참조 녹음(5~10초) 경로
         "sovits_ref_text": "",                  # 참조 녹음에서 말한 문장
         "windows_rate": 0,                      # 내장 음성 말 속도 -10~10 (v0.44)
+        "auto_pronounce": True,                 # TTS 앞 숫자·영어 한글 발음 변환 (v0.46.1)
     },
     "audio": {
         "gap_ms": 220,                # 문장 간격
@@ -62,7 +63,7 @@ DEFAULTS: dict = {
         "motion": "zoom_in",          # zoom_in | zoom_out | off
         "motion_amount": 0.08,        # 총 줌 비율 (8%)
         "ai_image": True,             # AI 배경 (v0.45부터 기본 켬 — 키 없으면 자동 생략)
-        "image_model": "gemini-2.5-flash-image-preview",  # 모델 가용성 변동 대비 설정화
+        "image_model": "gemini-2.5-flash-image",  # 정식명 (없으면 자동 폴백, v0.46.1)
         "scene_images": True,         # 문장(장면)마다 새 이미지 (v0.45. 끄면 1장+줌)
         "image_style": "일러스트",     # 장면 그림체 — background_generator.IMAGE_STYLES 키
     },

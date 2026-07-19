@@ -52,13 +52,27 @@ def normalize_to_canvas(src_path: str, out_path: str, canvas: Canvas) -> str:
 
 
 # AI 이미지 배경은 모델 가용성이 API 버전·계정·지역마다 달라 불안정하다.
-# 그래서 기본은 로컬 그라데이션(항상 동작)이고, AI 이미지는 opt-in + 실패 시 자동 폴백.
+# 그래서 기본은 로컬 그라데이션(항상 동작)이고, AI 이미지는 실패 시 자동 폴백.
 # 모델명은 설정(bg.image_model)으로 교체 가능 — 새 모델이 나와도 재빌드 없이 대응.
-DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image-preview"
+DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image"
+
+# 모델을 못 찾으면(404 등) 이 순서로 자동 재시도 — 프리뷰명 퇴역/개명 대응 (v0.46.1)
+IMAGE_MODEL_FALLBACKS = [
+    "gemini-2.5-flash-image",                    # 정식(GA) 이름
+    "gemini-2.5-flash-image-preview",            # 구 프리뷰 이름
+    "gemini-2.0-flash-preview-image-generation",  # 더 옛 이름 (최후)
+]
+
+_MODEL_GONE_MARKS = ("404", "NOT_FOUND", "not found", "is not supported",
+                     "does not exist", "PERMISSION_DENIED")
 
 
 class GeminiImage:
-    """Gemini 이미지 생성 — 세로형 배경 (모델은 설정으로 교체 가능)."""
+    """Gemini 이미지 생성 — 세로형 배경 (모델은 설정으로 교체 가능).
+
+    설정된 모델이 없어졌으면(프리뷰 퇴역 등) 대체 모델명으로 자동 재시도하고,
+    성공한 모델을 기억해 다음 장면부터는 바로 그 모델을 쓴다.
+    """
 
     name = "gemini"
 
@@ -69,13 +83,39 @@ class GeminiImage:
     ):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
         self.model = model
+        self._working_model: Optional[str] = None  # 폴백으로 확정된 모델 (프로세스 내)
         if not self.api_key:
             raise BackgroundError("GEMINI_API_KEY가 설정되어 있지 않습니다")
 
     def generate(self, prompt: str, out_path: str, canvas: Canvas) -> str:
+        if self._working_model:
+            candidates = [self._working_model]
+        else:
+            candidates = [self.model] + [m for m in IMAGE_MODEL_FALLBACKS if m != self.model]
+        last: Optional[BackgroundError] = None
+        for model in candidates:
+            try:
+                result = self._generate_with(model, prompt, out_path, canvas)
+                if self._working_model != model:
+                    self._working_model = model
+                    if model != self.model:
+                        import logging  # noqa: PLC0415
+                        logging.getLogger("cutdaejang").warning(
+                            "이미지 모델 '%s' 사용 불가 → '%s'로 자동 교체 "
+                            "(설정 bg.image_model을 이 값으로 바꾸면 더 빨라요)",
+                            self.model, model)
+                return result
+            except BackgroundError as e:
+                last = e
+                msg = str(e)
+                if not any(k in msg for k in _MODEL_GONE_MARKS):
+                    raise  # 모델 문제가 아니면(한도·네트워크 등) 다른 모델을 시도해도 소용없음
+        raise last if last else BackgroundError("이미지 생성 실패")
+
+    def _generate_with(self, model: str, prompt: str, out_path: str, canvas: Canvas) -> str:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent"
+            f"{model}:generateContent"
         )
         payload = {
             "contents": [

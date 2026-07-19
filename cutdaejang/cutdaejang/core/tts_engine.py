@@ -490,18 +490,21 @@ def postprocess_clip(raw_path: str, out_wav: str, audio_cfg: dict) -> Tuple[int,
 
     (트림 전 길이, 트림 후 길이)를 μs로 반환 — pacing 로그용.
     """
-    threshold = audio_cfg.get("trim_threshold_db", -45)
-    pad_s = audio_cfg.get("edge_pad_ms", 30) / 1000.0
+    # v0.46.1: 트림을 덜 공격적으로(-50dB 이하만), 앞뒤 여유를 50ms 이상으로 —
+    # 문장 경계가 뚝뚝 끊기고 숨결·여운이 잘리던 문제 완화 (설정값이 더 부드러우면 존중)
+    threshold = min(audio_cfg.get("trim_threshold_db", -45), -50)
+    pad_ms = max(audio_cfg.get("edge_pad_ms", 30), 50)
+    pad_s = pad_ms / 1000.0
     lufs = audio_cfg.get("lufs", -16)
     raw_us = ff.probe_duration_us(str(raw_path))
 
     sr = f"silenceremove=start_periods=1:start_threshold={threshold}dB"
     filters = (
         f"{sr},areverse,{sr},"
-        "afade=t=in:d=0.01,areverse,afade=t=in:d=0.01,"   # 양끝 10ms 페이드 (클릭 방지)
+        "afade=t=in:d=0.02,areverse,afade=t=in:d=0.02,"   # 양끝 20ms 페이드 (클릭 방지)
         f"loudnorm=I={lufs}:TP=-1.5:LRA=11,"
         "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo,"
-        f"adelay={audio_cfg.get('edge_pad_ms', 30)}:all=1,apad=pad_dur={pad_s}"
+        f"adelay={pad_ms}:all=1,apad=pad_dur={pad_s}"
     )
     ff.run(
         [
@@ -638,6 +641,14 @@ class TTSEngine:
         )
 
     def synth_sentence(self, text: str, voice: str = "") -> Path:
+        # 숫자·영어를 한글 발음으로 (2026년→이천이십육년, AI→에이아이) — 오독 방지 (v0.46.1).
+        # 자막은 원문 그대로, TTS 입력만 바꾼다. 캐시 키도 변환 후 텍스트 기준.
+        if self.settings["tts"].get("auto_pronounce", True):
+            from ..utils.pronounce import pronounce_ko  # noqa: PLC0415
+            try:
+                text = pronounce_ko(text)
+            except Exception:  # noqa: BLE001 — 발음 변환 문제로 합성이 죽으면 안 됨
+                pass
         voice = self._resolve_voice(voice)
         out = self.cache_path(text, voice)
         if out.exists():

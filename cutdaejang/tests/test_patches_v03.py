@@ -574,3 +574,25 @@ def test_windows_tts_rate_setting():
     # PS1 템플릿에 치환 지점이 있고, 치환하면 사라짐
     assert "__RATE__" in te._SAPI_PS1
     assert "__RATE__" not in te._SAPI_PS1.replace("__RATE__", "2")
+
+
+def test_tts_auto_pronounce(tmp_path):
+    """v0.46.1 — TTS 입력에 발음 변환 자동 적용 (자막 원문과 별개, 설정으로 끔)."""
+
+    class Capture:
+        name = "stub"
+        def __init__(self):
+            self.texts = []
+        def synthesize(self, text, voice, out_path):
+            self.texts.append(text)
+            return tts_engine.StubTTS().synthesize("네", voice, out_path)
+
+    prov = Capture()
+    eng = tts_engine.TTSEngine(prov, tmp_path / "c", settings=config.load_settings())
+    eng.synth_sentence("2026년 AI 트렌드 3가지")
+    assert prov.texts == ["이천이십육년 에이아이 트렌드 세가지"]
+
+    off = config.deep_merge(config.load_settings(), {"tts": {"auto_pronounce": False}})
+    prov2 = Capture()
+    tts_engine.TTSEngine(prov2, tmp_path / "c2", settings=off).synth_sentence("2026년 AI")
+    assert prov2.texts == ["2026년 AI"]  # 끄면 원문 그대로

@@ -129,3 +129,41 @@ def test_run_job_scene_background_integration(tmp_path):
         opts=JobOptions(tts_chain=["stub"], auto_mode=True), image_provider=prov2)
     spec2 = TimelineSpec.load(f"{res2.job_dir}/spec.json")
     assert spec2.background.type == "image" and res2.bg_source == "ai"
+
+
+def test_gemini_image_model_fallback(monkeypatch, tmp_path):
+    """v0.46.1 — 설정 모델이 404면 대체 모델로 자동 재시도 + 성공 모델 기억."""
+    from cutdaejang.core import background_generator as bgm
+
+    calls = []
+
+    def fake_post(url, payload, headers):
+        model = url.split("/models/")[1].split(":")[0]
+        calls.append(model)
+        if "preview" in model:
+            raise RuntimeError("HTTP 404 NOT_FOUND: model not found")
+        import base64
+        png = (tmp_path / "src.png")
+        if not png.exists():
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "color=c=orange:s=90:160:d=0.1".replace(":s=90:160", ":s=90x160"),
+                    "-frames:v", "1", str(png)])
+        return {"candidates": [{"content": {"parts": [
+            {"inlineData": {"data": base64.b64encode(png.read_bytes()).decode()}}]}}]}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(bgm, "_http_post_json", fake_post)
+    canvas = Canvas(w=90, h=160, fps=30)
+    prov = bgm.GeminiImage(model="gemini-2.5-flash-image-preview")  # 옛 설정값 시나리오
+    out1 = prov.generate("장면", str(tmp_path / "a.png"), canvas)
+    assert out1 and calls == ["gemini-2.5-flash-image-preview", "gemini-2.5-flash-image"]
+    prov.generate("장면2", str(tmp_path / "b.png"), canvas)
+    assert calls[-1] == "gemini-2.5-flash-image" and len(calls) == 3  # 기억 → 바로 성공 모델
+
+    # 모델 문제가 아닌 오류(한도 등)는 폴백 없이 즉시 전달
+    def quota_post(url, payload, headers):
+        raise RuntimeError("HTTP 429 RESOURCE_EXHAUSTED: quota")
+    monkeypatch.setattr(bgm, "_http_post_json", quota_post)
+    prov2 = bgm.GeminiImage(model="gemini-2.5-flash-image")
+    with pytest.raises(bgm.BackgroundError, match="429"):
+        prov2.generate("장면", str(tmp_path / "c.png"), canvas)

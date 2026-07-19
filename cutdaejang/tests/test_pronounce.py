@@ -46,3 +46,10 @@ def test_native_det(n, expected):
 )
 def test_pronounce_ko(text, expected):
     assert pronounce_ko(text) == expected
+
+
+def test_bare_comma_does_not_crash():
+    """v0.46.1 — 맨 쉼표([\\d,]가 ','만 매칭)로 int('') 크래시하던 버그."""
+    assert pronounce_ko("정리 습관, 삼십 초만 집중해 주세요.") == "정리 습관, 삼십 초만 집중해 주세요."
+    assert pronounce_ko(",") == ","
+    assert pronounce_ko("쉼표 1,000원") == "쉼표 천원"  # 진짜 숫자+쉼표는 그대로 동작
