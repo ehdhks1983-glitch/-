@@ -594,6 +594,11 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
             style.hook_scale = 1.0
+        try:  # ↕ 검토 화면에서 드래그한 자막 세로 위치 (v0.49)
+            if int(ep.get("margin_v") or 0):
+                style.margin_v = max(60, min(1400, int(ep["margin_v"])))
+        except (TypeError, ValueError):
+            pass
         if ep.get("narr_style"):  # 내레이션 말투 스타일 (Gemini TTS 프롬프트에 반영)
             settings = config.deep_merge(settings, {"tts": {"style_preset": ep["narr_style"]}})
         orig_audio = ep.get("orig_audio") or "keep"
@@ -819,6 +824,11 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
             style.hook_scale = 1.0
+        try:  # ↕ 드래그한 자막 위치 (v0.49)
+            if int(ep.get("margin_v") or 0):
+                style.margin_v = max(60, min(1400, int(ep["margin_v"])))
+        except (TypeError, ValueError):
+            pass
         for gi, (kind, item) in enumerate(plan, 1):
             _set_job(job_id, status="running", stage="render", frac=(gi - 1) / len(plan),
                      note=f"쇼츠 {gi}/{len(plan)} 만드는 중…{note_extra}")
@@ -1172,6 +1182,9 @@ class _Handler(BaseHTTPRequestHandler):
             if params.get("hook_scale") is not None:
                 ep["hook_scale"] = params.get("hook_scale")
                 _set_job(job["id"], edit_params=ep)
+            if params.get("margin_v"):  # ↕ 검토 화면에서 드래그한 자막 위치 (v0.49)
+                ep["margin_v"] = params.get("margin_v")
+                _set_job(job["id"], edit_params=ep)
             hook = params.get("hook", ep.get("hook", ""))
             keep = params.get("keep")  # 고른 구간(번호). None이면 전체 유지
             if keep is not None:
@@ -1237,6 +1250,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "자막 검토 중인 작업이 아닙니다"}, 400)
                 return
             ep = job.get("edit_params") or {}
+            if params.get("margin_v"):  # ↕ 드래그한 자막 위치는 분할 쇼츠에도 동일 적용
+                ep["margin_v"] = params.get("margin_v")
+                _set_job(job["id"], edit_params=ep)
             try:
                 target = float(params.get("target_sec") or 30)
                 speed = float(params.get("speed") or 1.0)
@@ -1303,11 +1319,16 @@ class _Handler(BaseHTTPRequestHandler):
                     logging.getLogger("cutdaejang").warning(
                         "썸네일 AI 배경 실패 → 영상 프레임 사용: %s", be)
             try:
+                pos_x = float(params.get("pos_x") or 0.5)
+                pos_y = float(params.get("pos_y") or 0.46)
+            except (TypeError, ValueError):
+                pos_x, pos_y = 0.5, 0.46
+            try:
                 thumb.make_thumbnail(
                     bg, title, out, highlight=params.get("highlight", ""),
                     badge=(params.get("badge") or "").strip(),
                     style=build_style(config.load_settings()),
-                    preset=preset,
+                    preset=preset, pos_x=pos_x, pos_y=pos_y,
                 )
                 if job:
                     _set_job(job["id"], thumbnail=out)
@@ -2055,7 +2076,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.48)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.49)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2560,7 +2581,13 @@ _HTML = """<!doctype html>
       <div class="hint" style="font-size:13px;color:#cdd3e0">① 아래 자막에서 <b>틀린 글자만 고치세요</b> (칸을 누르면 영상이 멈춰요) → ② 쇼츠로 줄이려면 ✂️ 줄에서 구간을 고르거나 [✨ AI 핵심 추천] → ③ 맨 아래 <b>[✅ 완성]</b> 버튼</div>
       <div class="hint">각 줄 <b>▶</b>=듣기 · <b>✂</b>=줄 나누기 · <b>🗑</b>=<b>자막+영상 구간 통째 삭제</b>(브루식 — 체크박스 다시 켜면 복구) · <b>✕</b>=자막만 삭제(영상 유지) · <b>스페이스바</b>=재생/정지 · 💛 강조 <b>| 단어</b>, 색 <b>[노랑]글자[/]</b></div>
       <div class="playbar">
-        <video id="cutPlayer" controls playsinline></video>
+        <div id="playerWrap" style="position:relative;line-height:0">
+          <video id="cutPlayer" controls playsinline style="width:100%"></video>
+          <div id="subPosBar" title="드래그해서 자막 위치를 옮기세요"
+               style="position:absolute;left:6%;right:6%;height:34px;bottom:25%;cursor:ns-resize;border:2px dashed rgba(255,217,64,.85);border-radius:8px;background:rgba(255,217,64,.10);display:flex;align-items:center;justify-content:center;touch-action:none;user-select:none;z-index:5">
+            <span style="font-size:12px;color:#ffd940;background:rgba(0,0,0,.55);padding:1px 8px;border-radius:6px;line-height:1.4">↕ 자막 위치</span>
+          </div>
+        </div>
         <div class="playrow">
           <button class="ghost pbtn" id="playToggle" onclick="togglePlay(event)">▶ 재생</button>
           <span class="hint" id="playClock" style="min-width:64px">0:00</span>
@@ -2736,7 +2763,7 @@ _HTML = """<!doctype html>
             <input type="text" id="thumbBg" placeholder="내 사진 경로 붙여넣기 (png/jpg)">
           </div>
         </div>
-        <button onclick="makeThumb(event)">이 제목으로 썸네일 만들기</button>
+        <button id="thumbMakeBtn" onclick="makeThumb(event)">이 제목으로 썸네일 만들기</button>
         <div id="thumbResult" class="hidden" style="margin-top:10px">
           <img id="thumbImg" style="width:100%;border-radius:10px;border:1px solid #262b3a" alt="썸네일">
           <div class="hint" id="thumbPath" style="margin-top:6px"></div>
@@ -3398,6 +3425,34 @@ async function refineSubs(ev){
     const r=$('hlReason'); if(r) r.textContent='🪄 AI가 대본을 다듬었어요. 어색한 부분은 직접 더 고치세요.';
   } finally { btn.disabled=false; btn.textContent=old; }
 }
+// ── ↕ 자막 위치 드래그 (v0.49) — 노란 점선 상자를 끌면 그 높이로 자막이 들어감 ──
+function initSubPosBar(){
+  const bar=$('subPosBar'), wrap=$('playerWrap');
+  if(!bar || !wrap || bar._init) return;
+  bar._init=true;
+  let drag=false;
+  bar.addEventListener('pointerdown', e=>{ e.preventDefault(); drag=true; bar.setPointerCapture(e.pointerId); });
+  bar.addEventListener('pointermove', e=>{
+    if(!drag) return;
+    const r=wrap.getBoundingClientRect();
+    let frac=(r.bottom-e.clientY)/r.height;         // 아래에서부터의 비율
+    frac=Math.max(0.05, Math.min(0.72, frac));
+    bar.style.bottom=(frac*100)+'%';
+    window._subMarginV=Math.round(frac*1920);       // 쇼츠 캔버스(1920) 기준 px
+    bar.firstElementChild.textContent='↕ 자막 위치 — 아래에서 '+Math.round(frac*100)+'%';
+  });
+  const up=()=>{ drag=false; };
+  bar.addEventListener('pointerup', up); bar.addEventListener('pointercancel', up);
+}
+function resetSubPosBar(defMv){
+  window._subMarginV=0;                              // 0 = 설정 기본값 그대로
+  const bar=$('subPosBar');
+  if(!bar) return;
+  bar.style.bottom=(Math.max(0.05, Math.min(0.72, (defMv||480)/1920))*100)+'%';
+  bar.firstElementChild.textContent='↕ 자막 위치';
+  initSubPosBar();
+}
+
 function seekCut(us){ const p=$('cutPlayer'); p.currentTime=us/1e6; p.play(); }
 function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return m+':'+String(s).padStart(2,'0'); }
 function togglePlay(ev){ if(ev&&ev.preventDefault)ev.preventDefault(); const p=$('cutPlayer'); if(!p||!p.src) return; if(p.paused) p.play(); else p.pause(); }
@@ -3542,7 +3597,7 @@ async function renderSplit(ev){
   const speed=parseFloat(($('outSpeed')||{}).value||'1');
   const quality=($('outQuality')||{}).value||'standard';
   const res=await fetch('/api/edit_split',{method:'POST',body:JSON.stringify(
-    {job_id:currentJob, subtitles:subs, target_sec:target, hook:$('editHook').value, speed, quality, trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0)})});
+    {job_id:currentJob, subtitles:subs, target_sec:target, hook:$('editHook').value, speed, quality, trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -3558,7 +3613,7 @@ async function renderEdited(){
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
   const quality=($('outQuality')||{}).value || 'standard';
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0)})});
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -3808,18 +3863,39 @@ async function makeThumb(ev){
   if(ev)ev.preventDefault();
   const title=($('thumbTitle').value||'').trim();
   if(!title){ alert('썸네일 제목을 입력하세요'); return; }
-  const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='만드는 중…';
+  // 클릭 이동 재생성처럼 ev 없이 불려도 동작 (v0.49)
+  const btn=(ev&&ev.target)||$('thumbMakeBtn'); btn.disabled=true; const old=btn.textContent; btn.textContent='만드는 중…';
   try{
+    const tp=window._thumbPos||[0.5,0.46];
     const data=await (await fetch('/api/thumbnail',{method:'POST',
       body:JSON.stringify({job_id:currentJob, title,
         badge:($('thumbBadge')||{}).value||'', bg_path:($('thumbBg')||{}).value||'',
         preset:(($('thumbStyleSel')||{}).value)||'임팩트',
-        ai_bg:(($('thumbAiBg')||{}).checked)||false})})).json();
+        ai_bg:(($('thumbAiBg')||{}).checked)||false,
+        pos_x:tp[0], pos_y:tp[1]})})).json();
     if(data.error){ alert(data.error); return; }
     $('thumbImg').src=(data.url||'')+'?t='+Date.now();
-    $('thumbPath').textContent='저장됨: '+(data.path||'');
+    $('thumbPath').textContent='저장됨: '+(data.path||'')+'  ·  💡 썸네일을 클릭하면 그 자리로 글자가 이동해요';
     $('thumbResult').classList.remove('hidden');
+    initThumbPos();
   } finally { btn.disabled=false; btn.textContent=old; }
+}
+
+// ── 🖱 썸네일 글자 위치 — 결과 이미지를 클릭(드래그)하면 그 자리로 재생성 (v0.49) ──
+function initThumbPos(){
+  const img=$('thumbImg');
+  if(!img || img._posInit) return;
+  img._posInit=true;
+  img.style.cursor='crosshair';
+  let down=false;
+  img.addEventListener('pointerdown', e=>{ e.preventDefault(); down=true; });
+  img.addEventListener('pointerup', e=>{
+    if(!down) return; down=false;
+    if((($('thumbStyleSel')||{}).value)==='깔끔'){ alert('글자 위치 이동은 임팩트·포인트·입체3D 스타일에서 돼요'); return; }
+    const r=img.getBoundingClientRect();
+    window._thumbPos=[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height];
+    makeThumb();   // 새 위치로 다시 렌더 (버튼과 동일 경로)
+  });
 }
 
 // ── 📦 유튜브 업로드 키트 (v0.39) — 제목·태그·설명·카테고리 원클릭 생성 ──
@@ -4146,6 +4222,7 @@ async function poll(){
       for(const f of state.bgm_files){ $('bgmSel').add(new Option(f, f)); $('bgmEditSel').add(new Option(f, f)); }
     }
     if(state.settings) fillSettings(state.settings);
+    window._settings = state.settings || {};
     // v0.45: 마지막에 쓴 장면 그림체 복원
     const bgst = ((state.settings || {}).bg || {}).image_style;
     if(bgst && $('genBgStyle') && [...$('genBgStyle').options].some(o => o.value === bgst))
@@ -4205,6 +4282,7 @@ async function poll(){
     window._subLoaded = true;
     window._trimStart = 0; window._trimEnd = 0;
     if($('trimInfo')) $('trimInfo').textContent = '전체 사용';
+    resetSubPosBar(((window._settings||{}).subtitle||{}).margin_v);  // ↕ 자막 위치 (v0.49)
     // 강조 단어가 있으면 "문장 | 단어" 형태로 보여줘 그 자리에서 수정 가능
     window._subs = (job.subtitles || []).map(s => ({
       text: s.highlight ? (s.text + ' | ' + s.highlight) : s.text,

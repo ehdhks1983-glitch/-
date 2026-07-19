@@ -142,7 +142,8 @@ def _esc_ass(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")").strip()
 
 
-def _preset_events(title: str, highlight: str, p: dict, w: int, h: int) -> str:
+def _preset_events(title: str, highlight: str, p: dict, w: int, h: int,
+                   pos_x: float = 0.5, pos_y: float = 0.46) -> str:
     """제목(여러 줄)을 입체 레이어 이벤트로 — 아래 깊이 기둥 + 맨 위 컬러 글자.
 
     줄 안의 " | 단어"는 그 줄의 강조 단어(포인트색)로 해석한다 (훅과 동일 문법).
@@ -165,8 +166,10 @@ def _preset_events(title: str, highlight: str, p: dict, w: int, h: int) -> str:
     while len(lines) * line_gap > h * 0.72 and size > 40:
         size = int(size * 0.9)
         line_gap = int(size * 1.18)
-    cx = w // 2
-    y0 = int(h * 0.46) - line_gap * (len(lines) - 1) // 2
+    # 글자 블록 중심 — 마우스로 옮긴 위치 (v0.49). 화면 밖으로 못 나가게 클램프
+    cx = int(w * max(0.15, min(0.85, pos_x)))
+    cy = int(h * max(0.12, min(0.85, pos_y)))
+    y0 = cy - line_gap * (len(lines) - 1) // 2
     bord = max(3, int(size * 0.075))
     hl = _ass_bgr(p["hl"])
     events = []
@@ -196,10 +199,11 @@ def _preset_events(title: str, highlight: str, p: dict, w: int, h: int) -> str:
 
 def _write_preset_ass(title: str, highlight: str, preset: str, style: Style,
                       w: int, h: int, path: Path, badge: str = "",
-                      badge_color: str = "#16A34A") -> str:
+                      badge_color: str = "#16A34A",
+                      pos_x: float = 0.5, pos_y: float = 0.46) -> str:
     p = THUMB_PRESETS[preset]
     badge_size = max(28, int(h * 0.055))
-    events = _preset_events(title, highlight, p, w, h)
+    events = _preset_events(title, highlight, p, w, h, pos_x=pos_x, pos_y=pos_y)
     if badge.strip():
         events += ("\nDialogue: 2,0:00:00.00,0:00:10.00,Badge,,0,0,0,,"
                    + hook_dialogue_text(badge.strip(), style).replace("\n", " "))
@@ -227,6 +231,8 @@ def make_thumbnail(
     fonts_dir: str = DEFAULT_FONTS_DIR,
     workdir: Optional[str] = None,
     preset: str = "깔끔",
+    pos_x: float = 0.5,
+    pos_y: float = 0.46,
 ) -> str:
     """배경(영상/사진) + 제목 → 16:9 유튜브 썸네일 PNG.
 
@@ -248,7 +254,8 @@ def make_thumbnail(
 
     if preset in THUMB_PRESETS:
         ass = _write_preset_ass(title, highlight, preset, style, w, h,
-                                work / "thumb.ass", badge=badge, badge_color=badge_color)
+                                work / "thumb.ass", badge=badge, badge_color=badge_color,
+                                pos_x=pos_x, pos_y=pos_y)
         # 배경을 어둡고 진하게 눌러 글자가 튀게 + 가장자리 비네트 (업체 썸네일 문법)
         grade = "eq=brightness=-0.12:contrast=1.14:saturation=1.15,vignette"
     else:

@@ -609,3 +609,82 @@ def test_thumbnail_api_preset(server, tmp_path):
     assert ff.probe_video_size(data["path"]) == (1280, 720)
     html = _get(server, "/").read().decode("utf-8")
     assert 'id="thumbStyleSel"' in html and 'id="thumbAiBg"' in html
+
+
+def test_edit_render_custom_margin_v(server, tmp_path):
+    """v0.49 — 검토 화면에서 드래그한 자막 위치(margin_v)가 렌더에 실제 반영되는지.
+
+    자막을 화면 위쪽(margin_v 1200)으로 올리면, 기본(480)이라면 검정이었을
+    상단 영역에 자막 픽셀(흰 글자/외곽선)이 나타난다 — 픽셀로 실측.
+    """
+    import subprocess
+
+    from cutdaejang.utils import ffmpeg as ff
+
+    def render_with(margin_v, name):
+        video = _make_talk_video(tmp_path / f"{name}.mp4")
+        data = _post(server, "/api/edit", {
+            "video_path": video, "layout": "shorts",
+            "auto_subtitle": False, "cut_silence": False, "quality": "draft",
+            "script": "가나다라마바사 아자차카타파하",
+        })
+        job = _wait_status(server, data["job_id"], {"review_subtitle", "failed"})
+        assert job["status"] == "review_subtitle"
+        body = {"job_id": data["job_id"], "subtitles": job["subtitles"], "hook": ""}
+        if margin_v:
+            body["margin_v"] = margin_v
+        _post(server, "/api/edit_render", body)
+        done = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=240)
+        assert done["status"] == "ok", done.get("errors")
+        return done["mp4"]
+
+    def bright_ratio_at(mp4, y_frac):
+        # 특정 높이 가로줄에서 아주 밝은(흰 글자) 픽셀 비율 — 평균 스케일은
+        # 글자를 희석시키므로 원본 해상도에서 임계값으로 센다
+        raw = subprocess.run(
+            [ff.ffmpeg_bin(), "-v", "error", "-ss", "1.0", "-i", mp4, "-frames:v", "1",
+             "-vf", f"crop=1080:80:0:{int(1920 * y_frac)}",
+             "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+            capture_output=True, check=True).stdout
+        return sum(1 for b in raw if b > 220) / max(len(raw), 1)
+
+    high = render_with(1200, "mv_high")   # 화면 중간보다 위로 올림
+    # margin_v=1200 → 자막 하단이 y≈720(=1920-1200) 부근 → 그 위 줄에 글자 존재
+    assert bright_ratio_at(high, 0.33) > 0.05, "올린 위치에 자막이 없음"
+
+    low = render_with(0, "mv_low")        # 기본(480) — 같은 높이엔 자막이 없어야
+    assert bright_ratio_at(low, 0.33) < 0.02, "기본 위치인데 상단에 자막이 있음"
+
+
+def test_thumbnail_api_position(server, tmp_path):
+    """v0.49 — 썸네일 글자 위치(pos_x/pos_y)가 실제로 반영되는지 픽셀 실측."""
+    import subprocess
+    from pathlib import Path
+
+    from cutdaejang.utils import ffmpeg as ff
+
+    bg = tmp_path / "pb.png"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+            "-i", "color=c=0x101820:s=1280x720:d=0.1", "-frames:v", "1", str(bg)])
+
+    def yellow_in_band(png, y0, h):
+        raw = subprocess.run(
+            [ff.ffmpeg_bin(), "-v", "error", "-i", str(png),
+             "-vf", f"crop=1000:{h}:140:{y0},scale=40:10", "-f", "rawvideo",
+             "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+        px = [tuple(raw[i:i + 3]) for i in range(0, len(raw), 3)]
+        return any(r > 190 and g > 160 and b < 140 for r, g, b in px)
+
+    d1 = _post(server, "/api/thumbnail", {
+        "title": "위치 테스트", "bg_path": str(bg), "preset": "임팩트",
+        "pos_x": 0.5, "pos_y": 0.2})
+    assert d1.get("ok")
+    top = str(tmp_path / "top.png")
+    Path(d1["path"]).replace(top)
+    assert yellow_in_band(top, 60, 220) and not yellow_in_band(top, 480, 220)
+
+    d2 = _post(server, "/api/thumbnail", {
+        "title": "위치 테스트", "bg_path": str(bg), "preset": "임팩트",
+        "pos_x": 0.5, "pos_y": 0.78})
+    assert d2.get("ok")
+    assert yellow_in_band(d2["path"], 480, 220) and not yellow_in_band(d2["path"], 60, 220)
