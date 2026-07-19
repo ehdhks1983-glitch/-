@@ -1587,8 +1587,10 @@ class _Handler(BaseHTTPRequestHandler):
             lines += log_file.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
 
         out = Path(workdir) / f"진단리포트_{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
-        out.write_text("\n".join(lines), encoding="utf-8")
-        self._send_json({"path": str(out.resolve())})
+        text = "\n".join(lines)
+        out.write_text(text, encoding="utf-8")
+        # v0.44.1: 파일 경로만 alert로 주면 못 찾음 → 내용을 화면에도 그대로 보여줌
+        self._send_json({"path": str(out.resolve()), "text": text})
 
     def _open_folder(self, params: dict, workdir: str) -> None:
         job = _get_job(params.get("job_id", ""))
@@ -2675,8 +2677,15 @@ _HTML = """<!doctype html>
     <pre id="logBox" style="max-height:260px;overflow:auto;background:#0d0f14;border:1px solid #2c3350;border-radius:8px;padding:10px;font-size:12px;line-height:1.55;white-space:pre-wrap;margin-top:8px">(아직 로그 없음)</pre>
   </details>
   <div style="text-align:center;margin-top:12px">
-    <button class="ghost" onclick="diagnostic(event)">🩺 진단 리포트 저장 (문의할 때 첨부)</button>
+    <button class="ghost" onclick="diagnostic(event)">🩺 진단 리포트 보기 (문의할 때 [📋 복사]해서 붙여넣기)</button>
   </div>
+  <details id="diagPanel" class="hidden" style="margin-top:8px">
+    <summary class="hint" style="cursor:pointer">🩺 진단 리포트
+      <button class="ghost" style="padding:2px 8px;margin-left:6px" onclick="copyDiag(event)">📋 복사</button>
+      <button class="ghost" style="padding:2px 8px" onclick="openDiagFolder(event)">📂 저장 폴더 열기</button>
+      <span class="hint" id="diagPath"></span></summary>
+    <pre id="diagBox" style="max-height:340px;overflow:auto;background:#0d0f14;border:1px solid #2c3350;border-radius:8px;padding:10px;font-size:12px;line-height:1.55;white-space:pre-wrap;margin-top:8px"></pre>
+  </details>
 </div>
 
 <script>
@@ -3659,8 +3668,32 @@ function kitHist(id){
 
 async function diagnostic(ev){
   ev.preventDefault();
-  const data = await (await fetch('/api/diagnostic', {method:'POST', body:'{}'})).json();
-  alert('진단 리포트 저장됨:\\n' + data.path + '\\n\\n문의할 때 이 파일을 함께 올려주세요.');
+  const btn = ev.target; const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '진단 정보 모으는 중…';
+  try{
+    const data = await (await fetch('/api/diagnostic', {method:'POST', body:'{}'})).json();
+    $('diagBox').textContent = data.text || '(내용 없음)';
+    $('diagPath').textContent = ' — 파일로도 저장됨: ' + data.path;
+    const p = $('diagPanel');
+    p.classList.remove('hidden'); p.open = true;
+    p.scrollIntoView({behavior:'smooth', block:'start'});
+  } catch(e){ alert('진단 리포트 생성 실패: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+async function copyDiag(ev){
+  ev.preventDefault(); ev.stopPropagation();
+  try{
+    await navigator.clipboard.writeText($('diagBox').textContent);
+    ev.target.textContent = '✓ 복사됨';
+    setTimeout(() => { ev.target.textContent = '📋 복사'; }, 1500);
+  } catch(e){ alert('복사 실패 — 내용을 드래그해서 복사하세요'); }
+}
+
+async function openDiagFolder(ev){
+  ev.preventDefault(); ev.stopPropagation();
+  const data = await (await fetch('/api/open_folder', {method:'POST', body:'{}'})).json();
+  if(data.error) alert('폴더 열기 실패: ' + data.error + String.fromCharCode(10) + '경로: ' + (data.path || ''));
 }
 
 function toggleSettings(){ $('settingsCard').classList.toggle('hidden'); }

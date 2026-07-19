@@ -363,6 +363,8 @@ def test_diagnostic_report(server):
     assert report.exists()
     text = report.read_text(encoding="utf-8")
     assert "컷대장 진단 리포트" in text and "ffmpeg" in text
+    # v0.44.1: 화면에 바로 보여줄 내용도 응답에 포함 (파일과 동일)
+    assert data.get("text") == text
 
 
 def test_edit_render_with_trim_and_vrew_delete(server, tmp_path):
