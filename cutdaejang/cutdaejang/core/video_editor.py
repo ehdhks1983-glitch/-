@@ -298,3 +298,37 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out_path)]
     ff.run(args)
     return str(out_path)
+
+
+def extend_video(video: str, target_us: int, out_path: str, mode: str = "freeze") -> str:
+    """영상을 target_us 길이까지 연장 (v0.42 — 내레이션이 영상보다 길 때).
+
+    mode="freeze": 마지막 프레임을 정지 화면으로 이어붙임 (tpad clone)
+    mode="loop":   영상을 처음부터 반복 재생해 채움
+    이미 충분히 길면 원본 경로를 그대로 반환. 오디오는 무음 패딩/반복.
+    """
+    cur = ff.probe_duration_us(video)
+    if target_us <= cur + 50_000:
+        return video
+    target_s = target_us / 1e6
+    has_a = ff.has_audio_stream(video)
+    enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+           "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    if mode == "loop":
+        loops = int(target_us // max(cur, 1)) + 1
+        cmd = [ff.ffmpeg_bin(), "-y", "-v", "error", "-nostdin",
+               "-stream_loop", str(loops), "-i", str(video),
+               "-t", f"{target_s:.3f}", *enc]
+        cmd += (["-c:a", "aac", "-b:a", "192k"] if has_a else ["-an"])
+    else:  # freeze
+        extra_s = (target_us - cur) / 1e6 + 0.2  # tpad 오차 여유 (뒤에서 -t로 정확히 자름)
+        cmd = [ff.ffmpeg_bin(), "-y", "-v", "error", "-nostdin", "-i", str(video),
+               "-vf", f"tpad=stop_mode=clone:stop_duration={extra_s:.3f}", *enc]
+        if has_a:
+            cmd += ["-af", f"apad=pad_dur={extra_s:.3f}", "-c:a", "aac", "-b:a", "192k"]
+        else:
+            cmd += ["-an"]
+        cmd += ["-t", f"{target_s:.3f}"]
+    cmd.append(str(out_path))
+    ff.run(cmd)
+    return str(out_path)

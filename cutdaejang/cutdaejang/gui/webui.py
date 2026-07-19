@@ -34,7 +34,7 @@ _LOCK = threading.Lock()
 _EDIT_LAST_KEYS = (
     "layout", "auto_subtitle", "cut_silence", "denoise", "orig_audio",
     "bgm", "bgm_db", "hook_scale", "narr_voice", "narr_style", "narr_subs_only",
-    "stt_provider", "whisper_model", "speed", "quality",
+    "stt_provider", "whisper_model", "speed", "quality", "narr_fit",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
 )
 
@@ -375,6 +375,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "narration": bool(narr_topic) and not narr_subs_only,
                          "narr_voice": (params.get("narr_voice") or "").strip(),
                          "narr_style": (params.get("narr_style") or "").strip(),
+                         "narr_fit": params.get("narr_fit") or "freeze",
                          # 원본 소리: 목소리를 얹을 때만 기본 무음 (자막만이면 유지)
                          "orig_audio": params.get("orig_audio")
                          or ("mute" if narr_topic and not narr_subs_only else "keep"),
@@ -609,14 +610,27 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             from ..core import video_editor  # noqa: PLC0415
             from ..utils import ffmpeg as ff  # noqa: PLC0415
             cut_us = ff.probe_duration_us(cut_video)
+            narr_fit = ep.get("narr_fit") or "freeze"
             # 목소리 실제 길이에 맞춰 자막 재배치 → 자막·목소리 싱크 보장
             subs, clips, sync_note = edit_mode.retime_narration(
-                clips, subs, cut_us, Path(workdir) / job_id)
+                clips, subs, cut_us, Path(workdir) / job_id, fit=narr_fit)
             if sync_note:
                 note = f"{note} · {sync_note}" if note else sync_note
-            # 내레이션이 끝난 뒤 영상 꼬리가 길게 남으면 잘라 템포 유지
             narr_end_us = subs[-1].end_us + 700_000 if subs else cut_us
-            if cut_us > narr_end_us + 1_500_000:
+            if narr_fit in ("freeze", "loop") and narr_end_us > cut_us + 50_000:
+                # v0.42: 내레이션이 더 길면 영상을 늘려 전 문장을 담는다 (정지/반복)
+                extra_s = (narr_end_us - cut_us) / 1e6
+                _set_job(job_id, stage="cut", note="내레이션 길이에 맞춰 영상을 늘리는 중…")
+                cut_video = video_editor.extend_video(
+                    cut_video, narr_end_us,
+                    str(Path(workdir) / job_id / "narr_ext.mp4"), mode=narr_fit)
+                cut_us = ff.probe_duration_us(cut_video)
+                mode_ko = "마지막 장면 정지" if narr_fit == "freeze" else "영상 반복"
+                w2 = f"⏱ 내레이션이 길어 {mode_ko}로 {extra_s:.1f}초 연장했어요"
+                prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                _set_job(job_id, tts_warn=f"{prev} · {w2}" if prev else w2)
+            # 내레이션이 끝난 뒤 영상 꼬리가 길게 남으면 잘라 템포 유지
+            elif cut_us > narr_end_us + 1_500_000:
                 _set_job(job_id, stage="cut", note="내레이션 길이에 맞춰 영상을 다듬는 중…")
                 cut_video = video_editor.cut_and_concat(
                     cut_video, [(0, narr_end_us)],
@@ -804,6 +818,61 @@ def _kit_text(kit: dict, title: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _run_batch(job_id: str, topics: list, params: dict, workdir: str) -> None:
+    """📦 배치 (v0.42) — 주제 여러 개를 순차 생성해 mp4 N개. 한 개 실패해도 계속."""
+    outs, errors = [], []
+    total = len(topics)
+    try:
+        _apply_keys(params)
+        provider_name = params.get("script_provider", "stub")
+        if provider_name == "gemini" and not os.environ.get("GEMINI_API_KEY"):
+            provider_name = "stub"
+        settings = config.load_settings()
+        opts = _job_options(params, settings)
+        image_provider, _bg_skip = _ai_image_setup(params, settings)
+        for i, topic in enumerate(topics):
+            base = i / total
+            _set_job(job_id, status="running", stage="script", frac=base,
+                     note=f"📦 {i + 1}/{total}번째: {topic}")
+            try:
+                provider = SCRIPT_PROVIDERS[provider_name]()
+                script = orchestrator.generate_script(provider, topic, opts)
+                sub_id = orchestrator.new_job_id(topic)
+                sub_dir = Path(workdir) / sub_id
+                sub_dir.mkdir(parents=True, exist_ok=True)
+                (sub_dir / "script.json").write_text(script.to_json(), encoding="utf-8")
+                result = orchestrator.run_job(
+                    workdir, script, opts=opts, settings=settings,
+                    image_provider=image_provider,
+                    progress_cb=lambda stage, frac, b=base: _set_job(
+                        job_id, stage=stage, frac=b + frac / total),
+                    status_cb=lambda msg, k=i: _set_job(
+                        job_id, note=f"📦 {k + 1}/{total}번째: {msg}"),
+                    job_id=sub_id,
+                )
+                if result.mp4 and result.mp4.ok:
+                    outs.append(result.mp4.out_path)
+                errors += [f"[{topic}] {e}" for e in result.errors]
+                _record_history(workdir, result, opts)  # 개별 영상은 히스토리에서 재생
+            except Exception as te:  # noqa: BLE001 — 한 주제 실패는 다음 주제로
+                logging.getLogger("cutdaejang").warning("배치 항목 실패 (%s): %s", topic, te)
+                errors.append(f"[{topic}] {te}")
+        _set_job(
+            job_id,
+            status="ok" if outs and not errors else "partial" if outs else "failed",
+            stage="done", frac=1.0, job_dir=workdir,
+            note=f"📦 배치 완성: {len(outs)}/{total}개"
+                 + (" — 일부 오류는 아래 참고" if errors and outs else ""),
+            mp4=outs[0] if outs else None, mp4s=outs, errors=errors[:10],
+        )
+    except Exception as e:
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error("배치 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed",
+                 errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+
+
 def _run_generate(job_id: str, params: dict, workdir: str) -> None:
     """대본 생성 → 자동 모드면 즉시 파이프라인, 검토 모드면 대기 (기획안 §1.3)."""
     try:
@@ -915,6 +984,20 @@ class _Handler(BaseHTTPRequestHandler):
                 target=_run_generate, args=(job_id, params, workdir), daemon=True
             ).start()
             self._send_json({"job_id": job_id})
+        elif path == "/api/generate_batch":
+            topics = [str(t).strip() for t in (params.get("topics") or []) if str(t).strip()]
+            if not topics:
+                self._send_json({"error": "주제를 한 줄에 하나씩 입력하세요"}, 400)
+                return
+            topics = topics[:20]  # 폭주 방지 (안내는 화면에서)
+            params = {**params, "auto": True}  # 배치는 검토 없이 자동
+            job_id = orchestrator.new_job_id(f"배치{len(topics)}")
+            _set_job(job_id, status="running", stage="script", frac=0.0,
+                     title=f"📦 배치 {len(topics)}개 — {topics[0][:14]}…", params=params)
+            threading.Thread(
+                target=_run_batch, args=(job_id, topics, params, workdir), daemon=True
+            ).start()
+            self._send_json({"job_id": job_id, "count": len(topics)})
         elif path == "/api/confirm":
             job = _get_job(params.get("job_id", ""))
             if not job or job.get("status") != "awaiting_review":
@@ -1795,7 +1878,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.41)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.42)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -1941,6 +2024,14 @@ _HTML = """<!doctype html>
       <div class="chk" style="margin-top:6px">
         <input type="checkbox" id="narrSubsOnly" onchange="onNarrTopicInput()">
         <span>🔇 목소리는 빼고 <b>자막만</b> 넣기 (AI가 쓴 대본을 하단 자막으로만)</span>
+      </div>
+      <div class="chk" style="gap:8px">
+        <span class="hint">내레이션이 영상보다 길면</span>
+        <select id="narrFitSel" style="width:auto;padding:6px 8px">
+          <option value="freeze" selected>⏸ 마지막 장면 정지로 늘려 다 담기 (추천)</option>
+          <option value="loop">🔁 영상을 처음부터 반복해 다 담기</option>
+          <option value="drop">✂ 말 속도 올리고 뒷문장 생략 (예전 방식)</option>
+        </select>
       </div>
       <div class="hint">넣으면 AI가 대본을 쓰고 목소리(제미나이 키 권장, 없으면 내장 음성)를 입혀요. 보이스·말투는 제미나이 키가 있을 때 적용(내장 음성은 목소리 고정). 대본은 검토 화면에서 수정 가능.</div>
       <div class="chk" style="gap:8px">
@@ -2127,6 +2218,12 @@ _HTML = """<!doctype html>
     <div class="steplabel"><span class="stepnum">1</span>영상 주제 쓰기</div>
     <input type="text" id="topic" placeholder="예) 하루 10분 정리 습관" value="하루 10분 정리 습관">
     <div class="hint">이 주제로 AI가 대본을 쓰고 자막·배경·목소리까지 자동으로 만듭니다.</div>
+    <div class="chk" style="gap:8px">
+      <input type="checkbox" id="batchChk" onchange="onBatchChange()">
+      <span>📦 <b>여러 개 한 번에(배치)</b> — 주제를 여러 줄 넣으면 줄 수만큼 영상이 나와요</span>
+    </div>
+    <textarea id="topicBatch" class="hidden" style="min-height:96px" placeholder="한 줄 = 영상 1개 (최대 20개)&#10;예)&#10;하루 10분 정리 습관&#10;아침 루틴 꿀팁 3가지&#10;퇴근 후 부업 시작하는 법"></textarea>
+    <div class="hint hidden" id="batchHint">배치는 검토 없이 자동으로 연속 완성돼요. 고른 목소리·배경음악·설정이 전부 똑같이 적용됩니다.</div>
 
     <div class="steplabel"><span class="stepnum">2</span>목소리 고르기</div>
     <div class="toggle">
@@ -2572,6 +2669,7 @@ function applyEditLast(el){
   set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
   set('hookSizeSel', el.hook_scale); set('photoSec', el.photo_sec);
   set('narrStyleSel', el.narr_style); chk('narrSubsOnly', el.narr_subs_only);
+  set('narrFitSel', el.narr_fit);
   if(el.narr_voice && [...$('narrVoiceSel').options].some(o => o.value === el.narr_voice))
     $('narrVoiceSel').value = el.narr_voice;
   chk('autoSubChk', el.auto_subtitle); chk('cutSilenceChk', el.cut_silence);
@@ -2673,6 +2771,7 @@ async function startEdit(){
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
+    narr_fit: (($('narrFitSel')||{}).value)||'freeze',
     orig_audio: $('origAudioSel').value,
     bgm: $('bgmEditSel').value, bgm_db: +$('bgmVolSel').value,
     wm_path: ($('wmPath')||{}).value||'', wm_pos: ($('wmPos')||{}).value||'tr',
@@ -3125,6 +3224,13 @@ async function renderEdited(){
   poll();
 }
 
+function onBatchChange(){
+  const on = $('batchChk').checked;
+  $('topicBatch').classList.toggle('hidden', !on);
+  $('batchHint').classList.toggle('hidden', !on);
+  $('topic').classList.toggle('hidden', on);
+}
+
 async function generate(){
   const prov = pick('prov');
   const body = {
@@ -3138,7 +3244,16 @@ async function generate(){
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
   };
-  const res = await fetch('/api/generate', {method:'POST', body: JSON.stringify(body)});
+  let endpoint = '/api/generate';
+  if(($('batchChk')||{}).checked){
+    const topics = ($('topicBatch').value||'').split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean);
+    if(!topics.length){ alert('주제를 한 줄에 하나씩 입력하세요'); return; }
+    if(topics.length > 20){ alert('한 번에 최대 20개까지 가능해요 (지금 ' + topics.length + '개)'); return; }
+    if(!confirm(topics.length + '개 영상을 연속으로 만듭니다. 시간이 꽤 걸려요 — 시작할까요?')) return;
+    body.topics = topics;
+    endpoint = '/api/generate_batch';
+  }
+  const res = await fetch(endpoint, {method:'POST', body: JSON.stringify(body)});
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
   currentJob = data.job_id;
@@ -3434,7 +3549,7 @@ function resetEditForm(ev){
   set('editVideo',''); set('photoPath',''); set('photoSec',15);
   set('editHook',''); set('hookSizeSel','1'); set('editHookTopic','');
   const hc = $('editHookCands'); if(hc) hc.innerHTML='';
-  set('narrTopic',''); chk('narrSubsOnly',false); set('narrStyleSel','정보형');
+  set('narrTopic',''); chk('narrSubsOnly',false); set('narrStyleSel','정보형'); set('narrFitSel','freeze');
   const nv = $('narrVoiceSel'); if(nv && nv.options.length) nv.selectedIndex = 0;
   set('editScript',''); chk('autoSubChk',true); chk('cutSilenceChk',true);
   set('denoiseSel',''); window._origTouched = false; set('origAudioSel','keep');
@@ -3462,6 +3577,7 @@ function resetGenForm(ev){
   if(!confirm('생성 폼의 입력을 기본값으로 되돌릴까요?')) return;
   const set = (id, v) => { const el = $(id); if(el) el.value = v; };
   set('topic','하루 10분 정리 습관'); set('genHook','');
+  const bc = $('batchChk'); if(bc){ bc.checked = false; } set('topicBatch',''); onBatchChange();
   const hc = $('genHookCands'); if(hc) hc.innerHTML='';
   set('bgmSel',''); set('voiceSel', ($('voiceSel').options[0]||{}).value || '');
   set('styleSel', ($('styleSel').options[0]||{}).value || '');

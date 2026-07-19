@@ -666,7 +666,8 @@ def spread_ranges(total_us: int, target_us: int, piece_us: int = 3_500_000) -> L
 
 
 def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_dir,
-                     lead_us: int = 200_000, max_tempo: float = 1.25) -> tuple:
+                     lead_us: int = 200_000, max_tempo: float = 1.25,
+                     fit: str = "drop") -> tuple:
     """자막 타이밍을 TTS 클립 '실제 길이'에 맞춰 순차 재배치 → 목소리·자막 싱크 보장.
 
     글자 수 비례로 추정한 창은 실제 발화 길이와 어긋나 자막이 밀리고 목소리가
@@ -674,6 +675,8 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
       ① 남는 시간은 문장 사이 간격으로 고르게 배분 (0.12~0.9초)
       ② 영상보다 길면 말 속도를 최대 max_tempo배까지 올려 맞춤
       ③ 그래도 안 들어가는 뒷문장은 생략하고 사유를 알림
+    fit이 "freeze"/"loop"면(v0.42) 영상을 뒤에서 늘릴 예정이므로 ②③을 하지 않고
+    전 문장을 편한 간격으로 순차 배치한다 (넘침 허용 — 호출자가 영상을 연장).
     반환: (재배치된 자막들, 클립 경로들, 안내 문구 또는 "")
     """
     if not clips or not subtitles:
@@ -682,6 +685,17 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
     clips, subtitles = [str(c) for c in clips[:n]], list(subtitles[:n])
     durs = [ff.probe_duration_us(c) for c in clips]
     note = ""
+
+    if fit in ("freeze", "loop"):
+        # 영상 쪽을 늘려 다 담는다 → 속도 올림·생략 없이 순차 배치
+        out_subs, out_clips, cursor = [], [], lead_us
+        for clip, dur, sub in zip(clips, durs, subtitles):
+            sub.start_us = cursor
+            sub.end_us = cursor + dur
+            out_subs.append(sub)
+            out_clips.append(clip)
+            cursor = sub.end_us + 350_000
+        return out_subs, out_clips, ""
 
     min_gap = 120_000
     speech = sum(durs)

@@ -392,3 +392,66 @@ def test_edit_render_with_trim_and_vrew_delete(server, tmp_path):
     dur = ff.probe_duration_us(done["mp4"]) / 1e6
     assert 2.5 <= dur <= 3.6, dur  # 3초 구간만 사용
     assert "트림" in (done.get("note") or "")
+
+
+def test_narration_fit_freeze_extends_video(server, tmp_path):
+    """v0.42: 내레이션이 영상보다 길면 freeze로 영상을 늘려 전 문장을 담는다."""
+    from cutdaejang.utils import ffmpeg as ff
+
+    video = _make_talk_video(tmp_path / "nf.mp4")  # 5.5초
+    data = _post(server, "/api/edit", {
+        "video_path": video, "layout": "keep",
+        "auto_subtitle": False, "cut_silence": False,
+        "auto_edit": True, "auto_target_sec": 0, "quality": "draft",
+        "narr_topic": "정리 습관 이야기", "narr_fit": "freeze",
+    })
+    job = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=300)
+    assert job["status"] == "ok", job.get("errors")
+    dur = ff.probe_duration_us(job["mp4"]) / 1e6
+    assert dur > 6.5, dur  # 스텁 내레이션(~9초)이 5.5초 영상보다 길어 연장됨
+    assert "연장" in (job.get("note") or "")
+
+
+def test_narration_fit_drop_keeps_video_length(server, tmp_path):
+    """v0.42: 예전 방식(drop)은 영상 길이를 유지 (뒷문장 생략)."""
+    from cutdaejang.utils import ffmpeg as ff
+
+    video = _make_talk_video(tmp_path / "nd.mp4")
+    data = _post(server, "/api/edit", {
+        "video_path": video, "layout": "keep",
+        "auto_subtitle": False, "cut_silence": False,
+        "auto_edit": True, "auto_target_sec": 0, "quality": "draft",
+        "narr_topic": "정리 습관 이야기", "narr_fit": "drop",
+    })
+    job = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=300)
+    assert job["status"] == "ok", job.get("errors")
+    dur = ff.probe_duration_us(job["mp4"]) / 1e6
+    assert dur <= 6.2, dur  # 원본 5.5초 유지 (여유 오차)
+
+
+def test_generate_batch_two_topics(server):
+    """v0.42 배치: 주제 2줄 → 영상 2개, 진행 표시·히스토리 기록."""
+    res = _post(server, "/api/generate_batch", {
+        "topics": ["배치 주제 하나", "배치 주제 둘"],
+        "script_provider": "stub", "tts_provider": "stub",
+    })
+    assert res.get("count") == 2
+    job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=360)
+    assert job["status"] == "ok", job.get("errors")
+    assert len(job.get("mp4s") or []) == 2
+    assert "배치 완성: 2/2" in (job.get("note") or "")
+    # 개별 영상이 히스토리에 남아 재생 가능
+    state = json.loads(_get(server, "/api/state").read())
+    hist_titles = " ".join(r["title"] for r in state["history"])
+    assert "배치 주제 하나" in hist_titles and "배치 주제 둘" in hist_titles
+
+
+def test_generate_batch_rejects_empty(server):
+    import urllib.error
+
+    req = urllib.request.Request(
+        server + "/api/generate_batch",
+        data=json.dumps({"topics": ["  ", ""]}).encode(), method="POST")
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req, timeout=10)
+    assert exc.value.code == 400
