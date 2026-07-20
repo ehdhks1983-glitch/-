@@ -1035,3 +1035,29 @@ def test_thumbnail_api_position(server, tmp_path):
         "pos_x": 0.5, "pos_y": 0.78})
     assert d2.get("ok")
     assert yellow_in_band(d2["path"], 480, 220) and not yellow_in_band(d2["path"], 60, 220)
+
+
+def test_html_wellformed_and_scene_review_v0572(server):
+    """v0.57.2: div 짝 검사(홈 화면 누수 회귀 방지) + 장면 검토 통합 복사 UI."""
+    import re
+
+    html = _get(server, "/").read().decode("utf-8")
+    # v0.57에서 여분 </div>가 #formCard를 조기 종료 → 홈 화면에 폼 일부 노출.
+    # 전체 균형 + 라인 누적 깊이가 음수로 떨어지는 지점이 없어야 한다.
+    opens = len(re.findall(r"<div\b", html))
+    closes = html.count("</div>")
+    assert opens == closes, f"div 불균형: <div>={opens} </div>={closes}"
+    depth = 0
+    for ln, line in enumerate(html.splitlines(), 1):
+        depth += len(re.findall(r"<div\b", line)) - line.count("</div>")
+        assert depth >= 0, f"{ln}행에서 </div> 초과 (컨테이너 조기 종료)"
+    # 중복 id 없음
+    ids = re.findall(r'id="([^"]+)"', html)
+    dups = sorted({i for i in ids if ids.count(i) > 1})
+    assert not dups, f"중복 id: {dups}"
+    # 통합 복사 버튼 + 보이는 복사 상자 + 넓어진 그리드
+    assert "프롬프트 전체 복사 (통합)" in html
+    assert html.count('id="sceneAllText"') == 1
+    assert "minmax(240px,1fr)" in html
+    # 복사 형식: 「N번 장면」 블록을 만드는 JS가 실려 있어야 한다
+    assert "'번 장면'" in html or '"번 장면"' in html

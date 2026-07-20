@@ -2984,7 +2984,6 @@ _HTML = """<!doctype html>
         <button class="ghost" id="bgmFetchBtn" style="white-space:nowrap" onclick="fetchBgm(event)"
                 title="유튜버들이 가장 많이 쓰는 무료 BGM 14곡(Kevin MacLeod, CC BY)을 resources/bgm 폴더에 자동으로 받아옵니다 (약 40MB)">⬇ 무료 BGM 받기</button>
       </div>
-      </div>
       <div class="hint"><b>windows\\6_무료음원_받기.bat</b>로 유명 무료 BGM 자동 채우기. 저작권 확인된 음원만 사용하세요.</div>
     </details>
 
@@ -3075,10 +3074,13 @@ _HTML = """<!doctype html>
       <div style="font-weight:700">🖼 장면 그림 확인 <span class="hint">— 문장마다 이 그림이 배경으로 들어가요</span></div>
       <div class="hint" style="margin-top:4px">마음에 안 드는 장면은 <b>묘사를 고치고 [🔄 다시 그리기]</b>, 또는 <b>[📁 내 그림]</b>으로 직접 만든 그림을 넣어도 돼요 → 다 되면 맨 아래 <b>[✅ 이 그림들로 완성]</b></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-        <button class="ghost" onclick="copyScenePrompts(event)" title="번호별 장면 묘사 + 그림체·마스코트 지시문을 한 번에 복사 — 챗지피티/제미나이에 붙여넣어 직접 생성">📋 프롬프트 전체 복사</button>
+        <button class="ghost" onclick="copyScenePrompts(event)" title="장면별 프롬프트를 「N번 장면 → 묘사」 통합 형식으로 복사 — 챗지피티/제미나이에 붙여넣어 한 번에 생성">📋 프롬프트 전체 복사 (통합)</button>
         <button class="ghost" onclick="importSceneFolder(event)" title="직접 만든 그림들을 폴더에 담아두면 이름순으로 1번 장면부터 차례로 들어갑니다">📁 그림 폴더에서 한꺼번에 넣기</button>
       </div>
-      <div id="sceneGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-top:10px"></div>
+      <textarea id="sceneAllText" class="hidden" readonly
+                style="margin-top:8px;min-height:180px;font-size:12.5px;line-height:1.55"
+                title="복사된 내용 — 여기서 드래그해 직접 복사해도 됩니다"></textarea>
+      <div id="sceneGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:10px"></div>
       <button style="margin-top:12px" onclick="confirmScenes()">✅ 이 그림들로 영상 완성</button>
     </div>
 
@@ -4790,38 +4792,45 @@ function renderScenes(job){
   window._lastScenes = job.scenes || [];
   (job.scenes || []).forEach((s, k) => {
     const cell = document.createElement('div');
-    cell.style.cssText = 'border:1px solid #2c3350;border-radius:10px;padding:6px;background:#12141c';
-    const img = document.createElement('img');
-    img.style.cssText = 'width:100%;border-radius:8px;aspect-ratio:9/16;object-fit:cover;background:#0d0f14';
-    if(s.ok){
+    cell.style.cssText = 'border:1px solid #2c3350;border-radius:12px;padding:10px;background:#12141c;display:flex;flex-direction:column;gap:6px'
+      + (s.ok ? '' : ';border-style:dashed');
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:8px;font-weight:700';
+    head.innerHTML = '<span style="background:#22283f;border-radius:8px;padding:2px 10px">장면 ' + (k + 1) + '</span>'
+      + '<span class="hint" style="font-weight:400">' + (s.ok ? '🟢 그림 있음' : '⬜ 그림 없음') + '</span>';
+    cell.appendChild(head);
+    if(s.ok){  // 그림이 있을 때만 이미지 — 없으면 깨진 아이콘 대신 프롬프트에 집중
+      const img = document.createElement('img');
+      img.style.cssText = 'width:100%;border-radius:8px;aspect-ratio:9/16;object-fit:cover;background:#0d0f14';
       img.src = '/scene/' + encodeURIComponent(job.id) + '/' + s.i + '?t=' + Date.now();
-    } else {
-      cell.style.borderStyle = 'dashed';  // ✍ 아직 그림 없음 (내가 넣기/실패)
+      img.alt = '장면 ' + (k + 1);
+      cell.appendChild(img);
     }
-    img.alt = '장면 ' + (s.i + 1);
     const cap = document.createElement('div');
-    cap.className = 'hint';
-    cap.style.marginTop = '4px';
-    cap.textContent = (k + 1) + '번 그림 · ' + (s.text || '') + (s.ok ? '' : '  (그림 없음)');
+    cap.style.cssText = 'font-size:12.5px;color:#cdd3e0;line-height:1.45';
+    cap.textContent = '💬 ' + (s.text || '');
+    const lab = document.createElement('div');
+    lab.className = 'hint';
+    lab.textContent = '그림 묘사 (프롬프트) — 고쳐도 돼요';
     const ta = document.createElement('textarea');
-    ta.style.cssText = 'min-height:52px;font-size:12px;margin-top:4px';
+    ta.style.cssText = 'min-height:96px;font-size:12.5px;line-height:1.5';
     ta.value = s.prompt || '';
     ta.id = 'scnP' + s.i;
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap';
+    row.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
     const btn = document.createElement('button');
     btn.className = 'ghost';
-    btn.style.cssText = 'margin-top:4px;padding:4px 8px;font-size:12px';
+    btn.style.cssText = 'padding:5px 10px;font-size:12px';
     btn.textContent = '🔄 ' + (s.ok ? '다시 그리기' : 'AI로 그리기');
     btn.onclick = (e) => regenScene(e, s.i);
     const up = document.createElement('button');
     up.className = 'ghost';
-    up.style.cssText = 'margin-top:4px;padding:4px 8px;font-size:12px';
+    up.style.cssText = 'padding:5px 10px;font-size:12px';
     up.textContent = '📁 내 그림';
     up.title = '직접 만든 그림 파일을 이 장면에 넣기 (자동으로 쇼츠 크기에 맞춰져요)';
     up.onclick = (e) => sceneUpload(e, s.i);
     row.append(btn, up);
-    cell.append(img, cap, ta, row);
+    cell.append(cap, lab, ta, row);
     grid.appendChild(cell);
   });
   $('sceneBox').classList.remove('hidden');
@@ -4847,16 +4856,20 @@ async function copyScenePrompts(ev){
   ];
   if(ch) lines.push('주인공 캐릭터: ' + ch + ' — 모든 장면에 같은 모습·같은 그림체로 등장.');
   lines.push('');
-  scenes.forEach((s, k) => {
+  scenes.forEach((s, k) => {  // 「N번 장면 → 프롬프트」 통합 블록 (v0.57.2 사용자 요청 형식)
     const p = (($('scnP' + s.i)||{}).value) || s.prompt || s.text || '';
-    lines.push((k + 1) + '. ' + p);
+    lines.push((k + 1) + '번 장면');
+    lines.push(p);
+    lines.push('');
   });
   const text = lines.join(String.fromCharCode(10));
+  const box = $('sceneAllText');
+  if(box){ box.value = text; box.classList.remove('hidden'); }
   try { await navigator.clipboard.writeText(text); }
-  catch(e){ prompt('자동 복사가 안 돼요 — 아래 내용을 직접 복사하세요', text); return; }
-  alert('복사 완료! 챗지피티/제미나이에 붙여넣어 그림을 만들고,' + String.fromCharCode(10) +
-        '만들어진 그림들을 한 폴더에 저장한 뒤 [📁 그림 폴더에서 한꺼번에 넣기]를 누르세요.' + String.fromCharCode(10) +
-        '(파일 이름순으로 1번 그림부터 차례로 들어가요)');
+  catch(e){ alert('자동 복사가 안 돼요 — 아래 상자의 내용을 드래그해 복사하세요'); return; }
+  alert('복사 완료! (아래 상자에서도 볼 수 있어요)' + String.fromCharCode(10) +
+        '챗지피티/제미나이에 붙여넣어 그림을 만들고, 한 폴더에 저장한 뒤' + String.fromCharCode(10) +
+        '[📁 그림 폴더에서 한꺼번에 넣기]를 누르세요 (이름순으로 1번부터 들어가요).');
 }
 
 // 📁 폴더의 그림을 이름순으로 1번 장면부터 (v0.51)
