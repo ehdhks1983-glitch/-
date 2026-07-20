@@ -72,6 +72,8 @@ class Bgm:
 @dataclass
 class Style:
     font: str = "Pretendard-ExtraBold"
+    hook_font: str = ""            # 상단 제목 전용 글씨체 (비면 font와 동일, v0.63)
+    hook_tilt: bool = False        # 상단 제목 비스듬히(살짝 회전) — 예능 자막 느낌 (v0.63)
     size: int = 64
     outline: int = 3
     shadow: int = 0

@@ -500,6 +500,45 @@ def test_template_save_apply_delete(server):
         assert e.code == 400
 
 
+def test_v063_keys_fonts_timecode(server):
+    """v0.63: 🔑 키 저장/삭제 API + 글씨체 목록 + 타임코드 대본 정리·길이 맞춤."""
+    import json as _json
+    import os as _os
+    import urllib.request as _rq
+
+    from cutdaejang.utils import ffmpeg as ff
+
+    # ── 키 저장 → 상태 반영 → 삭제 ──
+    d = _post(server, "/api/keys", {"action": "save", "gemini_key": "AIzaTEST123"})
+    assert d["ok"] and d["gemini"] is True
+    assert _os.environ.get("GEMINI_API_KEY") == "AIzaTEST123"
+    st = _json.loads(_get(server, "/api/state").read())
+    assert st["keys"]["gemini"] is True
+    _post(server, "/api/keys", {"action": "clear"})
+    assert not _os.environ.get("GEMINI_API_KEY")
+
+    # ── 설치 글씨체 목록 + 받기 (이 환경엔 받아져 있어 skip, 새 클론이면 1회 다운로드) ──
+    assert isinstance(st.get("fonts"), list)
+    r = _post(server, "/api/fetch_fonts", {})
+    assert r["ok"] and not r["fail"] and (r["skip"] + r["got"]) == 5
+
+    # ── 타임코드 콘티 대본 → 자막에서 제거 + 길이 맞춤 ──
+    res = _post(server, "/api/generate", {
+        "auto": False, "tts_provider": "stub", "script_provider": "stub", "topic": "",
+        "script_text": "0:00-0:04 첫 문장입니다\n0:04-0:08 둘째 문장\n0:08~0:12 셋째 문장",
+    })
+    job = _wait_status(server, res["job_id"], {"awaiting_review", "failed"})
+    assert job["status"] == "awaiting_review", job.get("errors")
+    assert job["script"]["sentences"] == ["첫 문장입니다", "둘째 문장", "셋째 문장"]
+    assert "타임코드" in (job.get("note") or "")
+    _post(server, "/api/confirm", {"job_id": res["job_id"], "title": "타임코드",
+                                   "sentences": job["script"]["sentences"]})
+    done = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=300)
+    assert done["status"] == "ok", done.get("errors")
+    dur = ff.probe_duration_us(done["mp4"]) / 1e6
+    assert dur >= 7.0, dur  # 스텁 낭독을 간격으로 늘려 12초 목표에 접근 (침묵 상한 내)
+
+
 def test_v062_script_batch_and_scene_reuse(server, tmp_path):
     """v0.62: 대본 여러 벌 배치(=== 구분) + 같은 주제 이전 그림 자동 재사용."""
     from cutdaejang.utils import ffmpeg as ff

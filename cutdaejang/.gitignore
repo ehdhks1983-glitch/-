@@ -13,3 +13,10 @@ logs/
 settings.json
 resources/bgm/
 resources/sfx/
+# v0.63 무료 글씨체 (사용자가 [⬇ 받기]로 내려받음 — 리포·zip엔 미포함)
+resources/fonts/BlackHanSans-Regular.ttf
+resources/fonts/Jua-Regular.ttf
+resources/fonts/DoHyeon-Regular.ttf
+resources/fonts/Gugi-Regular.ttf
+resources/fonts/NanumPenScript-Regular.ttf
+resources/fonts/무료글씨체_라이선스.txt

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -197,6 +198,48 @@ def _tts_chain(params: dict, settings: dict) -> list:
     return [provider]
 
 
+_TIMECODE_RE = __import__("re").compile(
+    r"^\s*\(?\s*\d{1,2}:\d{2}\s*[-–~—]\s*\d{1,2}:\d{2}\s*\)?\s*[:.,)]?\s*")
+
+
+def _parse_script_lines(text: str) -> tuple:
+    """대본 줄 정리 (v0.63) — 앞머리 타임코드(0:00-0:03 등)를 떼고 목표 길이를 얻는다.
+
+    챗지피티류가 주는 콘티 대본(줄마다 「0:03-0:06 내용」)을 그대로 붙여넣어도
+    자막·목소리·장면 프롬프트에 타임코드가 새지 않게. 반환: (줄들, 마지막 초|None).
+    """
+    import re as _re
+    lines, last_end = [], None
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        m = _TIMECODE_RE.match(s)
+        if m:
+            for mm, ss in _re.findall(r"(\d{1,2}):(\d{2})", m.group(0)):
+                last_end = max(last_end or 0, int(mm) * 60 + int(ss))
+            s = s[m.end():].strip()
+        if s:
+            lines.append(s)
+    return lines, last_end
+
+
+def _font_overrides(params: dict) -> dict:
+    """폼의 글씨체·기울임 선택 → settings.subtitle에 기억할 값 (v0.63, 검증 포함)."""
+    out = {}
+    if "sub_font" in params:
+        f = str(params.get("sub_font") or "")
+        if not f or f in presets.FONT_FAMILY_ALIASES:
+            out["font"] = f or "Pretendard-ExtraBold"
+    if "hook_font" in params:
+        f = str(params.get("hook_font") or "")
+        if not f or f in presets.FONT_FAMILY_ALIASES:
+            out["hook_font"] = f
+    if "hook_tilt" in params:
+        out["hook_tilt"] = bool(params.get("hook_tilt"))
+    return out
+
+
 def _job_canvas(job: Optional[dict]):
     """장면 재생성·삽입 때 그 작업의 화면 형태(세로/가로)에 맞는 캔버스 (v0.61)."""
     wide = (((job or {}).get("params") or {}).get("orientation") == "wide")
@@ -215,6 +258,7 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
         hook=(params.get("hook") or "").strip(),
         target_sec=int(params.get("target_sec") or 60),
         orientation="wide" if params.get("orientation") == "wide" else "shorts",  # v0.61
+        pace_sec=max(0, int(params.get("pace_sec") or 0)),  # ⏱ 내 대본 길이 맞춤 (v0.63)
         render=RenderOptions(use_gpu=params.get("gpu", "auto")),
     )
 
@@ -303,6 +347,7 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
     from ..core.render_engine.ass_writer import SUB_STYLES  # noqa: PLC0415
     if str(params.get("sub_style") or "") in SUB_STYLES:  # 💬 자막 프리셋 (v0.54)
         over_sub["sub_style"] = params["sub_style"]
+    over_sub.update(_font_overrides(params))  # ✒ 글씨체·기울임 기억 (v0.63)
     if "info_pop" in params:  # 🔢 숫자 팝 켬/끔 기억 (v0.56)
         over_sub["info_pop"] = bool(params.get("info_pop"))
     over_sfx = {}
@@ -572,6 +617,10 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "wm_scale": params.get("wm_scale") or 0.14},
             edit_summary=_edit_summary(analysis),
         )
+        fo = _font_overrides(params)  # ✒ 글씨체·기울임 기억 (v0.63 — 편집 폼)
+        if fo and any(settings["subtitle"].get(k) != v for k, v in fo.items()):
+            config.save_settings({"subtitle": fo})
+            settings = config.deep_merge(settings, {"subtitle": fo})
         wm_p = (params.get("wm_path") or "").strip().strip('"')
         if wm_p and Path(wm_p).is_file():  # 다음에도 쓰게 기억 (브랜딩용)
             config.save_settings({"watermark": {"path": wm_p,
@@ -1166,6 +1215,8 @@ def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> 
         canvas_r = (presets.CANVAS_LANDSCAPE
                     if (params or {}).get("orientation") == "wide" else presets.CANVAS_SHORTS)
         reused = _reuse_prev_scenes(job_id, workdir, sel, canvas_r)  # ♻ 같은 주제 이전 그림
+        _set_job(job_id, scene_style=settings["bg"].get("image_style", "일러스트"),
+                 scene_character=(settings["bg"].get("character") or "").strip() or "없음")
         if mode == "manual":
             # ✍ 내가 넣기 (v0.51) — AI 생성 없이(비용 0원) 프롬프트만 뽑아 검토로.
             # [📋 전체 복사] → 챗지피티/제미나이에서 직접 생성 → [📁]로 삽입.
@@ -1257,7 +1308,9 @@ def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
             base = i / total
             sc_text = (item.get("script_text") or "").strip()
             if sc_text:  # 📝 대본 벌 — AI 대본 생략, 첫 줄이 제목 (v0.62)
-                lines = [ln.strip() for ln in sc_text.splitlines() if ln.strip()]
+                lines, tc_end = _parse_script_lines(sc_text)  # ⏱ 타임코드 정리 (v0.63)
+                if tc_end:
+                    opts = dataclasses.replace(opts, pace_sec=tc_end)
                 topic = _re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", lines[0])[:40]
             else:
                 topic = (item.get("topic") or "").strip()
@@ -1315,12 +1368,19 @@ def _run_generate(job_id: str, params: dict, workdir: str) -> None:
         user_script = (params.get("script_text") or "").strip()
         if user_script:  # 📝 내 대본 그대로 (v0.61) — AI 대본 생략, 비용 0
             from ..core.script_generator import Script  # noqa: PLC0415
-            lines = [ln.strip() for ln in user_script.splitlines() if ln.strip()]
+            lines, tc_end = _parse_script_lines(user_script)  # ⏱ 타임코드 자동 정리 (v0.63)
             import re as _re  # noqa: PLC0415
             plain0 = _re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", lines[0])
             script = Script(title=(params.get("topic") or "").strip() or plain0[:40],
                             sentences=lines)
-            _set_job(job_id, note=f"내 대본 {len(lines)}줄 그대로 사용 (AI 대본 생략)")
+            note_txt = f"내 대본 {len(lines)}줄 그대로 사용 (AI 대본 생략)"
+            if tc_end:
+                params = {**params, "pace_sec": tc_end}
+                note_txt += f" · 타임코드 감지 → 약 {tc_end}초에 맞춤"
+            elif params.get("target_sec"):
+                params = {**params, "pace_sec": int(params.get("target_sec") or 0)}
+            # 검토(confirm) 경로는 잡에 저장된 params로 파이프라인을 돌리므로 갱신 필수
+            _set_job(job_id, note=note_txt, params=params)
             job_dir = Path(workdir) / job_id
             job_dir.mkdir(parents=True, exist_ok=True)
             (job_dir / "script.json").write_text(script.to_json(), encoding="utf-8")
@@ -2026,8 +2086,21 @@ class _Handler(BaseHTTPRequestHandler):
             if params.get("action") == "clear":
                 config.clear_api_keys()
                 self._send_json({"ok": True})
+            elif params.get("action") == "save":  # 🔑 API 연동 화면에서 저장 (v0.63)
+                _apply_keys({**params, "save_key": True})
+                self._send_json({"ok": True,
+                                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
+                                 "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY"))})
             else:
                 self._send_json({"error": "지원하지 않는 동작"}, 400)
+        elif path == "/api/fetch_fonts":  # ⬇ 무료 글씨체 받기 (v0.63 — BGM 받기 패턴)
+            from ..tools import fetch_fonts as ffonts  # noqa: PLC0415
+            try:
+                r = ffonts.fetch_all()
+                self._send_json({"ok": True, "got": r["got"], "skip": r["skip"],
+                                 "fail": r["fail"], "fonts": ffonts.installed()})
+            except Exception as e:  # noqa: BLE001
+                self._send_json({"error": f"글씨체 받기 실패: {str(e)[:200]}"}, 500)
         elif path == "/api/regenerate":
             self._regenerate(params, workdir)
         elif path == "/api/diagnostic":
@@ -2364,6 +2437,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ---------- 상태 ----------
 
+    def _state_fonts(self) -> list:
+        try:
+            from ..tools import fetch_fonts as ffonts  # noqa: PLC0415
+            return ffonts.installed()
+        except Exception:  # noqa: BLE001
+            return []
+
     def _state(self) -> dict:
         with _LOCK:
             jobs = [dict(j) for j in _JOBS.values()]
@@ -2394,6 +2474,7 @@ class _Handler(BaseHTTPRequestHandler):
         return {
             "jobs": jobs,
             "history": history,
+            "fonts": self._state_fonts(),
             "keys": {
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
@@ -2688,7 +2769,8 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.62)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.63)</small></h1>
+    <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2831,6 +2913,17 @@ _HTML = """<!doctype html>
           <option value="화이트 박스">화이트 박스 (흰 띠+검정 글자)</option>
           <option value="네온">네온 (민트 글로우)</option>
         </select>
+        <span style="margin-left:6px">글씨체</span>
+        <select id="editHookFontSel" class="fontsel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
+          <option value="">기본 (프리텐다드)</option>
+          <option value="BlackHanSans-Regular">블랙한산스 — 임팩트 굵은</option>
+          <option value="Jua-Regular">주아 — 둥근 포근</option>
+          <option value="DoHyeon-Regular">도현 — 각진 고딕</option>
+          <option value="Gugi-Regular">구기 — 레트로</option>
+          <option value="NanumPenScript-Regular">나눔손글씨 펜 — 손글씨</option>
+        </select>
+        <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+          <input type="checkbox" id="editHookTiltChk"> 비스듬히</label>
       </div>
       <div id="hookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
       <div class="hint">숫자는 자동으로 노랗게 강조돼요. 직접 표시하려면 <b>| 단어</b>(강조)나 <b>[노랑]글자[/]</b>(색)도 됩니다.</div>
@@ -2985,6 +3078,18 @@ _HTML = """<!doctype html>
           <div class="stylechip" data-v="네온" onclick="pickStyleChip('editSubStyleSel','네온',event)"
                style="color:#7dffd4;text-shadow:0 0 8px rgba(125,255,212,.95),0 0 18px rgba(125,255,212,.55)">네온 글로우</div>
         </div>
+      </div>
+      <div class="chk" style="gap:8px;margin-top:6px">
+        <span>글씨체</span>
+        <select id="editSubFontSel" class="fontsel" style="width:auto;padding:4px 8px">
+          <option value="">기본 (프리텐다드)</option>
+          <option value="BlackHanSans-Regular">블랙한산스 — 임팩트 굵은</option>
+          <option value="Jua-Regular">주아 — 둥근 포근</option>
+          <option value="DoHyeon-Regular">도현 — 각진 고딕</option>
+          <option value="Gugi-Regular">구기 — 레트로</option>
+          <option value="NanumPenScript-Regular">나눔손글씨 펜 — 손글씨</option>
+        </select>
+        <span class="hint">본문 자막 글씨체 (기억됨)</span>
       </div>
       <div style="margin-top:8px">
         <span>🎨 화면 톤(색보정) <span class="hint">— 같은 장면이 이렇게 달라져요 (자막·제목 글자는 원색 유지)</span></span>
@@ -3233,6 +3338,22 @@ _HTML = """<!doctype html>
           <option value="네온">네온 (민트 글로우)</option>
         </select>
       </div>
+      <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:6px">
+        <span>글씨체</span>
+        <select id="genHookFontSel" class="fontsel" style="width:auto;padding:4px 8px" onchange="renderGenHookPreview()">
+          <option value="">기본 (프리텐다드)</option>
+          <option value="BlackHanSans-Regular">블랙한산스 — 임팩트 굵은</option>
+          <option value="Jua-Regular">주아 — 둥근 포근</option>
+          <option value="DoHyeon-Regular">도현 — 각진 고딕</option>
+          <option value="Gugi-Regular">구기 — 레트로</option>
+          <option value="NanumPenScript-Regular">나눔손글씨 펜 — 손글씨</option>
+        </select>
+        <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+          <input type="checkbox" id="genHookTiltChk"> 비스듬히 (예능 자막st)</label>
+        <button class="ghost" id="fontFetchBtn" style="padding:4px 10px;font-size:12.5px"
+                onclick="fetchFonts(event)"
+                title="Google Fonts의 무료(OFL) 한글 글씨체 5종을 받아옵니다 (약 8MB) — 영상·상업용 사용 가능">⬇ 무료 글씨체 받기</button>
+      </div>
       <div id="genHookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
     </details>
 
@@ -3254,6 +3375,18 @@ _HTML = """<!doctype html>
           <div class="stylechip" data-v="네온" onclick="pickStyleChip('genSubStyleSel','네온',event)"
                style="color:#7dffd4;text-shadow:0 0 8px rgba(125,255,212,.95),0 0 18px rgba(125,255,212,.55)">네온 글로우</div>
         </div>
+      <div class="chk" style="gap:8px;margin-top:6px">
+        <span>글씨체</span>
+        <select id="genSubFontSel" class="fontsel" style="width:auto;padding:4px 8px">
+          <option value="">기본 (프리텐다드)</option>
+          <option value="BlackHanSans-Regular">블랙한산스 — 임팩트 굵은</option>
+          <option value="Jua-Regular">주아 — 둥근 포근</option>
+          <option value="DoHyeon-Regular">도현 — 각진 고딕</option>
+          <option value="Gugi-Regular">구기 — 레트로</option>
+          <option value="NanumPenScript-Regular">나눔손글씨 펜 — 손글씨</option>
+        </select>
+        <span class="hint">본문 자막 글씨체 — [⬇ 무료 글씨체 받기]는 상단 제목 그룹에</span>
+      </div>
       <div class="hint">보이는 그대로 들어가요 — 강조색도 스타일에 맞게 자동 조정, 한 번 고르면 기억</div>
     </details>
 
@@ -3389,7 +3522,8 @@ _HTML = """<!doctype html>
     </div>
 
     <div id="sceneBox" class="hidden">
-      <div style="font-weight:700">🖼 장면 그림 확인 <span class="hint">— 문장마다 이 그림이 배경으로 들어가요</span></div>
+      <div style="font-weight:700">🖼 장면 그림 확인 <span class="hint">— 문장마다 이 그림이 배경으로 들어가요</span>
+        <span class="hint" id="sceneMeta" style="font-weight:400;margin-left:8px"></span></div>
       <div class="hint" style="margin-top:4px">마음에 안 드는 장면은 <b>묘사를 고치고 [🔄 다시 그리기]</b>, 또는 <b>[📁 내 그림]</b>으로 직접 만든 그림을 넣어도 돼요 → 다 되면 맨 아래 <b>[✅ 이 그림들로 완성]</b></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         <button class="ghost" onclick="copyScenePrompts(event)" title="장면별 프롬프트를 「N번 장면 → 묘사」 통합 형식으로 복사 — 챗지피티/제미나이에 붙여넣어 한 번에 생성">📋 프롬프트 전체 복사 (통합)</button>
@@ -3613,6 +3747,40 @@ _HTML = """<!doctype html>
     <table id="histTable"><thead>
       <tr><th>시각</th><th>제목</th><th>목소리</th><th>상태</th><th></th></tr>
     </thead><tbody></tbody></table>
+  </div>
+
+  <div class="card hidden" id="apiCard">
+    <div class="backrow"><b>🔑 API 연동</b> <span class="hint">— 키는 이 PC의 설정 파일에만 저장돼요 (외부 전송 없음)</span></div>
+    <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
+      <div style="display:flex;align-items:center;gap:8px;font-weight:700">🌟 Gemini (구글)
+        <span class="hint" id="apiGeminiState" style="font-weight:400"></span></div>
+      <div class="hint" style="margin-top:4px">쓰이는 곳: AI 대본 · AI 성우 목소리 · 장면 그림 · 영상 분석 · 업로드 키트
+        — <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#7a9bff">무료 발급 (aistudio.google.com)</a></div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <input type="password" id="apiGeminiKey" placeholder="AIza... (붙여넣기)" style="flex:1">
+        <button class="ghost" style="white-space:nowrap" onclick="saveApiKey(event,'gemini')">저장</button>
+      </div>
+    </div>
+    <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
+      <div style="display:flex;align-items:center;gap:8px;font-weight:700">🎙 ElevenLabs (일레븐랩스)
+        <span class="hint" id="apiElevenState" style="font-weight:400"></span></div>
+      <div class="hint" style="margin-top:4px">쓰이는 곳: 성우 보이스 목록 · 내 목소리 클로닝
+        — <a href="https://elevenlabs.io" target="_blank" style="color:#7a9bff">elevenlabs.io (유료 구독)</a></div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <input type="password" id="apiElevenKey" placeholder="일레븐랩스 API 키" style="flex:1">
+        <button class="ghost" style="white-space:nowrap" onclick="saveApiKey(event,'elevenlabs')">저장</button>
+      </div>
+    </div>
+    <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
+      <div style="font-weight:700">🎤 GPT-SoVITS (무료 내 목소리 · 내 PC)</div>
+      <div class="hint" style="margin-top:4px">키가 아니라 내 PC 프로그램 연결이에요 — 등록은
+        <button class="ghost" style="padding:3px 10px" onclick="openVoice(event)">🎤 내 목소리 등록</button> 화면에서</div>
+    </div>
+    <div class="chk" style="gap:8px;margin-top:12px">
+      <button class="ghost" style="color:#ff9aa6" onclick="clearAllKeys(event)">🔒 저장된 키 모두 삭제</button>
+      <span class="hint">공용 PC였다면 쓰고 나서 지워주세요</span>
+    </div>
+    <button style="margin-top:12px" class="ghost" onclick="toggleApiCard()">닫기</button>
   </div>
 
   <div class="card hidden" id="settingsCard">
@@ -3998,6 +4166,9 @@ async function startEdit(){
     photo_path: photos, photo_sec: +(($('photoSec')||{}).value)||15,
     hook_scale: +(($('hookSizeSel')||{}).value)||1,
     hook_style: (($('hookStyleSel')||{}).value)||'기본',
+    hook_font: (($('editHookFontSel')||{}).value)||'',
+    hook_tilt: !!(($('editHookTiltChk')||{}).checked),
+    sub_font: (($('editSubFontSel')||{}).value)||'',
     sub_style: (($('editSubStyleSel')||{}).value)||'기본',
     tone: (($('editToneSel')||{}).value)||'기본',
     denoise: $('denoiseSel').value,
@@ -4586,6 +4757,9 @@ async function generate(){
       : ((($('genCharSel')||{}).value)||''),
     bg_scene_mode: sceneMode,                                   // v0.51 그림 방식
     hook_style: (($('genHookStyleSel')||{}).value)||'기본',        // v0.52 제목 프리셋
+    hook_font: (($('genHookFontSel')||{}).value)||'',              // v0.63 제목 글씨체
+    hook_tilt: !!(($('genHookTiltChk')||{}).checked),              // v0.63 비스듬히
+    sub_font: (($('genSubFontSel')||{}).value)||'',                // v0.63 자막 글씨체
     orientation: pick('genOrient') || 'shorts',                    // v0.61 화면 형태
     target_sec: +(($('genLenSel')||{}).value) || 60,               // v0.61 영상 길이
     script_text: (($('genScript')||{}).value)||'',                 // v0.61 내 대본
@@ -5029,6 +5203,61 @@ async function openDiagFolder(ev){
 
 function toggleSettings(){ $('settingsCard').classList.toggle('hidden'); }
 
+// ── 🔑 API 연동 화면 (v0.63) ──
+function toggleApiCard(){
+  $('apiCard').classList.toggle('hidden');
+  refreshApiStates();
+}
+function refreshApiStates(){
+  const g = $('apiGeminiState'), e = $('apiElevenState');
+  if(g) g.textContent = window._hasGeminiKey ? '✅ 연결됨' : '⬜ 미등록';
+  if(e) e.textContent = window._hasElevenKey ? '✅ 연결됨' : '⬜ 미등록';
+}
+async function saveApiKey(ev, which){
+  ev.preventDefault();
+  const val = (which === 'gemini' ? $('apiGeminiKey').value : $('apiElevenKey').value).trim();
+  if(!val){ alert('키를 붙여넣은 뒤 [저장]을 눌러주세요'); return; }
+  const body = {action:'save'};
+  if(which === 'gemini') body.gemini_key = val; else body.elevenlabs_key = val;
+  const d = await (await fetch('/api/keys', {method:'POST', body: JSON.stringify(body)})).json();
+  if(d.error){ alert(d.error); return; }
+  window._hasGeminiKey = !!d.gemini; window._hasElevenKey = !!d.elevenlabs;
+  if(which === 'gemini') $('apiGeminiKey').value = ''; else $('apiElevenKey').value = '';
+  refreshApiStates();
+  alert('저장했어요 — 이제 이 키가 필요한 기능이 모두 켜집니다');
+}
+async function clearAllKeys(ev){
+  ev.preventDefault();
+  if(!confirm('저장된 API 키를 모두 삭제할까요? (다음 사용 때 다시 입력)')) return;
+  await fetch('/api/keys', {method:'POST', body: JSON.stringify({action:'clear'})});
+  window._hasGeminiKey = false; window._hasElevenKey = false;
+  refreshApiStates();
+}
+
+// ── ⬇ 무료 글씨체 (v0.63) ──
+function fillFontSels(installed){
+  const have = new Set(installed || []);
+  document.querySelectorAll('select.fontsel option').forEach(o => {
+    if(!o.value) return;  // 기본(프리텐다드)은 항상 가능
+    const base = o.textContent.replace(' — 받기 필요', '');
+    o.disabled = !have.has(o.value);
+    o.textContent = o.disabled ? base + ' — 받기 필요' : base;
+  });
+}
+async function fetchFonts(ev){
+  ev.preventDefault();
+  const btn = ev.target;
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '받는 중… (약 8MB)';
+  try {
+    const d = await (await fetch('/api/fetch_fonts', {method:'POST', body:'{}'})).json();
+    if(d.error){ alert(d.error); return; }
+    fillFontSels(d.fonts || []);
+    let msg = '무료 글씨체 준비 완료! 이제 글씨체 목록에서 고를 수 있어요.';
+    if((d.fail || []).length) msg += String.fromCharCode(10) + '실패: ' + d.fail.join(', ') + ' — 인터넷 확인 후 다시';
+    alert(msg);
+  } finally { btn.disabled = false; btn.textContent = old; }
+}
+
 function resetEditForm(ev){
   ev.preventDefault();
   if(!confirm('편집 폼의 모든 입력을 기본값으로 되돌릴까요?\\n(기억된 편집 세팅도 기본값으로 — 저장된 키·내 목소리는 그대로)')) return;
@@ -5237,6 +5466,9 @@ function renderScenes(job){
   const grid = $('sceneGrid'); grid.innerHTML = '';
   window._lastScenes = job.scenes || [];
   window._jobOrient = job.orientation || 'shorts';  // v0.61 복사 문구용
+  const sm = $('sceneMeta');
+  if(sm) sm.textContent = '(그림체: ' + (job.scene_style || '일러스트') +
+    ' · 마스코트: ' + (job.scene_character || '없음') + ' — 폼 「AI 배경 그림」에서 변경)';
   (job.scenes || []).forEach((s, k) => {
     const cell = document.createElement('div');
     cell.style.cssText = 'border:1px solid #2c3350;border-radius:12px;padding:10px;background:#12141c;display:flex;flex-direction:column;gap:6px'
@@ -5489,6 +5721,15 @@ async function poll(){
     // v0.52: 상단 제목 글씨 스타일 복원 (생성 폼)
     const hks = ((state.settings || {}).subtitle || {}).hook_style || '기본';
     if($('genHookStyleSel')) $('genHookStyleSel').value = hks;
+    // v0.63: 글씨체·기울임 복원 + 설치 목록 반영
+    fillFontSels(state.fonts || []);
+    const subF = ((state.settings || {}).subtitle || {}).font || '';
+    const hkF = ((state.settings || {}).subtitle || {}).hook_font || '';
+    const tiltV = !!((state.settings || {}).subtitle || {}).hook_tilt;
+    ['genSubFontSel', 'editSubFontSel'].forEach(id => {
+      const el = $(id); if(el) el.value = (subF === 'Pretendard-ExtraBold') ? '' : subF; });
+    ['genHookFontSel', 'editHookFontSel'].forEach(id => { const el = $(id); if(el) el.value = hkF; });
+    ['genHookTiltChk', 'editHookTiltChk'].forEach(id => { const el = $(id); if(el) el.checked = tiltV; });
     // v0.61: 화면 형태·영상 길이 복원
     const gor = ((state.settings || {}).ui || {}).gen_orientation;
     if(gor){ const r = document.querySelector("input[name=genOrient][value='" + gor + "']"); if(r) r.checked = true; }

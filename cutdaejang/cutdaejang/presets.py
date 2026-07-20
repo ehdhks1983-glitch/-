@@ -16,6 +16,12 @@ FONT_FAMILY_ALIASES = {
     "Pretendard-ExtraBold": "Pretendard ExtraBold",
     "Pretendard-Bold": "Pretendard Bold",
     "Pretendard-SemiBold": "Pretendard SemiBold",
+    # ⬇ 무료 글씨체 (v0.63 — tools/fetch_fonts.py로 받는 Google Fonts OFL 한글)
+    "BlackHanSans-Regular": "Black Han Sans",
+    "Jua-Regular": "Jua",
+    "DoHyeon-Regular": "Do Hyeon",
+    "Gugi-Regular": "Gugi",
+    "NanumPenScript-Regular": "Nanum Pen Script",
 }
 
 SUBTITLE_STYLE_PRESETS = {

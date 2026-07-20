@@ -30,7 +30,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font},{size},{primary},&H000000FF,{def_outline_color},&H80000000,0,0,0,0,100,100,0,0,{def_border},{def_outline},{shadow},{alignment},{sub_ml},{sub_ml},{margin_v},1
-Style: Title,{font},{title_size},{title_primary},&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,0,{title_border},{title_outline},{title_shadow},8,{title_ml},{title_ml},{title_margin_v},1
+Style: Title,{title_font},{title_size},{title_primary},&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,{title_angle},{title_border},{title_outline},{title_shadow},8,{title_ml},{title_ml},{title_margin_v},1
 Style: Info,{font},{info_size},{info_primary},&H000000FF,&H00101010,&HA0000000,0,0,0,0,100,100,0,0,1,{info_outline},2,5,60,60,0,1
 
 [Events]
@@ -286,6 +286,8 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         w=spec.canvas.w,
         h=spec.canvas.h,
         font=presets.font_family(style.font),
+        title_font=presets.font_family(getattr(style, "hook_font", "") or style.font),
+        title_angle=4 if getattr(style, "hook_tilt", False) else 0,
         size=sc(style.size),
         primary=ass_color(style.primary_color),
         def_border=3 if sub_band else 1,

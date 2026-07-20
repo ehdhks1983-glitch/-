@@ -195,8 +195,21 @@ IMAGE_STYLES = {
 }
 
 
+_QUOTED_RE = __import__("re").compile(r'["\u201c\u201d\u2018\u2019\'`]([^"\u201c\u201d\u2018\u2019\'`]{2,60})["\u201c\u201d\u2018\u2019\'`]')
+
+
+def strip_caption_text(prompt: str) -> str:
+    """대본에서 온 따옴표 대사·자막 지시를 프롬프트에서 제거 (v0.63).
+
+    이미지 모델이 따옴표 문구를 그림 속 글자로 그리려다 한글이 다 깨진다(실사용
+    리포트) → 따옴표 구절은 통째로 빼고 장면 묘사만 남긴다.
+    """
+    out = _QUOTED_RE.sub("", prompt or "")
+    return " ".join(out.split())
+
+
 def scene_prompt_text(prompt: str, style: str = "일러스트", character: str = "") -> str:
-    """장면 프롬프트 조립 — 그림체 + (있으면) 마스코트 캐릭터 + 장면 묘사 (v0.50)."""
+    """장면 프롬프트 조립 — 그림체 + (있으면) 마스코트 + 장면 묘사 + 글자 금지 (v0.50/0.63)."""
     parts = []
     style_text = IMAGE_STYLES.get(style, "")
     if style_text:
@@ -205,9 +218,12 @@ def scene_prompt_text(prompt: str, style: str = "일러스트", character: str =
     ch = CHARACTER_PRESETS.get(ch, ch)  # 프리셋 키면 상세 묘사로 치환
     if ch:
         parts.append(f"주인공: {ch} — 모든 장면에 같은 모습·같은 그림체로 등장")
-    p = (prompt or "").strip()
+    p = strip_caption_text(prompt)
     if p:
         parts.append(p if not ch else f"장면: 이 캐릭터가 {p}")
+    # 🚫 이미지 속 한글은 거의 항상 깨진다 — 자막은 컷대장이 얹으니 그림엔 글자 금지
+    parts.append("중요: 그림 안에 글자·문자·자막·간판 텍스트·로고를 절대 넣지 말 것 "
+                 "(글자 없는 순수 장면만)")
     return ". ".join(parts)
 
 

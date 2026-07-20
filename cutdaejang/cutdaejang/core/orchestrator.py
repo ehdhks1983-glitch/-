@@ -40,6 +40,7 @@ class JobOptions:
     tone: str = "정보형"
     target_sec: int = 60
     orientation: str = "shorts"          # shorts(세로 9:16) | wide(가로 롱폼 16:9) — v0.61
+    pace_sec: int = 0                    # 내 대본일 때 목표 길이(초) — 간격을 늘려 맞춤 (v0.63)
     bgm: str = ""                        # ""(없음) | "random" | 파일명/경로
     hook: str = ""                       # 상단 제목(훅). 비면 대본 제목 사용
     user_background: Optional[str] = None
@@ -97,7 +98,9 @@ def build_style(settings: dict) -> Style:
     """settings.subtitle → 공통 Style (A/B 출력 동일 기준)."""
     sub = settings["subtitle"]
     return Style(
-        font="Pretendard-ExtraBold",
+        font=sub.get("font") or "Pretendard-ExtraBold",
+        hook_font=sub.get("hook_font") or "",
+        hook_tilt=bool(sub.get("hook_tilt", False)),
         size=sub["font_size"],
         outline=sub["outline"],
         shadow=sub.get("shadow", 1),
@@ -229,9 +232,17 @@ def run_job(
             highlights=script.highlights,
             hook=opts.hook or script.title,  # 훅 미지정 시 대본 제목을 상단 제목으로
             opts=timeline_calculator.TimelineOptions(
-                gap_us=settings["audio"]["gap_ms"] * 1000
+                gap_us=settings["audio"]["gap_ms"] * 1000,
+                pace_to_us=max(0, int(opts.pace_sec)) * 1_000_000,  # ⏱ 내 대본 길이 맞춤 (v0.63)
             ),
         )
+        if opts.pace_sec and spec.duration_us:
+            want_us = opts.pace_sec * 1_000_000
+            if spec.duration_us >= want_us - 500_000:
+                note(f"⏱ 문장 간격을 조절해 약 {spec.duration_us / 1e6:.0f}초로 맞췄어요")
+            else:
+                note(f"⏱ 대본 낭독이 목표({opts.pace_sec}초)보다 짧아 "
+                     f"{spec.duration_us / 1e6:.0f}초로 완성돼요 — 문장을 늘리면 더 길어져요")
         # v0.45: 장면별 AI 이미지 배경 — 문장 타이밍(오디오 클립)에 맞춰 이미지가 넘어감.
         # 키 없음/설정 꺼짐/사용자 배경/문장 1개면 기존 단일 배경 유지. 실패는 이웃으로 채움.
         # v0.50: scene_images가 오면(장면 검토에서 확정) 생성 없이 그대로 사용.
