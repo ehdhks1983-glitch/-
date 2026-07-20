@@ -455,8 +455,8 @@ def test_ai_image_setup_gating(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "dummy")
     p, why = webui._ai_image_setup({"tts_provider": "windows"}, settings)  # 내장 음성도 OK
     assert p is not None and why == ""
-    p, why = webui._ai_image_setup({"tts_provider": "stub"}, settings)     # 테스트 톤만 제외
-    assert p is None and "테스트 톤" in why
+    p, why = webui._ai_image_setup({"tts_provider": "stub"}, settings)     # 점검용만 제외
+    assert p is None and "점검용" in why
     p, why = webui._ai_image_setup({"tts_provider": "gemini"}, {"bg": {"ai_image": False}})
     assert p is None and "꺼짐" in why
 

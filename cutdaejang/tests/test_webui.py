@@ -848,6 +848,22 @@ def test_generate_remembers_hook_style(server):
         _post(server, "/api/settings", {"settings": {"subtitle": {"hook_style": "기본"}}})
 
 
+def test_beginner_first_run_defaults(server):
+    """v0.57 — 초보자 첫 경험: AI 성우 기본, 테스트 톤은 세부 설정으로,
+    🎬 자동 연출 그룹 신설, 완료 화면 다음 단계 안내, 개발 버전 표기 제거."""
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'value="gemini" checked' in html           # 기본 목소리 = 🌟 AI 성우
+    assert html.count('value="stub"') == 1            # 라디오는 세부 설정 한 곳에만
+    assert "소리 점검용 목소리" in html                 # 용어: 테스트 톤 → 소리 점검용
+    assert "테스트 톤" not in html.split("<script>")[0]  # 화면 텍스트에서 제거
+    i = html.index("자동 연출")                        # 🎬 연출 4종이 한 그룹에
+    seg = html[i:i + 2600]
+    for frag in ('id="genSfxChk"', 'id="genPunchChk"', 'id="genInfoChk"', 'id="genToneSel"'):
+        assert frag in seg, frag
+    assert "다음엔 이것도 해보세요" in html             # 완료 화면 다음 단계 안내
+    assert "🆕 v0" not in html                        # 버전 표기(개발 소음) 0건
+
+
 def test_tone_and_infopop_ui_and_spec(server):
     """v0.56 — 톤 셀렉트(양 폼)·숫자 팝 체크: 기억 + spec 반영."""
     from pathlib import Path

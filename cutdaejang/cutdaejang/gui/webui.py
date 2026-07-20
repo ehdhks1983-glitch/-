@@ -243,7 +243,7 @@ def _ai_image_setup(params: dict, settings: dict):
     if not os.environ.get("GEMINI_API_KEY"):
         return None, "Gemini 키 없음"
     if params.get("tts_provider") == "stub":
-        return None, "테스트 톤은 점검용이라 미사용"
+        return None, "소리 점검용 목소리라 미사용"
     return background_generator.GeminiImage(
         model=settings["bg"].get("image_model")), ""
 
@@ -2438,7 +2438,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.56)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.57)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2502,7 +2502,7 @@ _HTML = """<!doctype html>
         <input type="text" id="photoPath" style="flex:1" placeholder="사진이 들어 있는 폴더 경로 (안의 사진 전부, 이름 순서대로)">
         <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','folder')">📁 폴더 선택</button>
       </div>
-      <div class="hint">🆕 v0.51 [📁 폴더 선택]으로 바로 고를 수 있어요. 파일 경로 여러 개를 줄바꿈/세미콜론으로 넣어도 돼요. 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
+      <div class="hint">[📁 폴더 선택]으로 바로 고를 수 있어요. 파일 경로 여러 개를 줄바꿈/세미콜론으로 넣어도 돼요. 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
       <div class="chk" style="gap:8px">
         <span>영상 전체 길이</span>
         <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px">
@@ -2707,7 +2707,7 @@ _HTML = """<!doctype html>
           <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
           <option value="네온">네온 (민트 글로우)</option>
         </select>
-        <span class="hint">🆕 v0.54 — 본문 자막 전체의 글씨 느낌 (강조색도 자동 조정, 기억됨)</span>
+        <span class="hint">본문 자막 전체의 글씨 느낌 — 강조색도 자동 조정, 한 번 고르면 기억</span>
       </div>
       <div class="chk" style="gap:8px;flex-wrap:wrap">
         <span>🎨 화면 톤(색보정)</span>
@@ -2718,7 +2718,7 @@ _HTML = """<!doctype html>
           <option value="선명">선명 (대비·채도·샤픈 업)</option>
           <option value="흑백">흑백 (드라마틱)</option>
         </select>
-        <span class="hint">🆕 v0.56 — 영상 전체 색감 (자막·제목 글자는 원색 유지)</span>
+        <span class="hint">영상 전체 색감 (자막·제목 글자는 원색 유지)</span>
       </div>
       <div class="row" style="margin-top:4px">
         <div>
@@ -2821,7 +2821,7 @@ _HTML = """<!doctype html>
         </div>
       </div>
       <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장됩니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $5)</b>부터 지원.</div>
-      <div class="hint" style="margin-top:6px;line-height:1.7">🧭 <b>처음이라면 이 순서대로</b> (🆕 v0.52 자세한 안내):<br>
+      <div class="hint" style="margin-top:6px;line-height:1.7">🧭 <b>처음이라면 이 순서대로</b>:<br>
         ① <a href="https://elevenlabs.io" target="_blank" style="color:#7a9bff">elevenlabs.io</a> 가입 → 오른쪽 위 내 계정 → <b>Subscription</b>에서 Starter(월 $5) 구독<br>
         ② <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" style="color:#7a9bff">API Keys 페이지</a>에서 <b>Create API Key</b> → 복사해 위의 「ElevenLabs API 키」 칸에 붙여넣기<br>
         ③ [📁]로 내 녹음 파일 선택 → <b>[등록]</b> → 🔊 미리듣기로 확인 (녹음 없이 <b>성우 목소리</b>만 쓰려면 ①②만 하면 돼요 —
@@ -2853,14 +2853,13 @@ _HTML = """<!doctype html>
 
     <div class="steplabel"><span class="stepnum">2</span>목소리 고르기</div>
     <div class="toggle">
-      <label><input type="radio" name="prov" value="gemini"><span>🌟 AI 성우 (추천)</span></label>
+      <label><input type="radio" name="prov" value="gemini" checked><span>🌟 AI 성우 (추천)</span></label>
       <label id="provWinLabel" class="hidden"><input type="radio" name="prov" value="windows" id="provWin"><span>내장 음성 (무료)</span></label>
       <label id="provMineLabel" class="hidden"><input type="radio" name="prov" value="elevenlabs" id="provMine"><span>🎤 내 목소리</span></label>
       <label id="provElevenLabel"><input type="radio" name="prov" value="eleven_voice" id="provEleven" onclick="checkElevenProv(event)"><span>🎙 일레븐랩스 성우</span></label>
       <label id="provSovitsLabel" class="hidden"><input type="radio" name="prov" value="sovits" id="provSovits"><span>🎤 내 목소리 (무료·내 PC)</span></label>
-      <label><input type="radio" name="prov" value="stub" checked><span>🔧 테스트 톤</span></label>
     </div>
-    <div class="hint">여기서는 <b>목소리만</b> 골라요 — Gemini 키가 있으면 <b>대본·배경은 어떤 목소리든 AI</b>가 만듭니다. 🌟 AI 성우 = 목소리까지 AI(키 필요) · 내장 음성 = Windows 한국어 음성(키 없어도 됨) · 테스트 톤 = "삐-" 소리(기계 점검용)</div>
+    <div class="hint">여기서는 <b>목소리만</b> 골라요 — 대본·자막·배경은 뭘 고르든 컷대장이 알아서 만듭니다.</div>
     <div class="chk" style="gap:8px">
       <span class="hint">내 목소리(녹음으로 만든 AI 목소리)로 만들고 싶다면 →</span>
       <button class="ghost" style="padding:5px 10px" onclick="openVoice(event)">🎤 내 목소리 등록</button>
@@ -2940,7 +2939,23 @@ _HTML = """<!doctype html>
           <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
           <option value="네온">네온 (민트 글로우)</option>
         </select>
-        <span class="hint">🆕 v0.54 — 본문 자막 전체의 글씨 느낌 (강조색도 자동 조정, 기억됨)</span>
+        <span class="hint">본문 자막 전체의 글씨 느낌 — 강조색도 자동 조정, 한 번 고르면 기억</span>
+      </div>
+    </details>
+
+    <details class="opt">
+      <summary>🎬 자동 연출 <span class="hint">— 효과음·줌·숫자 팝·색감 (전부 자동, 여기서 켜고 끔)</span></summary>
+      <div class="chk" style="gap:8px">
+        <input type="checkbox" id="genSfxChk" checked>
+        <span>🔔 <b>효과음 자동</b> — 강조 문장 "뿅" · 장면 전환 "휙" · 제목 등장 "띠링"</span>
+      </div>
+      <div class="chk" style="gap:8px">
+        <input type="checkbox" id="genPunchChk" checked>
+        <span>👊 <b>펀치인 줌</b> — 강조 문장에서 화면이 살짝 확대됐다 복귀 (자막은 고정)</span>
+      </div>
+      <div class="chk" style="gap:8px">
+        <input type="checkbox" id="genInfoChk" checked>
+        <span>🔢 <b>숫자 인포 팝</b> — 강조 문장 속 숫자(3가지·10분·50%)가 크게 뿅!</span>
       </div>
       <div class="chk" style="gap:8px;flex-wrap:wrap">
         <span>🎨 화면 톤(색보정)</span>
@@ -2951,17 +2966,7 @@ _HTML = """<!doctype html>
           <option value="선명">선명 (대비·채도·샤픈 업)</option>
           <option value="흑백">흑백 (드라마틱)</option>
         </select>
-        <span class="hint">🆕 v0.56 — 영상 전체 색감 (자막·제목 글자는 원색 유지)</span>
-      </div>
-      <div class="chk" style="gap:8px">
-        <input type="checkbox" id="genInfoChk" checked>
-        <span>🔢 <b>숫자 인포 팝</b> — 강조 문장 속 숫자(3가지·10분·50%)가 화면에 크게 뿅!</span>
-        <span class="hint">🆕 v0.56</span>
-      </div>
-      <div class="chk" style="gap:8px">
-        <input type="checkbox" id="genPunchChk" checked>
-        <span>👊 <b>펀치인 줌</b> — 강조 문장에서 화면이 살짝(1.1배) 확대됐다 돌아와요</span>
-        <span class="hint">🆕 v0.55 · 예능 편집 리듬 · 자막·제목은 흔들리지 않아요</span>
+        <span class="hint">영상 전체 색감 — 자막·제목 글자는 원색 유지</span>
       </div>
     </details>
 
@@ -2973,10 +2978,6 @@ _HTML = """<!doctype html>
         <button class="ghost" id="bgmFetchBtn" style="white-space:nowrap" onclick="fetchBgm(event)"
                 title="유튜버들이 가장 많이 쓰는 무료 BGM 14곡(Kevin MacLeod, CC BY)을 resources/bgm 폴더에 자동으로 받아옵니다 (약 40MB)">⬇ 무료 BGM 받기</button>
       </div>
-      <div class="chk" style="gap:8px">
-        <input type="checkbox" id="genSfxChk" checked>
-        <span>🔔 <b>효과음 자동</b> — 강조 문장에 "뿅", 장면 넘어갈 때 "휙", 제목 등장에 "띠링"</span>
-        <span class="hint">🆕 v0.53 · 내장 합성음(저작권 무관) · resources/sfx에 같은 이름 파일을 넣으면 내 효과음으로 교체</span>
       </div>
       <div class="hint"><b>windows\\6_무료음원_받기.bat</b>로 유명 무료 BGM 자동 채우기. 저작권 확인된 음원만 사용하세요.</div>
     </details>
@@ -3008,7 +3009,7 @@ _HTML = """<!doctype html>
         </select>
         <input type="text" id="genCharCustom" class="hidden" style="flex:1;min-width:180px;padding:6px 8px"
                placeholder="예) 파란 모자를 쓴 유머러스한 해골">
-        <span class="hint">🆕 v0.50 — 모든 장면에 같은 캐릭터가 등장해요 (첫 그림을 참조로 일관성 유지)</span>
+        <span class="hint">모든 장면에 같은 캐릭터가 등장 (첫 그림을 참조로 일관성 유지)</span>
       </div>
       <div class="chk" style="gap:8px;flex-wrap:wrap">
         <span>그림 만들기</span>
@@ -3019,21 +3020,19 @@ _HTML = """<!doctype html>
         </select>
         <span>최대 장수</span>
         <input type="number" id="genMaxImg" min="0" max="50" value="0" style="width:74px;padding:6px 8px">
-        <span class="hint">0=문장마다 1장 · 예) 19문장에 10 → 10장만 만들어 비용 절감 (사이 문장은 직전 그림 유지)</span>
+        <span class="hint">0=문장마다 1장 · 예) 19문장에 10 → 10장만 (비용 절감)</span>
       </div>
-      <div class="hint">🆕 v0.51 ✍ <b>내가 넣기</b>: 「검토」로 만들면 장면 프롬프트가 번호대로 쭉 나와요 —
-        [📋 전체 복사] → 챗지피티/제미나이(이미 쓰는 유료 계정)에 붙여넣어 한 번에 생성 →
-        [📁 폴더에서 넣기]로 끝. 컷대장 쪽 이미지 비용은 <b>0원</b>.</div>
+      <div class="hint">✍ 내가 넣기 = 프롬프트만 뽑아 챗지피티/제미나이에서 직접 생성해 넣는 방식 (이미지 비용 0원, 「검토」로 진행)</div>
       <div class="hint hidden" id="aiBgOffWarn" style="color:#e8b34b">⚠ 지금 ⚙ 설정에서 <b>AI 배경이 꺼져 있어</b> 장면 그림·마스코트가 적용되지 않아요.
         <button class="ghost" style="padding:3px 10px;margin-left:6px" onclick="enableAiBg(event)">지금 켜기</button></div>
-      <div class="hint">🆕 v0.45 — 대본의 문장(장면)마다 AI가 그림을 그려 말 타이밍에 맞춰 넘어갑니다
-        (장면마다 살짝 줌 + 부드러운 전환). Gemini 키가 있으면 자동 적용,
-        없으면 기본 그라데이션 배경으로 만들어져요. 이미지 비용은 무료 키 한도 안이면 0원.
-        ⚙ 설정 → 배경·모션에서 끌 수 있어요.</div>
+      <div class="hint">문장(장면)마다 AI 그림이 말 타이밍에 맞춰 넘어갑니다 — 키 없으면 기본 그라데이션.</div>
     </details>
 
     <details class="opt">
       <summary>⚙️ 세부 설정 <span class="hint">— 완성 전에 대본을 확인하고 싶다면</span></summary>
+      <div class="chk" style="gap:8px">
+        <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="radio" name="prov" value="stub"><span>🔊 소리 점검용 목소리 (삐- 테스트 — 기계 확인할 때만)</span></label>
+      </div>
       <label style="margin-top:4px">완성 방식</label>
       <div class="toggle">
         <label><input type="radio" name="mode" value="auto" checked><span>자동 (한 번에 완성)</span></label>
@@ -3188,6 +3187,10 @@ _HTML = """<!doctype html>
       <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
       <button class="ghost" style="margin-top:10px" onclick="toggleKit(event)">📦 업로드 키트 (제목·태그·설명 자동)</button>
       <button class="ghost" style="margin-top:10px" onclick="toggleThumb(event)">🖼️ 유튜브 썸네일 만들기 (16:9)</button>
+      <div class="hint" style="margin-top:10px;padding:8px 12px;border:1px dashed #3a4157;border-radius:10px">🎯 <b>다음엔 이것도 해보세요</b> —
+        ① [🖼️ 썸네일 만들기]로 업로드용 썸네일까지 30초 ·
+        ② [📦 업로드 키트]로 제목·태그·설명 복사 ·
+        ③ 세부 설정을 「검토」로 하면 대본과 장면 그림을 확인·수정하고 완성할 수 있어요</div>
       <div id="kitBox" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
         <div style="font-weight:700;font-size:14px">📦 업로드 키트 <span class="hint">— 유튜브 · 틱톡 · 인스타 · 네이버 클립 · 스레드</span></div>
         <div class="hint" id="kitStatus" style="margin-top:4px"></div>
@@ -3324,7 +3327,7 @@ _HTML = """<!doctype html>
       <div class="chk"><input type="checkbox" id="setAiImage"><span>AI 배경 이미지 생성 (Gemini · 키 없으면 자동 생략 — v0.45부터 기본 켬)</span></div>
       <div class="chk"><input type="checkbox" id="setSceneImg"><span>🖼 문장(장면)마다 새 이미지 — 말 타이밍에 맞춰 그림이 넘어가요 (끄면 1장+줌)</span></div>
       <div class="hint" style="margin:2px 0 0 26px">🤖 AI 영상 만들기 전용 (내 영상 편집·사진은 원본이 배경). Gemini 키가 있으면
-        어떤 목소리를 골라도 적용돼요 (테스트 톤만 제외). 그림체는 만들기 폼의 「🖼 AI 배경 그림」에서.
+        어떤 목소리를 골라도 적용돼요 (소리 점검용만 제외). 그림체는 만들기 폼의 「🖼 AI 배경 그림」에서.
         <b>실제로 어떤 배경이 쓰였는지는 완성 화면의 「🖼️ 배경: …」 표시로 확인</b> —
         AI 장면 이미지 N장 ✨ / AI 이미지 ✨ / 기본 그라데이션(사유)로 알려줍니다.</div>
     </details>
@@ -4174,6 +4177,11 @@ async function generate(){
   if(prov === 'eleven_voice' && !(($('elevenVoiceSel')||{}).value)){
     alert('일레븐랩스 보이스 목록을 아직 못 불러왔어요 — 잠시 후 다시 시도하거나 키를 확인하세요'); return;
   }
+  if(prov === 'gemini' && !window._hasGeminiKey && !($('geminiKey').value||'').trim()){
+    const k = ensureGeminiKey();   // 무료 발급 안내 포함 프롬프트 (1회 저장)
+    if(k){ $('geminiKey').value = k; }
+    else if(!confirm('Gemini 키 없이 만들면 내장 음성·기본 배경으로 완성돼요.' + String.fromCharCode(10) + '키 없이 계속할까요?')) return;
+  }
   let autoMode = pick('mode') === 'auto';
   const sceneMode = (($('genSceneMode')||{}).value)||'auto';
   if(sceneMode === 'manual' && autoMode && !(($('batchChk')||{}).checked)){
@@ -4976,7 +4984,6 @@ async function poll(){
   }
   if(window._isWin){
     $('provWinLabel').classList.remove('hidden');
-    if(!window._defaultSet){ window._defaultSet = true; $('provWin').checked = true; }
   }
   if(!window._optsFilled){
     window._optsFilled = true;
@@ -5099,7 +5106,7 @@ async function poll(){
     renderSubRows();
     $('noteText').textContent = job.edit_summary || '';
   }
-  const provKo = {gemini:'Gemini', openai:'OpenAI', windows:'Windows 내장 음성', stub:'테스트 톤'};
+  const provKo = {gemini:'Gemini', openai:'OpenAI', windows:'Windows 내장 음성', stub:'소리 점검용'};
   if(job.status === 'ok' || job.status === 'partial'){
     clearInterval(timer); timer = null;
     // 완료 화면에도 안내(트림·핵심 구간·TTS 경고)를 남김 — 진행 중에만 보이던 문제 수정 (v0.41)
