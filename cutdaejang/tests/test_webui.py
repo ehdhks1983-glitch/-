@@ -542,6 +542,7 @@ def test_v062_script_batch_and_scene_reuse(server, tmp_path):
         _post(server, "/api/scene_upload", {"job_id": r1["job_id"], "index": first_i,
                                             "path": str(img)})
 
+        time.sleep(1.1)  # 잡 id가 초 단위 — 같은 초면 순번이 붙어 슬러그 매칭이 빗나감
         r2 = _post(server, "/api/generate", body)
         j2 = _wait_status(server, r2["job_id"], {"awaiting_review", "failed"})
         _post(server, "/api/confirm", {"job_id": r2["job_id"], "title": "재사용 확인",

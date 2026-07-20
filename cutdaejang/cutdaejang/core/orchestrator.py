@@ -62,10 +62,19 @@ class JobResult:
     errors: List[str] = field(default_factory=list)
 
 
+_LAST_JOB_ID = {"base": "", "n": 0}
+
+
 def new_job_id(title_hint: str = "") -> str:
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = re.sub(r"[^0-9A-Za-z가-힣]+", "-", title_hint)[:24].strip("-")
-    return f"{stamp}-{slug}" if slug else stamp
+    base = f"{stamp}-{slug}" if slug else stamp
+    # 같은 초에 같은 제목으로 두 번 만들면 id가 겹쳐 작업이 덮어써진다 → 순번 부가 (v0.62)
+    if base == _LAST_JOB_ID["base"]:
+        _LAST_JOB_ID["n"] += 1
+        return f"{base}-{_LAST_JOB_ID['n']}"
+    _LAST_JOB_ID.update(base=base, n=0)
+    return base
 
 
 def safe_filename(title: str, fallback: str = "output") -> str:

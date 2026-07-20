@@ -86,3 +86,11 @@ def test_reuse_prev_scenes_copies_matching_topic(tmp_path):
     # 슬러그 없는 잡(스탬프만)은 재사용 안 함
     assert _reuse_prev_scenes("20260720-130000", str(tmp_path), [0],
                               presets.CANVAS_SHORTS) == {}
+
+
+def test_new_job_id_unique_within_same_second():
+    from cutdaejang.core.orchestrator import new_job_id
+
+    ids = [new_job_id("같은 제목") for _ in range(3)]
+    assert len(set(ids)) == 3  # 같은 초라도 순번이 붙어 절대 안 겹침
+    assert ids[1].startswith(ids[0]) and ids[1].endswith("-1") and ids[2].endswith("-2")
