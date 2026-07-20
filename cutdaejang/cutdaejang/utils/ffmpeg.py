@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 from collections import deque
+from pathlib import Path
 from typing import Callable, Optional
 
 from .timefmt import seconds_to_us
@@ -118,6 +119,49 @@ def nvenc_available() -> bool:
     except Exception:
         _NVENC_CACHE = False
     return _NVENC_CACHE
+
+
+_FILTER_INLINE_MAX = 20000  # Windows CreateProcess 한계(32767자)에 여유를 둔 인라인 상한
+_FILTER_SCRIPT_OPT: dict = {}
+
+
+def _filter_script_opt(bin_path: str) -> str:
+    """이 빌드가 지원하는 「필터그래프를 파일로」 옵션 이름.
+
+    FFmpeg 7.0부터 -filter_complex_script 가 -/filter_complex 로 대체(deprecated)됐고
+    2025년 이후 master 빌드(BtbN 등 — 1_설치.bat이 받는 빌드)에서는 아예 제거되어
+    "Unrecognized option"으로 즉사한다. 반대로 -/filter_complex 는 6.x 이하에 없다.
+    → 도움말에서 구형 옵션 지원 여부를 1회 확인해 빌드별로 선택(캐시).
+    """
+    opt = _FILTER_SCRIPT_OPT.get(bin_path)
+    if opt:
+        return opt
+    try:
+        proc = subprocess.run(
+            [bin_path, "-hide_banner", "-h", "full"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20,
+        )
+        if proc.returncode != 0 or not proc.stdout:
+            legacy = True  # 도움말조차 못 내는 상태 — 감지 실패로 취급
+        else:
+            legacy = b"filter_complex_script" in proc.stdout
+    except Exception:
+        legacy = True  # 감지 실패 시 십수 년 지원돼 온 구형 옵션으로
+    opt = "-filter_complex_script" if legacy else "-/filter_complex"
+    _FILTER_SCRIPT_OPT[bin_path] = opt
+    return opt
+
+
+def filter_complex_args(graph: str, script_path) -> list:
+    """-filter_complex 인자 목록. 짧으면 어느 빌드에서나 통하는 인라인, 길면 파일 경유.
+
+    파일 경유 옵션은 빌드마다 다르므로(_filter_script_opt) 실행 파일에서 감지해 선택.
+    """
+    if len(graph) <= _FILTER_INLINE_MAX:
+        return ["-filter_complex", graph]
+    p = Path(script_path)
+    p.write_text(graph, encoding="utf-8")
+    return [_filter_script_opt(ffmpeg_bin()), str(p)]
 
 
 def run_with_progress(

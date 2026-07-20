@@ -204,12 +204,8 @@ def cut_and_concat(
 
     # 중간 산출물(최종 렌더에서 다시 인코딩됨) → ultrafast + 저손실 crf18로 속도 우선
     args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(video_path)]
-    if len(segments) > 60:  # 구간이 아주 많으면 명령줄 길이 한계(Windows 32K) 회피
-        script = Path(out_path).with_suffix(".filter.txt")
-        script.write_text(filtergraph, encoding="utf-8")
-        args += ["-filter_complex_script", str(script)]
-    else:
-        args += ["-filter_complex", filtergraph]
+    # 구간이 아주 많으면 명령줄 한계(Windows 32K) 회피 — 파일 경유(빌드별 옵션 자동 선택)
+    args += ff.filter_complex_args(filtergraph, Path(out_path).with_suffix(".filter.txt"))
     args += ["-map", "[v]"]
     if has_audio:
         args += ["-map", "[a]"]
@@ -318,7 +314,9 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
     fc = (";".join(parts) + ";"
           + "".join(f"[v{i}]" for i in range(len(images)))
           + f"concat=n={len(images)}:v=1:a=0[v]")
-    args += ["-filter_complex", fc, "-map", "[v]", "-map", f"{len(images)}:a",
+    # 사진이 아주 많으면(수백 장) 그래프가 명령줄 한계를 넘을 수 있어 파일 경유
+    args += ff.filter_complex_args(fc, Path(out_path).with_suffix(".filter.txt"))
+    args += ["-map", "[v]", "-map", f"{len(images)}:a",
              "-c:v", "libx264", "-preset", "fast", "-crf", "20",
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out_path)]
     ff.run(args)

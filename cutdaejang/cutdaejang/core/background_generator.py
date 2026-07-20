@@ -366,9 +366,9 @@ def scene_slideshow(
         parts.append(chain + f",setsar=1[v{i}]")
     fc = (";".join(parts) + ";" + "".join(f"[v{i}]" for i in range(n))
           + f"concat=n={n}:v=1:a=0[v]")
-    script = Path(out_path).with_suffix(".filter.txt")  # 장면 많으면 명령줄 한계 회피
-    script.write_text(fc, encoding="utf-8")
-    args += ["-filter_complex_script", str(script), "-map", "[v]",
+    # 장면이 아주 많을 때만 파일 경유 (빌드별 지원 옵션 자동 선택 — v0.57.3)
+    args += ff.filter_complex_args(fc, Path(out_path).with_suffix(".filter.txt"))
+    args += ["-map", "[v]",
              "-r", str(fps), "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
              "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out_path)]
     ff.run(args)
