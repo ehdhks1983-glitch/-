@@ -69,6 +69,7 @@ DEFAULTS: dict = {
         "character": "",              # 마스코트 캐릭터 (v0.50) — 프리셋 키 또는 직접 묘사
         "scene_mode": "auto",         # 장면 그림 방식 (v0.51): auto=AI 생성 | manual=내가 넣기 | off=끄기
         "max_scene_images": 0,        # 장면 그림 최대 장수 (v0.51) — 0=문장마다, N=N장만(비용 절감)
+        "punch_in": True,             # 👊 강조 문장 펀치인 줌 (v0.55) — 살짝 확대됐다 복귀
     },
     "subtitle": {
         "font_size": 84,             # 유튜브 쇼츠 기본 (v0.23 상향)

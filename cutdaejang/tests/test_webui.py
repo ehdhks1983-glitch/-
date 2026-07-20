@@ -848,6 +848,39 @@ def test_generate_remembers_hook_style(server):
         _post(server, "/api/settings", {"settings": {"subtitle": {"hook_style": "기본"}}})
 
 
+def test_punch_in_checkbox_and_spec(server):
+    """v0.55 — 👊 펀치인 줌: 체크박스, spec.punchins 기록, 끄면 기억+미배치."""
+    from pathlib import Path
+
+    from cutdaejang import config
+    from cutdaejang.spec import TimelineSpec
+
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="genPunchChk"' in html and "펀치인 줌" in html
+
+    res = _post(server, "/api/generate", {
+        "topic": "펀치 줌", "auto": True,
+        "script_provider": "stub", "tts_provider": "stub", "punch_in": True,
+    })
+    job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert job["status"] == "ok", job.get("errors")
+    spec = TimelineSpec.load(str(Path(job["mp4"]).parent / "spec.json"))
+    assert spec.punchins  # 스텁 대본의 강조 문장들에 배치
+
+    try:
+        res2 = _post(server, "/api/generate", {
+            "topic": "펀치 끔", "auto": True,
+            "script_provider": "stub", "tts_provider": "stub", "punch_in": False,
+        })
+        job2 = _wait_status(server, res2["job_id"], {"ok", "partial", "failed"}, timeout=240)
+        assert job2["status"] == "ok", job2.get("errors")
+        assert config.load_settings()["bg"]["punch_in"] is False
+        spec2 = TimelineSpec.load(str(Path(job2["mp4"]).parent / "spec.json"))
+        assert spec2.punchins == []
+    finally:
+        _post(server, "/api/settings", {"settings": {"bg": {"punch_in": True}}})
+
+
 def test_sub_style_ui_and_persistence(server):
     """v0.54 — 자막 프리셋 셀렉트(양 폼) + 생성에서 고르면 기억 + spec에 반영."""
     from pathlib import Path

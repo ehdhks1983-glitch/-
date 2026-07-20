@@ -92,6 +92,14 @@ class Style:
 
 
 @dataclass
+class Punch:
+    """펀치인 줌 구간 (v0.55) — 이 구간에서 화면이 살짝 확대됐다 복귀."""
+
+    start_us: int = 0
+    end_us: int = 0
+
+
+@dataclass
 class Sfx:
     """효과음 이벤트 (v0.53) — 보이스 트랙 위에 start_us 시점으로 얹는다."""
 
@@ -114,6 +122,7 @@ class TimelineSpec:
     subtitles: List[Subtitle] = field(default_factory=list)
     style: Style = field(default_factory=Style)
     sfx: List[Sfx] = field(default_factory=list)  # 효과음 (v0.53) — 없으면 빈 목록
+    punchins: List[Punch] = field(default_factory=list)  # 펀치인 줌 (v0.55)
 
     # ---------- 직렬화 ----------
 
@@ -149,6 +158,7 @@ class TimelineSpec:
             subtitles=[pick(Subtitle, s) for s in d.get("subtitles", [])],
             style=pick(Style, d.get("style")),
             sfx=[pick(Sfx, s) for s in d.get("sfx", [])],
+            punchins=[pick(Punch, s) for s in d.get("punchins", [])],
         )
 
     @classmethod

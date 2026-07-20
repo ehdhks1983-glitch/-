@@ -279,6 +279,8 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
             over["max_scene_images"] = max(0, min(50, int(params.get("bg_max_imgs") or 0)))
         except (TypeError, ValueError):
             pass
+    if "punch_in" in params:  # 👊 펀치인 줌 켬/끔 기억 (v0.55)
+        over["punch_in"] = bool(params.get("punch_in"))
     over_sub = {}
     from ..core.render_engine.ass_writer import HOOK_STYLES  # noqa: PLC0415
     if str(params.get("hook_style") or "") in HOOK_STYLES:  # 🪧 제목 프리셋 (v0.52)
@@ -2423,7 +2425,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.54)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.55)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2915,6 +2917,11 @@ _HTML = """<!doctype html>
           <option value="네온">네온 (민트 글로우)</option>
         </select>
         <span class="hint">🆕 v0.54 — 본문 자막 전체의 글씨 느낌 (강조색도 자동 조정, 기억됨)</span>
+      </div>
+      <div class="chk" style="gap:8px">
+        <input type="checkbox" id="genPunchChk" checked>
+        <span>👊 <b>펀치인 줌</b> — 강조 문장에서 화면이 살짝(1.1배) 확대됐다 돌아와요</span>
+        <span class="hint">🆕 v0.55 · 예능 편집 리듬 · 자막·제목은 흔들리지 않아요</span>
       </div>
     </details>
 
@@ -4152,6 +4159,7 @@ async function generate(){
     hook_style: (($('genHookStyleSel')||{}).value)||'기본',        // v0.52 제목 프리셋
     sub_style: (($('genSubStyleSel')||{}).value)||'기본',          // v0.54 자막 프리셋
     sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
+    punch_in: !!(($('genPunchChk')||{}).checked),                  // v0.55 펀치 줌
     bg_max_imgs: Math.max(0, +((($('genMaxImg')||{}).value)||0)), // v0.51 장수 제한
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
@@ -4567,6 +4575,7 @@ function resetGenForm(ev){
   set('genCharSel',''); set('genCharCustom',''); onGenCharChange();
   set('genSceneMode','auto'); set('genMaxImg','0');   // v0.51 그림 방식·장수
   if($('genSfxChk')) $('genSfxChk').checked = true;    // v0.53 효과음
+  if($('genPunchChk')) $('genPunchChk').checked = true; // v0.55 펀치 줌
 }
 
 function updateLogs(lines){
@@ -4950,6 +4959,8 @@ async function poll(){
     // v0.54: 자막 글씨 스타일 복원 (생성 폼)
     const sst = ((state.settings || {}).subtitle || {}).sub_style || '기본';
     if($('genSubStyleSel')) $('genSubStyleSel').value = sst;
+    // v0.55: 펀치인 줌 체크 복원
+    if($('genPunchChk')) $('genPunchChk').checked = (((state.settings || {}).bg || {}).punch_in !== false);
     // v0.53: 효과음 체크 복원
     if($('genSfxChk')) $('genSfxChk').checked = (((state.settings || {}).sfx || {}).enabled !== false);
     // v0.52: 상단 제목 글씨 스타일 복원 (생성 폼)

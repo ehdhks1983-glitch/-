@@ -175,6 +175,17 @@ def build_command(
         last_label = "grad"
         next_input += 1
 
+    # ── 👊 펀치인 줌 (v0.55) — 강조 문장 구간에서 화면이 살짝 확대됐다 복귀.
+    # 자막 굽기 전에 적용해 자막·제목은 고정(가독성). on(출력 프레임 번호) 기반이라
+    # ffmpeg 버전 무관, zoom 변수로 램프 인(빠르게)/아웃(부드럽게).
+    if getattr(spec, "punchins", None):
+        filters.append(
+            f"[{last_label}]zoompan=z={punch_zoom_expr(spec.punchins, c.fps)}"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d=1:s={c.w}x{c.h}:fps={c.fps}[punch]"
+        )
+        last_label = "punch"
+
     # ── 자막 번인 (libass) ──
     filters.append(
         f"[{last_label}]subtitles=filename={ff.escape_filter_value(str(ass_path))}"
@@ -202,6 +213,21 @@ def build_command(
         str(out_path),
     ]
     return args
+
+
+PUNCH_SCALE = 1.10   # 펀치인 최대 배율 (v0.55)
+
+
+def punch_zoom_expr(punchins, fps: int) -> str:
+    """펀치 구간 → zoompan z 식. on(출력 프레임 번호)/fps 기반이라 버전 무관.
+
+    구간 안: 프레임당 +0.012씩 1.10까지 (약 0.28초 램프 인)
+    구간 밖: 프레임당 -0.008씩 1.0으로 (약 0.42초 램프 아웃 — 부드럽게)
+    """
+    wins = "+".join(
+        f"between(on,{int(p.start_us * fps / 1_000_000)},{int(p.end_us * fps / 1_000_000)})"
+        for p in punchins)
+    return (f"'if({wins},min(zoom+0.012,{PUNCH_SCALE}),max(zoom-0.008,1.0))'")
 
 
 def pick_encoder(opts: RenderOptions) -> str:

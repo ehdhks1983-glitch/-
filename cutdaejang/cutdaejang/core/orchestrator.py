@@ -290,6 +290,22 @@ def run_job(
             except Exception as e:  # noqa: BLE001
                 note(f"효과음 생략: {str(e)[:80]}")
 
+        # 👊 펀치인 줌 (v0.55) — 강조 문장 시작 1.2초 창 (효과음 '뿅'과 같은 규칙)
+        if bg_cfg.get("punch_in", True) and len(spec.subtitles) > 1:
+            from ..spec import Punch  # noqa: PLC0415
+
+            wins = []
+            for clip, sub in zip(spec.audio, spec.subtitles):
+                emphasized = bool((sub.highlight or "").strip()) or "[" in (sub.text or "")
+                if emphasized:
+                    wins.append(Punch(start_us=clip.start_us,
+                                      end_us=min(clip.start_us + 1_200_000, clip.end_us)))
+                if len(wins) >= 8:
+                    break
+            spec.punchins = wins
+            if wins:
+                note(f"👊 펀치인 줌 {len(wins)}곳 (강조 문장)")
+
         spec_path = job_dir / "spec.json"
         spec.save(spec_path)
         result.spec_path = str(spec_path)
