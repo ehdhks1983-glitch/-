@@ -257,6 +257,12 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
     def sc(v: float) -> int:
         return max(1, round(v * sf))
 
+    wide = spec.canvas.w > spec.canvas.h  # 🖥 가로 롱폼 (v0.62)
+    if wide and getattr(style, "wrap_chars", 0):
+        # 가로 화면은 한 줄이 길어도 안전 — 세로 기준(16자)을 자동 확장 (16→27)
+        from dataclasses import replace  # noqa: PLC0415
+
+        style = replace(style, wrap_chars=min(30, round(style.wrap_chars * 1.7)))
     # 💬 본문 자막 프리셋 (v0.54) — 색·강조·띠를 프리셋 값으로 덮은 유효 스타일 사용
     ss = SUB_STYLES.get(getattr(style, "sub_style", "기본") or "기본", {})
     if ss:
@@ -295,6 +301,7 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             else presets.subtitle_margin_v(style.position, spec.canvas.h)
         ),
         title_size=round(presets.title_size(spec.canvas.h)
+                         * (1.45 if wide else 1.0)  # 가로에선 높이 비례만으론 작아 보정 (v0.62)
                          * max(0.6, min(1.6, float(getattr(style, "hook_scale", 1.0) or 1.0)))),
         title_primary=ass_color(hook_primary),
         title_border=3 if hook_band else 1,

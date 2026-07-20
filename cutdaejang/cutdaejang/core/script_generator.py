@@ -590,7 +590,8 @@ def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: in
     tr = f"[영상 속 대사]\n{transcript.strip()[:3500]}" if transcript.strip() else ""
     prompt = UPLOAD_KIT_PROMPT.format(
         with_tr="와 대사" if tr else "", channel=ch, dur=duration_s or "?",
-        shape="세로 쇼츠" if is_shorts else "일반(가로)",
+        shape=("세로 쇼츠" if is_shorts
+               else "가로 롱폼 — Shorts 태그·쇼츠 표현 금지, 시청 지속(더 길게 보게) 관점으로"),
         hook=f" · 상단 제목: {hook}" if hook.strip() else "",
         transcript=tr, cats=", ".join(YT_CATEGORIES))
     parts = [{"text": prompt}] + [
@@ -648,11 +649,35 @@ def normalize_kit(out: dict) -> dict:
     }
 
 
-def suggest_upload_kit_stub(transcript: str = "", hook: str = "") -> dict:
-    """오프라인 대역 — 키 없이도 형식·흐름 점검용 예시 키트."""
+def suggest_upload_kit_stub(transcript: str = "", hook: str = "",
+                            is_shorts: bool = True) -> dict:
+    """오프라인 대역 — 키 없이도 형식·흐름 점검용 예시 키트 (v0.62 롱폼 분기)."""
     base = (hook.strip().splitlines()[0] if hook.strip()
             else transcript.strip().splitlines()[0][:18] if transcript.strip() else "이 영상")
     base = base[:24]
+    if not is_shorts:  # 🖥 가로 롱폼 — Shorts 태그·쇼츠 표현 없이
+        return {
+            "titles": [f"{base} — 처음부터 끝까지 정리", f"{base}, 이것만 알면 됩니다",
+                       f"{base} 완벽 가이드"],
+            "title_tags": ["가이드", "꿀팁"],
+            "description": (f"{base}를 순서대로 정리한 영상입니다.\n"
+                            "목차 없이도 따라올 수 있게 흐름대로 설명했어요.\n"
+                            "#꿀팁 #가이드 #정리"),
+            "tags": ["가이드", "꿀팁", "튜토리얼", "정리", "강의", "하는법", "초보",
+                     "설명", "추천", "자동화"],
+            "keywords": ["가이드", "꿀팁", "하는법", "정리", "강의", "초보 가이드",
+                         "추천", "자동화", "튜토리얼", "노하우"],
+            "hashtags": ["꿀팁", "가이드", "정리"],
+            "category": "노하우/스타일",
+            "tiktok": {"caption": f"{base} 핵심 정리 — 풀버전은 유튜브에! 🔍",
+                       "hashtags": ["꿀팁", "가이드", "정리"]},
+            "instagram": {"caption": f"{base} 완벽 정리 🎯\n풀버전은 프로필 링크에서!",
+                          "hashtags": ["꿀팁", "가이드", "정리", "자동화"]},
+            "naverclip": {"title": f"{base} 하는 법 총정리",
+                          "tags": ["꿀팁", "가이드", "정리", "하는법", "초보", "설명",
+                                   "추천", "자동화", "튜토리얼", "노하우"]},
+            "threads": {"post": f"{base} 정리해봤어요. 궁금한 점은 댓글로! #꿀팁"},
+        }
     return {
         "titles": [f"{base} — 핵심만 30초 정리", f"{base}, 몰라서 손해봤던 것",
                    f"{base} 이렇게 하면 됩니다"],

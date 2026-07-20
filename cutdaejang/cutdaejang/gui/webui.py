@@ -1098,6 +1098,51 @@ def _kit_text(kit: dict, title: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _reuse_prev_scenes(job_id: str, workdir: str, need: list, canvas) -> dict:
+    """♻ 같은 주제의 이전 작업 scenes 그림을 찾아 필요한 장면에 복사 (v0.62, 비용 0).
+
+    작업 폴더 이름은 "{시각}-{주제슬러그}" — 슬러그가 같은 최신 폴더에서
+    scene_XX.png를 찾아 현재 캔버스로 정규화해 가져온다. 반환: {장면 i: True}.
+    """
+    try:
+        parts = job_id.split("-", 2)
+        slug = parts[2] if len(parts) > 2 and parts[2] else ""
+        if not slug:
+            return {}
+        root = Path(workdir)
+        for prev in sorted((d for d in root.iterdir() if d.is_dir()), reverse=True):
+            if prev.name == job_id:
+                continue
+            pp = prev.name.split("-", 2)
+            if len(pp) < 3 or pp[2] != slug:
+                continue
+            src_dir = prev / "scenes"
+            if not src_dir.is_dir():
+                continue
+            avail = {int(f.stem.split("_")[1]) - 1: f
+                     for f in src_dir.glob("scene_*.png") if f.stat().st_size > 500}
+            hits = {i: avail[i] for i in need if i in avail}
+            if not hits:
+                continue
+            dest_dir = Path(workdir) / job_id / "scenes"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            done = {}
+            for i, f in hits.items():
+                try:
+                    background_generator.normalize_to_canvas(
+                        str(f), str(dest_dir / f"scene_{i + 1:02d}.png"), canvas)
+                    done[i] = True
+                except Exception:  # noqa: BLE001 — 한 장 실패는 건너뜀
+                    continue
+            if done:
+                logging.getLogger("cutdaejang").info(
+                    "♻ 이전 작업(%s) 그림 %d장 재사용", prev.name, len(done))
+            return done
+    except Exception:  # noqa: BLE001 — 재사용은 보너스, 실패해도 원래 흐름
+        pass
+    return {}
+
+
 def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> None:
     """🖼 장면 검토 1단계 (v0.50) — 그림을 먼저 만들어 보여주고 확정을 기다린다.
 
@@ -1118,37 +1163,47 @@ def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> 
         prompts = [sp or s for sp, s in zip(script.scene_prompts, script.sentences)]
         sel = sorted(background_generator.select_scene_indices(
             len(prompts), int(settings["bg"].get("max_scene_images", 0) or 0)))
+        canvas_r = (presets.CANVAS_LANDSCAPE
+                    if (params or {}).get("orientation") == "wide" else presets.CANVAS_SHORTS)
+        reused = _reuse_prev_scenes(job_id, workdir, sel, canvas_r)  # ♻ 같은 주제 이전 그림
         if mode == "manual":
             # ✍ 내가 넣기 (v0.51) — AI 생성 없이(비용 0원) 프롬프트만 뽑아 검토로.
             # [📋 전체 복사] → 챗지피티/제미나이에서 직접 생성 → [📁]로 삽입.
-            scenes = [{"i": i, "prompt": prompts[i], "ok": False,
+            scenes = [{"i": i, "prompt": prompts[i], "ok": bool(reused.get(i)),
                        "text": script.sentences[i]} for i in sel]
+            note = "✍ 내가 넣기 — 프롬프트를 복사해 그림을 만들어 넣어주세요"
+            if reused:
+                note = (f"♻ 같은 주제의 이전 그림 {len(reused)}장을 미리 넣어뒀어요 (비용 0원) "
+                        "— 그대로 쓰거나 바꿔주세요")
             _set_job(job_id, status="review_scenes", stage="review", frac=1.0,
-                     note="✍ 내가 넣기 — 프롬프트를 복사해 그림을 만들어 넣어주세요",
-                     scenes=scenes)
+                     note=note, scenes=scenes)
             return
-        canvas = (presets.CANVAS_LANDSCAPE
-                  if (params or {}).get("orientation") == "wide" else presets.CANVAS_SHORTS)
-        imgs = background_generator.generate_scene_images(
-            prompts, provider, job_dir / "scenes", canvas,
-            style=settings["bg"].get("image_style", "일러스트"),
-            character=settings["bg"].get("character", ""),
-            on_note=lambda m: _set_job(job_id, note=m),
-            on_progress=lambda i, n: _set_job(
-                job_id, stage="background", frac=i / max(n, 1),
-                note=f"장면 그림 {min(i + 1, n)}/{n} 만드는 중…"),
-            only_indices=set(sel) if len(sel) < len(prompts) else None,
-        )
-        if not any(imgs):  # 전부 실패 → 그래도 검토 화면에서 직접 넣을 수 있게 (v0.51)
+        todo = [i for i in sel if i not in reused]  # ♻ 재사용분은 다시 만들지 않음 (v0.62)
+        imgs = [None] * len(prompts)
+        if todo:
+            imgs = background_generator.generate_scene_images(
+                prompts, provider, job_dir / "scenes", canvas_r,
+                style=settings["bg"].get("image_style", "일러스트"),
+                character=settings["bg"].get("character", ""),
+                on_note=lambda m: _set_job(job_id, note=m),
+                on_progress=lambda i, n: _set_job(
+                    job_id, stage="background", frac=i / max(n, 1),
+                    note=f"장면 그림 {min(i + 1, n)}/{n} 만드는 중…"),
+                only_indices=set(todo),
+            )
+        ok_map = {i: bool(imgs[i]) or bool(reused.get(i)) for i in sel}
+        if not any(ok_map.values()):  # 전부 실패 → 그래도 검토 화면에서 직접 넣을 수 있게 (v0.51)
             _set_job(job_id, status="review_scenes", stage="review", frac=1.0,
                      note="장면 그림 생성이 모두 실패했어요 — 프롬프트를 복사해 직접 만들어 "
                           "넣거나, 그대로 ✅ 완성하면 기본 배경으로 만들어져요",
                      scenes=[{"i": i, "prompt": prompts[i], "ok": False,
                               "text": script.sentences[i]} for i in sel])
             return
-        scenes = [{"i": i, "prompt": prompts[i], "ok": bool(imgs[i]),
+        scenes = [{"i": i, "prompt": prompts[i], "ok": ok_map[i],
                    "text": script.sentences[i]} for i in sel]
-        _set_job(job_id, status="review_scenes", stage="review", frac=1.0, note="",
+        note = (f"♻ 같은 주제의 이전 그림 {len(reused)}장 재사용 (비용 0원) — "
+                "마음에 안 들면 [🔄 다시 그리기]" if reused else "")
+        _set_job(job_id, status="review_scenes", stage="review", frac=1.0, note=note,
                  scenes=scenes)
     except Exception as e:
         import traceback  # noqa: PLC0415
@@ -1182,10 +1237,13 @@ def _fetch_bgm_bg() -> None:
         _BGM_TASK.update(running=False, msg=f"받기 실패: {str(e)[:120]}")
 
 
-def _run_batch(job_id: str, topics: list, params: dict, workdir: str) -> None:
-    """📦 배치 (v0.42) — 주제 여러 개를 순차 생성해 mp4 N개. 한 개 실패해도 계속."""
+def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
+    """📦 배치 (v0.42) — 주제(또는 대본 벌, v0.62) 여러 개를 순차 생성해 mp4 N개.
+
+    항목: {"topic": str} 또는 {"script_text": str}. 한 개 실패해도 계속.
+    """
     outs, errors = [], []
-    total = len(topics)
+    total = len(items)
     try:
         _apply_keys(params)
         provider_name = params.get("script_provider", "stub")
@@ -1194,13 +1252,24 @@ def _run_batch(job_id: str, topics: list, params: dict, workdir: str) -> None:
         settings = _apply_bg_style(params, config.load_settings())
         opts = _job_options(params, settings)
         image_provider, _bg_skip = _ai_image_setup(params, settings)
-        for i, topic in enumerate(topics):
+        import re as _re  # noqa: PLC0415
+        for i, item in enumerate(items):
             base = i / total
+            sc_text = (item.get("script_text") or "").strip()
+            if sc_text:  # 📝 대본 벌 — AI 대본 생략, 첫 줄이 제목 (v0.62)
+                lines = [ln.strip() for ln in sc_text.splitlines() if ln.strip()]
+                topic = _re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", lines[0])[:40]
+            else:
+                topic = (item.get("topic") or "").strip()
             _set_job(job_id, status="running", stage="script", frac=base,
                      note=f"📦 {i + 1}/{total}번째: {topic}")
             try:
-                provider = SCRIPT_PROVIDERS[provider_name]()
-                script = orchestrator.generate_script(provider, topic, opts)
+                if sc_text:
+                    from ..core.script_generator import Script  # noqa: PLC0415
+                    script = Script(title=topic, sentences=lines)
+                else:
+                    provider = SCRIPT_PROVIDERS[provider_name]()
+                    script = orchestrator.generate_script(provider, topic, opts)
                 sub_id = orchestrator.new_job_id(topic)
                 sub_dir = Path(workdir) / sub_id
                 sub_dir.mkdir(parents=True, exist_ok=True)
@@ -1425,18 +1494,25 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"job_id": job_id})
         elif path == "/api/generate_batch":
             topics = [str(t).strip() for t in (params.get("topics") or []) if str(t).strip()]
-            if not topics:
-                self._send_json({"error": "주제를 한 줄에 하나씩 입력하세요"}, 400)
+            scripts = [str(s).strip() for s in (params.get("scripts") or []) if str(s).strip()]
+            if scripts:  # 📝 대본 배치 (v0.62) — 대본 여러 벌, 한 벌 = 영상 1개
+                items = [{"script_text": s} for s in scripts[:20]]
+                first = scripts[0].splitlines()[0][:14]
+            elif topics:
+                items = [{"topic": t} for t in topics[:20]]
+                first = topics[0][:14]
+            else:
+                self._send_json({"error": "주제를 한 줄에 하나씩 입력하거나, "
+                                          "대본 여러 벌을 === 로 구분해 넣으세요"}, 400)
                 return
-            topics = topics[:20]  # 폭주 방지 (안내는 화면에서)
             params = {**params, "auto": True}  # 배치는 검토 없이 자동
-            job_id = orchestrator.new_job_id(f"배치{len(topics)}")
+            job_id = orchestrator.new_job_id(f"배치{len(items)}")
             _set_job(job_id, status="running", stage="script", frac=0.0,
-                     title=f"📦 배치 {len(topics)}개 — {topics[0][:14]}…", params=params)
+                     title=f"📦 배치 {len(items)}개 — {first}…", params=params)
             threading.Thread(
-                target=_run_batch, args=(job_id, topics, params, workdir), daemon=True
+                target=_run_batch, args=(job_id, items, params, workdir), daemon=True
             ).start()
-            self._send_json({"job_id": job_id, "count": len(topics)})
+            self._send_json({"job_id": job_id, "count": len(items)})
         elif path == "/api/confirm":
             job = _get_job(params.get("job_id", ""))
             if not job or job.get("status") != "awaiting_review":
@@ -2084,11 +2160,13 @@ class _Handler(BaseHTTPRequestHandler):
                     frames, transcript, duration_s=dur_s, is_shorts=is_shorts,
                     hook=hook or title, channel=channel)
             else:
-                kit = sg.suggest_upload_kit_stub(transcript, hook or title)
+                kit = sg.suggest_upload_kit_stub(transcript, hook or title,
+                                                 is_shorts=is_shorts)
                 stub = True
         except sg.ScriptError as e:
             logging.getLogger("cutdaejang").warning("업로드 키트 AI 실패 → 예시로 대체: %s", e)
-            kit = sg.suggest_upload_kit_stub(transcript, hook or title)
+            kit = sg.suggest_upload_kit_stub(transcript, hook or title,
+                                             is_shorts=is_shorts)
             stub = True
         # BGM 크레딧 자동 삽입 — 어떤 곡을 썼는지 컷대장이 아니까 (CC BY 표기 의무)
         credit = _bgm_credit((ep.get("bgm") or jp.get("bgm") or "").strip())
@@ -2105,7 +2183,9 @@ class _Handler(BaseHTTPRequestHandler):
         if credit:
             checks.append("BGM 크레딧이 설명문 끝에 자동 포함됐어요 (무료 음원 표기 의무)")
         checks.append("태그는 유튜브 스튜디오 [세부정보 → 태그]에 통째로 붙여넣기 (쉼표 그대로)")
-        checks.append("틱톡·인스타·네이버 클립·스레드 문구는 아래 접힌 칸에서 복사 (같은 영상 그대로 재업로드 OK)")
+        checks.append("틱톡·인스타·네이버 클립·스레드 문구는 아래 접힌 칸에서 복사 "
+                      + ("(같은 영상 그대로 재업로드 OK)" if is_shorts
+                         else "(세로 플랫폼엔 세로로 만든 편집본과 함께 쓰세요)"))
         kit["checklist"] = checks
         kit["is_shorts"] = is_shorts
         # 파일로도 저장 — 업로드할 때 열어서 복붙
@@ -2608,7 +2688,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.61)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.62)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -3051,7 +3131,8 @@ _HTML = """<!doctype html>
       <span>📦 <b>여러 개 한 번에(배치)</b> — 주제를 여러 줄 넣으면 줄 수만큼 영상이 나와요</span>
     </div>
     <textarea id="topicBatch" class="hidden" style="min-height:96px" placeholder="한 줄 = 영상 1개 (최대 20개)&#10;예)&#10;하루 10분 정리 습관&#10;아침 루틴 꿀팁 3가지&#10;퇴근 후 부업 시작하는 법"></textarea>
-    <div class="hint hidden" id="batchHint">배치는 검토 없이 자동으로 연속 완성돼요. 고른 목소리·배경음악·설정이 전부 똑같이 적용됩니다.</div>
+    <div class="hint hidden" id="batchHint">배치는 검토 없이 자동으로 연속 완성돼요. 고른 목소리·배경음악·설정이 전부 똑같이 적용됩니다.
+      대본으로 만들려면 아래 「📝 대본 직접 넣기」에 대본 여러 벌을 <b>=== 줄로 구분</b>해 넣으세요 (한 벌 = 영상 1개).</div>
     <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:8px">
       <span>화면</span>
       <div class="toggle" style="margin:0">
@@ -3073,7 +3154,8 @@ _HTML = """<!doctype html>
     <details class="opt" style="margin-top:8px">
       <summary>📝 대본 직접 넣기 <span class="hint">— 써둔 대본이 있으면 AI 대본 대신 그대로 (한 줄 = 자막 하나)</span></summary>
       <textarea id="genScript" style="min-height:110px" placeholder="한 줄이 자막 한 개가 돼요. 비워두면 주제로 AI가 대본을 씁니다.&#10;[노랑]강조할 말[/노랑] 처럼 색을 직접 칠할 수도 있어요 (색: 노랑·빨강·초록·파랑·주황·분홍·하늘·민트·보라).&#10;줄이 많을수록 목소리 합성(TTS)도 그만큼 늘어나요."></textarea>
-      <div class="hint">넣으면 영상 길이는 대본 분량대로(위 길이 설정은 무시), 주제는 제목·훅에만 쓰여요. 「여러 개 한 번에(배치)」와는 함께 쓸 수 없어요.</div>
+      <div class="hint">넣으면 영상 길이는 대본 분량대로(위 길이 설정은 무시), 주제는 제목·훅에만 쓰여요.
+        「📦 배치」와 함께 쓰면 <b>=== 줄로 구분한 대본 한 벌마다 영상 1개</b>가 나와요 (첫 줄이 제목).</div>
     </details>
 
     <div class="steplabel"><span class="stepnum">2</span>목소리 고르기</div>
@@ -4480,10 +4562,6 @@ async function generate(){
     if(k){ $('geminiKey').value = k; }
     else if(!confirm('Gemini 키 없이 만들면 내장 음성·기본 배경으로 완성돼요.' + String.fromCharCode(10) + '키 없이 계속할까요?')) return;
   }
-  if((($('genScript')||{}).value||'').trim() && (($('batchChk')||{}).checked)){
-    alert('「📝 대본 직접 넣기」와 「📦 여러 개 한 번에(배치)」는 함께 쓸 수 없어요' +
-          String.fromCharCode(10) + '— 배치를 끄거나 대본을 비워주세요.'); return;
-  }
   let autoMode = pick('mode') === 'auto';
   const sceneMode = (($('genSceneMode')||{}).value)||'auto';
   if(sceneMode === 'manual' && autoMode && !(($('batchChk')||{}).checked)){
@@ -4524,12 +4602,39 @@ async function generate(){
   $('sceneBox').classList.add('hidden');
   let endpoint = '/api/generate';
   if(($('batchChk')||{}).checked){
-    const topics = ($('topicBatch').value||'').split(String.fromCharCode(10)).map(t=>t.trim()).filter(Boolean);
-    if(!topics.length){ alert('주제를 한 줄에 하나씩 입력하세요'); return; }
-    if(topics.length > 20){ alert('한 번에 최대 20개까지 가능해요 (지금 ' + topics.length + '개)'); return; }
-    if(!confirm(topics.length + '개 영상을 연속으로 만듭니다. 시간이 꽤 걸려요 — 시작할까요?')) return;
-    body.topics = topics;
-    endpoint = '/api/generate_batch';
+    const NL = String.fromCharCode(10);
+    const rawScript = (($('genScript')||{}).value||'');
+    const topics = ($('topicBatch').value||'').split(NL).map(t=>t.trim()).filter(Boolean);
+    if(rawScript.trim()){
+      // 📝 대본 배치 (v0.62) — === 줄로 구분한 대본 여러 벌, 한 벌 = 영상 1개
+      if(topics.length){
+        alert('배치는 「주제 여러 줄」이나 「대본 여러 벌」 중 하나만 넣어주세요' + NL +
+              '— 대본으로 만들려면 주제 배치 칸을 비워주세요.'); return;
+      }
+      const blocks = []; let cur = [];
+      rawScript.split(NL).forEach(ln => {
+        const s = ln.trim();
+        if(s.length >= 3 && s.split('').every(c => c === '=')){
+          if(cur.join(NL).trim()) blocks.push(cur.join(NL).trim());
+          cur = [];
+        } else cur.push(ln);
+      });
+      if(cur.join(NL).trim()) blocks.push(cur.join(NL).trim());
+      if(!blocks.length){ alert('대본이 비어 있어요'); return; }
+      if(blocks.length === 1 && !confirm('구분선(===)이 없어 대본 1벌 = 영상 1개로 만들어요.' + NL +
+          '여러 개를 만들려면 대본 사이에 === 줄을 넣으세요. 1개로 진행할까요?')) return;
+      if(blocks.length > 20){ alert('한 번에 최대 20개까지 가능해요 (지금 ' + blocks.length + '벌)'); return; }
+      if(blocks.length > 1 && !confirm(blocks.length + '개 영상을 대본대로 연속으로 만듭니다 (AI 대본 없이). 시작할까요?')) return;
+      body.scripts = blocks;
+      body.script_text = '';
+      endpoint = '/api/generate_batch';
+    } else {
+      if(!topics.length){ alert('주제를 한 줄에 하나씩 입력하거나, 「📝 대본 직접 넣기」에 대본 여러 벌을 === 로 구분해 넣으세요'); return; }
+      if(topics.length > 20){ alert('한 번에 최대 20개까지 가능해요 (지금 ' + topics.length + '개)'); return; }
+      if(!confirm(topics.length + '개 영상을 연속으로 만듭니다. 시간이 꽤 걸려요 — 시작할까요?')) return;
+      body.topics = topics;
+      endpoint = '/api/generate_batch';
+    }
   }
   const res = await fetch(endpoint, {method:'POST', body: JSON.stringify(body)});
   const data = await res.json();

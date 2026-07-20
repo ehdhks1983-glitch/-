@@ -500,6 +500,62 @@ def test_template_save_apply_delete(server):
         assert e.code == 400
 
 
+def test_v062_script_batch_and_scene_reuse(server, tmp_path):
+    """v0.62: 대본 여러 벌 배치(=== 구분) + 같은 주제 이전 그림 자동 재사용."""
+    from cutdaejang.utils import ffmpeg as ff
+
+    # ── 대본 배치: 2벌 → mp4 2개 ──
+    res = _post(server, "/api/generate_batch", {
+        "scripts": ["배치 첫 영상\n첫 줄입니다\n둘째 줄입니다",
+                    "배치 둘째 영상\n하나\n둘\n셋"],
+        "tts_provider": "stub", "script_provider": "stub",
+    })
+    assert res["count"] == 2
+    job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=300)
+    assert job["status"] == "ok", job.get("errors")
+    assert "2/2" in (job.get("note") or "")
+
+    # 주제도 대본도 없으면 400
+    import urllib.error
+    try:
+        _post(server, "/api/generate_batch", {"topics": [], "scripts": []})
+        raised = False
+    except urllib.error.HTTPError as e:
+        raised = e.code == 400
+    assert raised
+
+    # ── 장면 재사용: 같은 주제 manual 작업 2번 — 두 번째에 이전 그림이 미리 채워짐 ──
+    # (bg_scene_mode=manual이 설정에 기억되므로 finally에서 auto로 복구 — 뒤 테스트 보호)
+    body = {"topic": "재사용 확인", "auto": False, "tts_provider": "stub",
+            "script_provider": "stub", "bg_scene_mode": "manual"}
+    try:
+        r1 = _post(server, "/api/generate", body)
+        j1 = _wait_status(server, r1["job_id"], {"awaiting_review", "failed"})
+        _post(server, "/api/confirm", {"job_id": r1["job_id"], "title": "재사용 확인",
+                                       "sentences": j1["script"]["sentences"]})
+        j1 = _wait_status(server, r1["job_id"], {"review_scenes", "failed"})
+        assert j1["status"] == "review_scenes"
+        first_i = j1["scenes"][0]["i"]
+        img = tmp_path / "one.png"
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                "-i", "color=c=purple:s=270x480:d=0.1", "-frames:v", "1", str(img)])
+        _post(server, "/api/scene_upload", {"job_id": r1["job_id"], "index": first_i,
+                                            "path": str(img)})
+
+        r2 = _post(server, "/api/generate", body)
+        j2 = _wait_status(server, r2["job_id"], {"awaiting_review", "failed"})
+        _post(server, "/api/confirm", {"job_id": r2["job_id"], "title": "재사용 확인",
+                                       "sentences": j2["script"]["sentences"]})
+        j2 = _wait_status(server, r2["job_id"], {"review_scenes", "failed"})
+        assert j2["status"] == "review_scenes"
+        ok_map = {s["i"]: s["ok"] for s in j2["scenes"]}
+        assert ok_map.get(first_i) is True          # ♻ 이전 그림이 미리 들어옴
+        assert "이전 그림" in (j2.get("note") or "")  # ♻ 안내 문구 (재사용/미리 넣음)
+        assert any(not v for v in ok_map.values())  # 나머지는 여전히 비어 있음
+    finally:
+        _post(server, "/api/settings", {"settings": {"bg": {"scene_mode": "auto"}}})
+
+
 def test_v061_wide_userscript_length(server):
     """v0.61: 가로 롱폼 + 내 대본 + 길이 — 검토에 내 줄 그대로, 완성은 16:9."""
     import urllib.error
