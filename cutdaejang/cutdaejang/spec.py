@@ -91,6 +91,16 @@ class Style:
 
 
 @dataclass
+class Sfx:
+    """효과음 이벤트 (v0.53) — 보이스 트랙 위에 start_us 시점으로 얹는다."""
+
+    path: str = ""
+    start_us: int = 0
+    gain_db: float = -13.0
+    name: str = ""      # pop | whoosh | ding (표시·디버깅용)
+
+
+@dataclass
 class TimelineSpec:
     mode: str = "shorts"
     canvas: Canvas = field(default_factory=Canvas)
@@ -102,6 +112,7 @@ class TimelineSpec:
     audio: List[AudioClip] = field(default_factory=list)
     subtitles: List[Subtitle] = field(default_factory=list)
     style: Style = field(default_factory=Style)
+    sfx: List[Sfx] = field(default_factory=list)  # 효과음 (v0.53) — 없으면 빈 목록
 
     # ---------- 직렬화 ----------
 
@@ -136,6 +147,7 @@ class TimelineSpec:
             audio=[pick(AudioClip, a) for a in d.get("audio", [])],
             subtitles=[pick(Subtitle, s) for s in d.get("subtitles", [])],
             style=pick(Style, d.get("style")),
+            sfx=[pick(Sfx, s) for s in d.get("sfx", [])],
         )
 
     @classmethod

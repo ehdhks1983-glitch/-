@@ -283,19 +283,24 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
     from ..core.render_engine.ass_writer import HOOK_STYLES  # noqa: PLC0415
     if str(params.get("hook_style") or "") in HOOK_STYLES:  # 🪧 제목 프리셋 (v0.52)
         over_sub["hook_style"] = params["hook_style"]
-    if not over and not over_sub:
+    over_sfx = {}
+    if "sfx_auto" in params:  # 🔔 효과음 켬/끔 기억 (v0.53)
+        over_sfx["enabled"] = bool(params.get("sfx_auto"))
+    if not over and not over_sub and not over_sfx:
         return settings
     save = {}
     if over and any(settings["bg"].get(k) != v for k, v in over.items()):
         save["bg"] = over
     if over_sub and any(settings["subtitle"].get(k) != v for k, v in over_sub.items()):
         save["subtitle"] = over_sub
+    if over_sfx and any((settings.get("sfx") or {}).get(k) != v for k, v in over_sfx.items()):
+        save["sfx"] = over_sfx
     if save:
         try:
             config.save_settings(save)
         except OSError:
             pass
-    return config.deep_merge(settings, {"bg": over, "subtitle": over_sub})
+    return config.deep_merge(settings, {"bg": over, "subtitle": over_sub, "sfx": over_sfx})
 
 
 def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str,
@@ -2407,7 +2412,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.52)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.53)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2885,6 +2890,11 @@ _HTML = """<!doctype html>
         <button class="ghost" style="white-space:nowrap" onclick="previewBgm(event,'bgmSel',null)">▶ 미리듣기</button>
         <button class="ghost" id="bgmFetchBtn" style="white-space:nowrap" onclick="fetchBgm(event)"
                 title="유튜버들이 가장 많이 쓰는 무료 BGM 14곡(Kevin MacLeod, CC BY)을 resources/bgm 폴더에 자동으로 받아옵니다 (약 40MB)">⬇ 무료 BGM 받기</button>
+      </div>
+      <div class="chk" style="gap:8px">
+        <input type="checkbox" id="genSfxChk" checked>
+        <span>🔔 <b>효과음 자동</b> — 강조 문장에 "뿅", 장면 넘어갈 때 "휙", 제목 등장에 "띠링"</span>
+        <span class="hint">🆕 v0.53 · 내장 합성음(저작권 무관) · resources/sfx에 같은 이름 파일을 넣으면 내 효과음으로 교체</span>
       </div>
       <div class="hint"><b>windows\\6_무료음원_받기.bat</b>로 유명 무료 BGM 자동 채우기. 저작권 확인된 음원만 사용하세요.</div>
     </details>
@@ -4104,6 +4114,7 @@ async function generate(){
       : ((($('genCharSel')||{}).value)||''),
     bg_scene_mode: sceneMode,                                   // v0.51 그림 방식
     hook_style: (($('genHookStyleSel')||{}).value)||'기본',        // v0.52 제목 프리셋
+    sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
     bg_max_imgs: Math.max(0, +((($('genMaxImg')||{}).value)||0)), // v0.51 장수 제한
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
@@ -4518,6 +4529,7 @@ function resetGenForm(ev){
   set('genBgStyle','일러스트');
   set('genCharSel',''); set('genCharCustom',''); onGenCharChange();
   set('genSceneMode','auto'); set('genMaxImg','0');   // v0.51 그림 방식·장수
+  if($('genSfxChk')) $('genSfxChk').checked = true;    // v0.53 효과음
 }
 
 function updateLogs(lines){
@@ -4897,6 +4909,8 @@ async function poll(){
       else { $('genCharSel').value = 'custom'; $('genCharCustom').value = bgc; }
       onGenCharChange();
     }
+    // v0.53: 효과음 체크 복원
+    if($('genSfxChk')) $('genSfxChk').checked = (((state.settings || {}).sfx || {}).enabled !== false);
     // v0.52: 상단 제목 글씨 스타일 복원 (생성 폼)
     const hks = ((state.settings || {}).subtitle || {}).hook_style || '기본';
     if($('genHookStyleSel')) $('genHookStyleSel').value = hks;

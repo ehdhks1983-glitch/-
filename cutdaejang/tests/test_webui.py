@@ -848,6 +848,39 @@ def test_generate_remembers_hook_style(server):
         _post(server, "/api/settings", {"settings": {"subtitle": {"hook_style": "기본"}}})
 
 
+def test_sfx_checkbox_and_generated_spec(server):
+    """v0.53 — 🔔 효과음: 체크박스 존재, 생성 spec에 이벤트 기록, 끄면 기억+미배치."""
+    from pathlib import Path
+
+    from cutdaejang import config
+    from cutdaejang.spec import TimelineSpec
+
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="genSfxChk"' in html and "효과음 자동" in html
+
+    res = _post(server, "/api/generate", {
+        "topic": "효과음 자동", "auto": True,
+        "script_provider": "stub", "tts_provider": "stub", "sfx_auto": True,
+    })
+    job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert job["status"] == "ok", job.get("errors")
+    spec = TimelineSpec.load(str(Path(job["mp4"]).parent / "spec.json"))
+    assert any(e.name == "ding" for e in spec.sfx) and any(e.name == "pop" for e in spec.sfx)
+
+    try:
+        res2 = _post(server, "/api/generate", {
+            "topic": "효과음 끔", "auto": True,
+            "script_provider": "stub", "tts_provider": "stub", "sfx_auto": False,
+        })
+        job2 = _wait_status(server, res2["job_id"], {"ok", "partial", "failed"}, timeout=240)
+        assert job2["status"] == "ok", job2.get("errors")
+        assert config.load_settings()["sfx"]["enabled"] is False  # 끈 것도 기억
+        spec2 = TimelineSpec.load(str(Path(job2["mp4"]).parent / "spec.json"))
+        assert spec2.sfx == []
+    finally:
+        _post(server, "/api/settings", {"settings": {"sfx": {"enabled": True}}})
+
+
 def test_pick_file_kind_routing(server, monkeypatch):
     """v0.51 — /api/pick_file kind: folder/image는 pick_path로, 기본은 기존 함수로."""
     from cutdaejang.gui import webui

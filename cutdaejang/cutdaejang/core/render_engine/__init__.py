@@ -76,6 +76,10 @@ def render(
 
     voice = str(work / "voice_full.m4a")
     audio_assembler.assemble(spec, voice)
+    if spec.sfx:  # 🔔 효과음을 보이스 트랙 위에 (v0.53 — 실패해도 렌더는 계속)
+        from ..sfx import mix_sfx  # noqa: PLC0415
+
+        voice = mix_sfx(voice, spec.sfx, str(work / "voice_sfx.m4a"))
 
     ass = ass_writer.write_ass(spec, work / "subs.ass")
 

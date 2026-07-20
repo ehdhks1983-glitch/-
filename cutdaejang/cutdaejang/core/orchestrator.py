@@ -221,6 +221,7 @@ def run_job(
         # v0.50: scene_images가 오면(장면 검토에서 확정) 생성 없이 그대로 사용.
         # v0.51: scene_mode(auto/manual/off) + max_scene_images 장수 제한 — manual은
         # 검토에서 확정한 이미지(scene_images)로만 동작 (자동 생성 안 함 = 비용 0).
+        scene_starts_us = None  # 장면 전환 시점 (효과음 '휙' 배치용, v0.53)
         scene_mode = bg_cfg.get("scene_mode", "auto")
         use_scene_mode = (bg_cfg.get("scene_images", True) and scene_mode != "off"
                           and not opts.user_background
@@ -260,6 +261,10 @@ def run_job(
                     s1 = starts[i + 1] if i + 1 < len(starts) else spec.duration_us
                     spans.append((img, s1 - s0))
                 spans = background_generator.merge_scene_spans(spans)
+                scene_starts_us, acc = [], 0
+                for _img, dur in spans:
+                    scene_starts_us.append(acc)
+                    acc += dur
                 slides = background_generator.scene_slideshow(
                     spans, str(job_dir / "bg_slides.mp4"), canvas,
                     motion=bg_cfg.get("motion", "zoom_in"),
@@ -270,6 +275,19 @@ def run_job(
                 note(f"장면 이미지 {ok_n}/{planned}장으로 배경 완성")
             else:
                 note("장면 이미지가 대부분 실패해 단일 배경으로 진행합니다")
+
+        # 🔔 효과음 자동 배치 (v0.53) — 실패해도 렌더는 계속
+        sfx_cfg = settings.get("sfx") or {}
+        if sfx_cfg.get("enabled", True):
+            try:
+                from . import sfx as sfx_mod  # noqa: PLC0415
+
+                spec.sfx = sfx_mod.build_events(
+                    spec, sfx_mod.ensure_sfx(), sfx_cfg, scene_starts_us=scene_starts_us)
+                if spec.sfx:
+                    note(f"🔔 효과음 {len(spec.sfx)}개 배치 (뿅·휙·띠링)")
+            except Exception as e:  # noqa: BLE001
+                note(f"효과음 생략: {str(e)[:80]}")
 
         spec_path = job_dir / "spec.json"
         spec.save(spec_path)

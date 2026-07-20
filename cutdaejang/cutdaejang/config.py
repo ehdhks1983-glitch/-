@@ -87,6 +87,10 @@ DEFAULTS: dict = {
         "intro": "",
         "outro": "",
     },
+    "sfx": {                          # 🔔 효과음 자동 (v0.53) — 뿅(강조)·휙(전환)·띠링(제목)
+        "enabled": True,
+        "volume_db": -13,
+    },
     "edit": {                         # 내 영상 편집 모드 (기획안 v1.5)
         "stt_provider": "whisper",   # whisper(로컬) | gemini | openai | stub
         "whisper_model": "small",
