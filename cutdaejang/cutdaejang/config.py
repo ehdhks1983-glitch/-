@@ -30,6 +30,7 @@ DEFAULTS: dict = {
         "sovits_ref_audio": "",                 # 참조 녹음(5~10초) 경로
         "sovits_ref_text": "",                  # 참조 녹음에서 말한 문장
         "windows_rate": 0,                      # 내장 음성 말 속도 -10~10 (v0.44)
+        "windows_voice": "",                    # 내장 음성 보이스명 (빈 값=한국어 첫 번째, v0.59)
         "auto_pronounce": True,                 # TTS 앞 숫자·영어 한글 발음 변환 (v0.46.1)
     },
     "audio": {

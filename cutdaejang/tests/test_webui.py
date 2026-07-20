@@ -500,6 +500,33 @@ def test_template_save_apply_delete(server):
         assert e.code == 400
 
 
+def test_win_voices_api_and_settings(server):
+    """v0.59: 내장 음성 보이스 — 목록 API(리눅스=빈 목록) + 설정 저장 + 미리듣기 오류."""
+    from cutdaejang import config
+
+    d = _post(server, "/api/win_voices", {})
+    assert d["voices"] == [] and d["win"] is False  # 리눅스 CI
+
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="setWinVoice"' in html and "자동 (한국어 첫 번째)" in html
+    assert "previewWinVoice" in html
+
+    _post(server, "/api/settings",
+          {"settings": {"tts": {"windows_voice": "Microsoft Heami Desktop"}}})
+    assert config.load_settings()["tts"]["windows_voice"] == "Microsoft Heami Desktop"
+    _post(server, "/api/settings", {"settings": {"tts": {"windows_voice": ""}}})  # 원복
+
+    # 리눅스에서 내장 음성 미리듣기 → 명확한 오류 메시지
+    import urllib.error
+    try:
+        _post(server, "/api/preview", {"tts_provider": "windows", "voice": "아무거나"})
+        raised = False
+    except urllib.error.HTTPError as e:
+        raised = True
+        assert "Windows" in e.read().decode("utf-8")
+    assert raised
+
+
 def test_edit_with_recorded_narration_file(server, tmp_path):
     """v0.58: 🎤 녹음 파일 통째 넣기 — 대본 자막이 녹음 타임라인에, 영상은 녹음 길이로."""
     import subprocess

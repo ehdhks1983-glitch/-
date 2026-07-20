@@ -1641,6 +1641,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, 500)
         elif path == "/api/preview":
             self._preview(params)
+        elif path == "/api/win_voices":
+            # 🔊 이 PC의 Windows 내장 음성 목록 (v0.59) — Windows 아니면 빈 목록
+            self._send_json({"voices": tts_engine.list_windows_voices(),
+                             "win": sys.platform == "win32"})
         elif path == "/api/suggest_hooks":
             _apply_keys(params)
             from ..core import script_generator as sg  # noqa: PLC0415
@@ -2177,6 +2181,10 @@ class _Handler(BaseHTTPRequestHandler):
             settings = config.deep_merge(
                 settings, {"tts": {"style_preset": params["tts_style"]}}
             )
+        if params.get("tts_provider") == "windows" and params.get("voice"):
+            # 내장 음성 보이스는 voice 인자가 아니라 제공자 설정으로 (v0.59)
+            settings = config.deep_merge(
+                settings, {"tts": {"windows_voice": params["voice"]}})
         try:
             provider = tts_engine.make_provider(params.get("tts_provider", "stub"), settings)
             engine = tts_engine.TTSEngine(
@@ -2520,7 +2528,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.58)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.59)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -3442,6 +3450,12 @@ _HTML = """<!doctype html>
         <div><label>분당 TTS 호출 한도</label><input type="number" id="setRpm" min="1" max="60"></div>
       </div>
       <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠 — 기본 켬, v0.44부터 편집·사진 영상에도 적용)</span></div>
+      <div class="chk" style="gap:8px;flex-wrap:wrap"><span>내장 음성 목소리</span>
+        <select id="setWinVoice" style="width:auto;max-width:330px;padding:6px 8px">
+          <option value="">자동 (한국어 첫 번째)</option>
+        </select>
+        <button class="ghost" style="padding:5px 10px" onclick="previewWinVoice(event)">🔊 미리듣기</button>
+        <span class="hint" id="winVoiceHint">이 PC에 설치된 Windows 음성 중 선택 — 목소리 추가는 Windows 설정 → 시간 및 언어 → 음성</span></div>
       <div class="chk" style="gap:8px"><span>내장 음성 말 속도</span>
         <select id="setWinRate" style="width:auto;padding:6px 8px">
           <option value="-2">느리게</option>
@@ -3449,7 +3463,7 @@ _HTML = """<!doctype html>
           <option value="2">살짝 빠르게 (추천)</option>
           <option value="4">빠르게</option>
         </select>
-        <span class="hint">Windows 내장 한국어 음성(키 없이 쓰는 목소리)에만 적용</span></div>
+        <span class="hint">내장 음성(키 없이 쓰는 목소리·폴백)에 적용 — 제미나이/일레븐 보이스와는 별개</span></div>
     </details>
 
     <details class="opt">
@@ -4379,6 +4393,45 @@ function onNarrTopicInput(){
   $('origAudioSel').value = voiceOn ? 'mute' : 'keep';
 }
 
+async function loadWinVoices(saved){
+  const sel = $('setWinVoice'); if(!sel) return;
+  sel.innerHTML = '<option value="">자동 (한국어 첫 번째)</option>';
+  let voices = [], isWin = false;
+  try {
+    const d = await (await fetch('/api/win_voices', {method:'POST', body:'{}'})).json();
+    voices = d.voices || []; isWin = !!d.win;
+  } catch(e) { /* 목록 실패해도 저장값은 유지 */ }
+  voices.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v.name;
+    const g = v.gender === 'Female' ? '여' : v.gender === 'Male' ? '남' : '';
+    o.textContent = v.name.replace(/^Microsoft /, '') + ' (' + v.culture + (g ? ' · ' + g : '') + ')';
+    sel.appendChild(o);
+  });
+  if(saved && ![...sel.options].some(o => o.value === saved)){
+    const o = document.createElement('option');
+    o.value = saved; o.textContent = saved + ' (저장됨)';
+    sel.appendChild(o);
+  }
+  sel.value = saved || '';
+  const hint = $('winVoiceHint');
+  if(hint && !isWin) hint.textContent = 'Windows에서 실행하면 이 PC의 음성 목록이 떠요 (지금은 미리보기 불가)';
+}
+
+async function previewWinVoice(ev){
+  ev.preventDefault();
+  const btn = ev.target;
+  btn.disabled = true; const oldTxt = btn.textContent; btn.textContent = '합성 중...';
+  try{
+    const res = await fetch('/api/preview', {method:'POST', body: JSON.stringify({
+      tts_provider: 'windows', voice: $('setWinVoice').value,
+      text: '안녕하세요, 컷대장 내장 음성 미리듣기입니다.',
+    })});
+    const data = await res.json();
+    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+  } finally { btn.disabled = false; btn.textContent = oldTxt; }
+}
+
 async function previewNarrVoice(ev){
   ev.preventDefault();
   const v = $('narrVoiceSel').value;
@@ -4779,6 +4832,7 @@ function fillSettings(s){
   $('setRpm').value = s.tts.rpm_limit;
   const wr = String(s.tts.windows_rate != null ? s.tts.windows_rate : 0);
   $('setWinRate').value = ['-2','0','2','4'].includes(wr) ? wr : '0';
+  loadWinVoices(s.tts.windows_voice || '');
   const ch = s.channel || {};
   $('setChName').value = ch.name || '';
   $('setChTopic').value = ch.topic || '';
@@ -4862,7 +4916,8 @@ async function saveSettings(){
          ai_image: $('setAiImage').checked, scene_images: $('setSceneImg').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
     audio: {gap_ms: +$('setGap').value},
-    tts: {rpm_limit: +$('setRpm').value, windows_rate: +$('setWinRate').value},
+    tts: {rpm_limit: +$('setRpm').value, windows_rate: +$('setWinRate').value,
+          windows_voice: $('setWinVoice').value},
     channel: {name: $('setChName').value.trim(), topic: $('setChTopic').value.trim(),
               audience: $('setChAudience').value.trim()},
     branding: {intro: $('setIntroPath').value.trim(), outro: $('setOutroPath').value.trim()},

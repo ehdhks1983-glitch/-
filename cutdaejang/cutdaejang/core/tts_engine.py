@@ -406,15 +406,66 @@ _SAPI_PS1 = r"""param($TextFile, $OutWav)
 Add-Type -AssemblyName System.Speech
 $text = [IO.File]::ReadAllText($TextFile, [Text.Encoding]::UTF8)
 $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$ko = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ko*' } | Select-Object -First 1
-if (-not $ko) { $s.Dispose(); exit 3 }
-$s.SelectVoice($ko.VoiceInfo.Name)
+$want = '__VOICE__'
+$pick = $null
+if ($want -ne '') { $pick = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Name -eq $want } | Select-Object -First 1 }
+if (-not $pick) { $pick = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ko*' } | Select-Object -First 1 }
+if (-not $pick) { $s.Dispose(); exit 3 }
+$s.SelectVoice($pick.VoiceInfo.Name)
 $s.Rate = __RATE__
 $s.SetOutputToWaveFile($OutWav)
 $s.Speak($text)
 $s.Dispose()
 exit 0
 """
+
+_SAPI_LIST_PS1 = r"""Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$s.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object {
+  $v = $_.VoiceInfo
+  Write-Output ($v.Name + '|' + $v.Culture.Name + '|' + $v.Gender)
+}
+$s.Dispose()
+"""
+
+
+def build_sapi_script(rate: int, voice: str = "") -> str:
+    """SAPI 합성 PS1 생성 — 보이스명은 PS 문자열 리터럴로 안전 이스케이프 (v0.59)."""
+    safe = (voice or "").replace("'", "''")
+    return _SAPI_PS1.replace("__RATE__", str(rate)).replace("__VOICE__", safe)
+
+
+def list_windows_voices() -> list:
+    """이 PC에 설치된 Windows 내장 음성 목록 (v0.59) — [{name, culture, gender}].
+
+    Windows가 아니면 빈 목록. 한국어(ko*) 보이스를 앞으로 정렬한다.
+    """
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    if sys.platform != "win32":
+        return []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            ps1 = Path(tmp) / "list.ps1"
+            ps1.write_text(_SAPI_LIST_PS1, encoding="utf-8-sig")
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-File", str(ps1)],
+                capture_output=True, timeout=30,
+            )
+        voices = []
+        for ln in proc.stdout.decode("utf-8", "replace").splitlines():
+            parts = ln.strip().split("|")
+            if len(parts) >= 2 and parts[0]:
+                voices.append({"name": parts[0], "culture": parts[1],
+                               "gender": parts[2] if len(parts) > 2 else ""})
+        voices.sort(key=lambda v: (0 if v["culture"].lower().startswith("ko") else 1,
+                                   v["name"]))
+        return voices
+    except Exception:  # noqa: BLE001 — 목록 실패는 빈 목록 (합성엔 영향 없음)
+        return []
 
 
 class WindowsTTS:
@@ -425,13 +476,16 @@ class WindowsTTS:
 
     name = "windows"
 
-    def __init__(self, rate: int = 0):
+    def __init__(self, rate: int = 0, voice: str = ""):
         try:
             self.rate = max(-10, min(10, int(rate)))
         except (TypeError, ValueError):
             self.rate = 0
-        # 속도가 바뀌면 다른 소리 → 캐시 키에 반영 (0은 기존 캐시 그대로 재사용)
-        self.cache_extra = f"rate{self.rate}" if self.rate else ""
+        self.voice = (voice or "").strip()  # 설치된 SAPI 보이스명 (빈 값=한국어 첫 번째)
+        # 속도·보이스가 바뀌면 다른 소리 → 캐시 키에 반영 (기본값은 기존 캐시 재사용)
+        parts = ([f"rate{self.rate}"] if self.rate else []) + \
+                ([f"v:{self.voice}"] if self.voice else [])
+        self.cache_extra = "|".join(parts)
 
     def synthesize(self, text: str, voice: str, out_path: str) -> str:
         import subprocess  # noqa: PLC0415
@@ -439,11 +493,12 @@ class WindowsTTS:
         import tempfile  # noqa: PLC0415
 
         if sys.platform != "win32":
-            raise TTSError("Windows 내장 음성은 Windows에서만 사용할 수 있습니다")
+            # 재시도해도 달라질 수 없는 환경 문제 → 즉시 다음 제공자/오류로
+            raise TTSNonRetryable("Windows 내장 음성은 Windows에서만 사용할 수 있습니다")
         with tempfile.TemporaryDirectory() as tmp:
             ps1 = Path(tmp) / "sapi.ps1"
             txt = Path(tmp) / "text.txt"
-            ps1.write_text(_SAPI_PS1.replace("__RATE__", str(self.rate)),
+            ps1.write_text(build_sapi_script(self.rate, self.voice),
                            encoding="utf-8-sig")
             txt.write_text(text, encoding="utf-8")
             proc = subprocess.run(
@@ -725,7 +780,8 @@ def make_provider(name: str, settings: dict) -> TTSProvider:
                             ref_audio=tts_cfg.get("sovits_ref_audio", ""),
                             ref_text=tts_cfg.get("sovits_ref_text", ""))
     if name == "windows":
-        return WindowsTTS(rate=tts_cfg.get("windows_rate", 0))
+        return WindowsTTS(rate=tts_cfg.get("windows_rate", 0),
+                          voice=tts_cfg.get("windows_voice", ""))
     return PROVIDERS[name]()
 
 
