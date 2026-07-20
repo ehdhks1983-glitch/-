@@ -500,6 +500,44 @@ def test_template_save_apply_delete(server):
         assert e.code == 400
 
 
+def test_v061_wide_userscript_length(server):
+    """v0.61: 가로 롱폼 + 내 대본 + 길이 — 검토에 내 줄 그대로, 완성은 16:9."""
+    import urllib.error
+
+    from cutdaejang.utils import ffmpeg as ff
+
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'name="genOrient"' in html and 'id="genLenSel"' in html
+    assert 'id="genScript"' in html and "가로 롱폼 (16:9)" in html
+
+    # 주제 없이 대본만으로 시작 (검토 모드) → 내 줄이 그대로 검토에
+    res = _post(server, "/api/generate", {
+        "auto": False, "orientation": "wide", "target_sec": 120,
+        "script_text": "[노랑]첫[/] 줄입니다\n둘째 줄입니다\n셋째 줄입니다",
+        "tts_provider": "stub", "script_provider": "stub", "topic": "",
+    })
+    job = _wait_status(server, res["job_id"], {"awaiting_review", "failed"})
+    assert job["status"] == "awaiting_review", job.get("errors")
+    assert job["script"]["sentences"] == ["[노랑]첫[/] 줄입니다", "둘째 줄입니다", "셋째 줄입니다"]
+    assert job["title"] == "첫 줄입니다"[:40] or job["title"]  # 마크업 벗긴 첫 줄
+    assert job.get("orientation") == "wide"
+
+    _post(server, "/api/confirm", {"job_id": res["job_id"], "title": job["title"],
+                                   "sentences": job["script"]["sentences"]})
+    done = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=300)
+    assert done["status"] == "ok", done.get("errors")
+    w, h = ff.probe_video_size(done["mp4"])
+    assert (w, h) == (1920, 1080)
+
+    # 주제도 대본도 없으면 400
+    try:
+        _post(server, "/api/generate", {"topic": "", "script_text": ""})
+        raised = False
+    except urllib.error.HTTPError as e:
+        raised = e.code == 400
+    assert raised
+
+
 def test_v060_visual_decor_ui(server):
     """v0.60: 자막 견본 칩·톤 스와치·미니 데모·효과음 듣기 — 글자 대신 눈·귀로."""
     import urllib.error

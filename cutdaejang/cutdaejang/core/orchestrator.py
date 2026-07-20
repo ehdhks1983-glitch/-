@@ -39,6 +39,7 @@ class JobOptions:
     tts_style: str = ""                  # 비면 settings.tts.style_preset
     tone: str = "정보형"
     target_sec: int = 60
+    orientation: str = "shorts"          # shorts(세로 9:16) | wide(가로 롱폼 16:9) — v0.61
     bgm: str = ""                        # ""(없음) | "random" | 파일명/경로
     hook: str = ""                       # 상단 제목(훅). 비면 대본 제목 사용
     user_background: Optional[str] = None
@@ -169,8 +170,11 @@ def run_job(
     try:
         # ③ 문장별 TTS — 영구 캐시 + 레이트리미터 + 폴백 체인 (지시서 PATCH 1)
         report("tts", 0.0)
+        # 색 마크업([노랑]…[/])은 자막 전용 — 목소리가 읽지 않게 벗겨서 합성 (v0.61)
+        tts_texts = [re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", s).strip() or "네"
+                     for s in script.sentences]
         audio_paths, used_provider, fallback_note = tts_engine.synth_with_fallback(
-            script.sentences,
+            tts_texts,
             chain=list(opts.tts_chain),
             cache_root=Path(workdir_root) / "cache" / "tts",
             settings=settings,
@@ -184,7 +188,8 @@ def run_job(
         # ⑤ 배경
         report("background", 0.0)
         bg_path = str(job_dir / "background.png")
-        canvas = presets.CANVAS_SHORTS
+        canvas = (presets.CANVAS_LANDSCAPE if opts.orientation == "wide"
+                  else presets.CANVAS_SHORTS)  # v0.61 가로 롱폼
         _, result.bg_source = background_generator.prepare_background(
             bg_path,
             canvas,

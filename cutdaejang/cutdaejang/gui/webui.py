@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
-from .. import config
+from .. import config, presets
 from ..core import background_generator, orchestrator, tts_engine
 from ..core.orchestrator import JobOptions
 from ..core.render_engine.ffmpeg_composer import RenderOptions
@@ -197,6 +197,12 @@ def _tts_chain(params: dict, settings: dict) -> list:
     return [provider]
 
 
+def _job_canvas(job: Optional[dict]):
+    """장면 재생성·삽입 때 그 작업의 화면 형태(세로/가로)에 맞는 캔버스 (v0.61)."""
+    wide = (((job or {}).get("params") or {}).get("orientation") == "wide")
+    return presets.CANVAS_LANDSCAPE if wide else presets.CANVAS_SHORTS
+
+
 def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
     settings = settings or config.load_settings()
     return JobOptions(
@@ -208,6 +214,7 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
         bgm=params.get("bgm", ""),
         hook=(params.get("hook") or "").strip(),
         target_sec=int(params.get("target_sec") or 60),
+        orientation="wide" if params.get("orientation") == "wide" else "shorts",  # v0.61
         render=RenderOptions(use_gpu=params.get("gpu", "auto")),
     )
 
@@ -301,7 +308,15 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
     over_sfx = {}
     if "sfx_auto" in params:  # 🔔 효과음 켬/끔 기억 (v0.53)
         over_sfx["enabled"] = bool(params.get("sfx_auto"))
-    if not over and not over_sub and not over_sfx:
+    over_ui = {}
+    if params.get("orientation") in ("shorts", "wide"):  # 🖥 화면 형태 기억 (v0.61)
+        over_ui["gen_orientation"] = params["orientation"]
+    if params.get("target_sec"):  # ⏱ 영상 길이 기억 (v0.61)
+        try:
+            over_ui["gen_target_sec"] = max(10, min(600, int(params["target_sec"])))
+        except (TypeError, ValueError):
+            pass
+    if not over and not over_sub and not over_sfx and not over_ui:
         return settings
     save = {}
     if over and any(settings["bg"].get(k) != v for k, v in over.items()):
@@ -310,6 +325,8 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
         save["subtitle"] = over_sub
     if over_sfx and any((settings.get("sfx") or {}).get(k) != v for k, v in over_sfx.items()):
         save["sfx"] = over_sfx
+    if over_ui and any((settings.get("ui") or {}).get(k) != v for k, v in over_ui.items()):
+        save["ui"] = over_ui
     if save:
         try:
             config.save_settings(save)
@@ -1110,8 +1127,10 @@ def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> 
                      note="✍ 내가 넣기 — 프롬프트를 복사해 그림을 만들어 넣어주세요",
                      scenes=scenes)
             return
+        canvas = (presets.CANVAS_LANDSCAPE
+                  if (params or {}).get("orientation") == "wide" else presets.CANVAS_SHORTS)
         imgs = background_generator.generate_scene_images(
-            prompts, provider, job_dir / "scenes", presets.CANVAS_SHORTS,
+            prompts, provider, job_dir / "scenes", canvas,
             style=settings["bg"].get("image_style", "일러스트"),
             character=settings["bg"].get("character", ""),
             on_note=lambda m: _set_job(job_id, note=m),
@@ -1224,6 +1243,26 @@ def _run_generate(job_id: str, params: dict, workdir: str) -> None:
     try:
         _apply_keys(params)
         _set_job(job_id, status="running", stage="script", frac=0.0)
+        user_script = (params.get("script_text") or "").strip()
+        if user_script:  # 📝 내 대본 그대로 (v0.61) — AI 대본 생략, 비용 0
+            from ..core.script_generator import Script  # noqa: PLC0415
+            lines = [ln.strip() for ln in user_script.splitlines() if ln.strip()]
+            import re as _re  # noqa: PLC0415
+            plain0 = _re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", lines[0])
+            script = Script(title=(params.get("topic") or "").strip() or plain0[:40],
+                            sentences=lines)
+            _set_job(job_id, note=f"내 대본 {len(lines)}줄 그대로 사용 (AI 대본 생략)")
+            job_dir = Path(workdir) / job_id
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "script.json").write_text(script.to_json(), encoding="utf-8")
+            if params.get("auto", True):
+                _run_pipeline(job_id, script, params, workdir)
+            else:
+                _set_job(job_id, status="awaiting_review", stage="review", title=script.title,
+                         script={"title": script.title, "sentences": script.sentences,
+                                 "highlights": script.highlights,
+                                 "background_prompt": script.background_prompt})
+            return
         provider_name = params.get("script_provider", "stub")
         if provider_name == "gemini" and not os.environ.get("GEMINI_API_KEY"):
             # 키 없는 내장 음성 사용자도 실패 없이 — 템플릿 대본으로 안전 강등 (v0.40)
@@ -1371,12 +1410,15 @@ class _Handler(BaseHTTPRequestHandler):
         workdir = self.server.workdir  # type: ignore[attr-defined]
         if path == "/api/generate":
             topic = (params.get("topic") or "").strip()
-            if not topic:
-                self._send_json({"error": "주제를 입력하세요"}, 400)
+            has_user_script = bool((params.get("script_text") or "").strip())
+            if not topic and not has_user_script:
+                self._send_json({"error": "주제를 입력하세요 (대본을 직접 넣으면 주제는 생략 가능)"}, 400)
                 return
-            job_id = orchestrator.new_job_id(topic)
+            job_id = orchestrator.new_job_id(
+                topic or (params.get("script_text") or "").strip().splitlines()[0][:24])
             _set_job(job_id, status="running", stage="script", frac=0.0,
-                     title=topic, params=params)
+                     title=topic, params=params,
+                     orientation="wide" if params.get("orientation") == "wide" else "shorts")
             threading.Thread(
                 target=_run_generate, args=(job_id, params, workdir), daemon=True
             ).start()
@@ -1770,7 +1812,7 @@ class _Handler(BaseHTTPRequestHandler):
                     settings["bg"].get("character", ""))
                 background_generator_path = provider.generate(
                     full, str(scenes_dir / f"scene_{idx + 1:02d}.png"),
-                    presets.CANVAS_SHORTS, ref_png=ref)
+                    _job_canvas(job), ref_png=ref)
                 scene["prompt"], scene["ok"] = prompt, bool(background_generator_path)
                 _set_job(job["id"], scenes=scenes)
                 self._send_json({"ok": True})
@@ -1802,8 +1844,8 @@ class _Handler(BaseHTTPRequestHandler):
 
             dest = Path(workdir) / job["id"] / "scenes" / f"scene_{idx + 1:02d}.png"
             dest.parent.mkdir(parents=True, exist_ok=True)
-            try:  # 어떤 크기·비율이 와도 쇼츠 캔버스에 맞게 정규화 (한쪽 채우고 넘침은 잘라냄)
-                background_generator.normalize_to_canvas(src, str(dest), presets.CANVAS_SHORTS)
+            try:  # 어떤 크기·비율이 와도 작업 캔버스에 맞게 정규화 (한쪽 채우고 넘침은 잘라냄)
+                background_generator.normalize_to_canvas(src, str(dest), _job_canvas(job))
             except Exception as e:  # noqa: BLE001
                 self._send_json({"error": f"그림 넣기 실패: {str(e)[:200]}"}, 500)
                 return
@@ -1836,7 +1878,7 @@ class _Handler(BaseHTTPRequestHandler):
                 dest = scenes_dir / f"scene_{int(scene['i']) + 1:02d}.png"
                 try:
                     background_generator.normalize_to_canvas(str(f), str(dest),
-                                                             presets.CANVAS_SHORTS)
+                                                             _job_canvas(job))
                     scene["ok"] = True
                     applied += 1
                 except Exception as e:  # noqa: BLE001
@@ -2566,7 +2608,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.60)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.61)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -3010,6 +3052,29 @@ _HTML = """<!doctype html>
     </div>
     <textarea id="topicBatch" class="hidden" style="min-height:96px" placeholder="한 줄 = 영상 1개 (최대 20개)&#10;예)&#10;하루 10분 정리 습관&#10;아침 루틴 꿀팁 3가지&#10;퇴근 후 부업 시작하는 법"></textarea>
     <div class="hint hidden" id="batchHint">배치는 검토 없이 자동으로 연속 완성돼요. 고른 목소리·배경음악·설정이 전부 똑같이 적용됩니다.</div>
+    <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:8px">
+      <span>화면</span>
+      <div class="toggle" style="margin:0">
+        <label><input type="radio" name="genOrient" value="shorts" checked><span>📱 세로 쇼츠 (9:16)</span></label>
+        <label><input type="radio" name="genOrient" value="wide"><span>🖥 가로 롱폼 (16:9)</span></label>
+      </div>
+      <span style="margin-left:6px">길이</span>
+      <select id="genLenSel" style="width:auto;padding:6px 8px">
+        <option value="30">약 30초</option>
+        <option value="45">약 45초</option>
+        <option value="60" selected>약 1분 (기본)</option>
+        <option value="90">약 1분 30초</option>
+        <option value="120">약 2분</option>
+        <option value="180">약 3분</option>
+        <option value="300">약 5분</option>
+      </select>
+      <span class="hint">길이는 AI 대본 분량 기준(말 속도에 따라 조금 달라져요) — 대본을 직접 넣으면 그 분량대로</span>
+    </div>
+    <details class="opt" style="margin-top:8px">
+      <summary>📝 대본 직접 넣기 <span class="hint">— 써둔 대본이 있으면 AI 대본 대신 그대로 (한 줄 = 자막 하나)</span></summary>
+      <textarea id="genScript" style="min-height:110px" placeholder="한 줄이 자막 한 개가 돼요. 비워두면 주제로 AI가 대본을 씁니다.&#10;[노랑]강조할 말[/노랑] 처럼 색을 직접 칠할 수도 있어요 (색: 노랑·빨강·초록·파랑·주황·분홍·하늘·민트·보라).&#10;줄이 많을수록 목소리 합성(TTS)도 그만큼 늘어나요."></textarea>
+      <div class="hint">넣으면 영상 길이는 대본 분량대로(위 길이 설정은 무시), 주제는 제목·훅에만 쓰여요. 「여러 개 한 번에(배치)」와는 함께 쓸 수 없어요.</div>
+    </details>
 
     <div class="steplabel"><span class="stepnum">2</span>목소리 고르기</div>
     <div class="toggle">
@@ -4415,6 +4480,10 @@ async function generate(){
     if(k){ $('geminiKey').value = k; }
     else if(!confirm('Gemini 키 없이 만들면 내장 음성·기본 배경으로 완성돼요.' + String.fromCharCode(10) + '키 없이 계속할까요?')) return;
   }
+  if((($('genScript')||{}).value||'').trim() && (($('batchChk')||{}).checked)){
+    alert('「📝 대본 직접 넣기」와 「📦 여러 개 한 번에(배치)」는 함께 쓸 수 없어요' +
+          String.fromCharCode(10) + '— 배치를 끄거나 대본을 비워주세요.'); return;
+  }
   let autoMode = pick('mode') === 'auto';
   const sceneMode = (($('genSceneMode')||{}).value)||'auto';
   if(sceneMode === 'manual' && autoMode && !(($('batchChk')||{}).checked)){
@@ -4439,6 +4508,9 @@ async function generate(){
       : ((($('genCharSel')||{}).value)||''),
     bg_scene_mode: sceneMode,                                   // v0.51 그림 방식
     hook_style: (($('genHookStyleSel')||{}).value)||'기본',        // v0.52 제목 프리셋
+    orientation: pick('genOrient') || 'shorts',                    // v0.61 화면 형태
+    target_sec: +(($('genLenSel')||{}).value) || 60,               // v0.61 영상 길이
+    script_text: (($('genScript')||{}).value)||'',                 // v0.61 내 대본
     sub_style: (($('genSubStyleSel')||{}).value)||'기본',          // v0.54 자막 프리셋
     sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
     punch_in: !!(($('genPunchChk')||{}).checked),                  // v0.55 펀치 줌
@@ -4890,6 +4962,8 @@ function resetGenForm(ev){
   const set = (id, v) => { const el = $(id); if(el) el.value = v; };
   set('topic','하루 10분 정리 습관'); set('genHook','');
   set('genHookStyleSel','기본'); set('genSubStyleSel','기본'); const gp=$('genHookPreview'); if(gp) gp.style.display='none';
+  const ors=document.querySelector("input[name=genOrient][value=shorts]"); if(ors) ors.checked=true;
+  set('genLenSel','60'); set('genScript','');
   const bc = $('batchChk'); if(bc){ bc.checked = false; } set('topicBatch',''); onBatchChange();
   const hc = $('genHookCands'); if(hc) hc.innerHTML='';
   set('bgmSel',''); set('voiceSel', ($('voiceSel').options[0]||{}).value || '');
@@ -5057,6 +5131,7 @@ async function confirmScript(){
 function renderScenes(job){
   const grid = $('sceneGrid'); grid.innerHTML = '';
   window._lastScenes = job.scenes || [];
+  window._jobOrient = job.orientation || 'shorts';  // v0.61 복사 문구용
   (job.scenes || []).forEach((s, k) => {
     const cell = document.createElement('div');
     cell.style.cssText = 'border:1px solid #2c3350;border-radius:12px;padding:10px;background:#12141c;display:flex;flex-direction:column;gap:6px'
@@ -5117,8 +5192,9 @@ async function copyScenePrompts(ev){
   const style = (($('genBgStyle')||{}).value)||'일러스트';
   const ch = (($('genCharSel')||{}).value) === 'custom'
     ? ((($('genCharCustom')||{}).value)||'').trim() : ((($('genCharSel')||{}).value)||'');
+  const ratio = (window._jobOrient === 'wide') ? '가로(16:9)' : '세로(9:16)';
   const lines = [
-    '아래 번호마다 유튜브 쇼츠용 세로(9:16) 이미지를 1장씩 만들어줘. 총 ' + scenes.length + '장.',
+    '아래 번호마다 유튜브용 ' + ratio + ' 이미지를 1장씩 만들어줘. 총 ' + scenes.length + '장.',
     '모든 장면은 같은 그림체(' + style + ' 느낌)로 통일하고, 글자는 넣지 말고, 화면 아래 1/3은 자막이 올라갈 수 있게 단순하게.',
   ];
   if(ch) lines.push('주인공 캐릭터: ' + ch + ' — 모든 장면에 같은 모습·같은 그림체로 등장.');
@@ -5308,6 +5384,12 @@ async function poll(){
     // v0.52: 상단 제목 글씨 스타일 복원 (생성 폼)
     const hks = ((state.settings || {}).subtitle || {}).hook_style || '기본';
     if($('genHookStyleSel')) $('genHookStyleSel').value = hks;
+    // v0.61: 화면 형태·영상 길이 복원
+    const gor = ((state.settings || {}).ui || {}).gen_orientation;
+    if(gor){ const r = document.querySelector("input[name=genOrient][value='" + gor + "']"); if(r) r.checked = true; }
+    const glen = ((state.settings || {}).ui || {}).gen_target_sec;
+    if(glen && $('genLenSel') && [...$('genLenSel').options].some(o => +o.value === +glen))
+      $('genLenSel').value = String(glen);
     // v0.51: 그림 방식·최대 장수 복원
     const scm = ((state.settings || {}).bg || {}).scene_mode || 'auto';
     if($('genSceneMode')) $('genSceneMode').value = scm;
