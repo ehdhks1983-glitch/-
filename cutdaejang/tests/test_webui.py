@@ -500,6 +500,34 @@ def test_template_save_apply_delete(server):
         assert e.code == 400
 
 
+def test_v060_visual_decor_ui(server):
+    """v0.60: 자막 견본 칩·톤 스와치·미니 데모·효과음 듣기 — 글자 대신 눈·귀로."""
+    import urllib.error
+
+    html = _get(server, "/").read().decode("utf-8")
+    for sel in ("genSubStyleSel", "editSubStyleSel"):
+        assert html.count(f"stylechips\" data-for=\"{sel}") == 1, sel
+        for v in ("기본", "예능 노랑", "말풍선 띠", "네온"):
+            assert f"pickStyleChip('{sel}','{v}'" in html, (sel, v)
+    for sel in ("genToneSel", "editToneSel"):
+        assert html.count(f"tonerow\" data-for=\"{sel}") == 1, sel
+        for v in ("기본", "시네마틱", "화사", "선명", "흑백"):
+            assert f"pickToneCard('{sel}','{v}'" in html, (sel, v)
+    assert "punch-demo" in html and "pop-demo" in html  # 움직이는 미니 데모
+    assert html.count("playSfx(event,") == 3            # ▶ 뿅·휙·띠링
+    assert "grayscale(1)" in html                        # 흑백 스와치 필터
+
+    # 효과음 라우트: 실제 WAV 서빙 + 이상한 이름은 404
+    body = _get(server, "/sfx/pop").read()
+    assert body[:4] == b"RIFF" and len(body) > 4000
+    try:
+        _get(server, "/sfx/../../etc/passwd")
+        ok404 = False
+    except urllib.error.HTTPError as e:
+        ok404 = e.code == 404
+    assert ok404
+
+
 def test_win_voices_api_and_settings(server):
     """v0.59: 내장 음성 보이스 — 목록 API(리눅스=빈 목록) + 설정 저장 + 미리듣기 오류."""
     from cutdaejang import config

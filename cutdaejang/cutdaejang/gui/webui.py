@@ -1319,6 +1319,21 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_preview(path.split("/", 2)[2])
         elif path.startswith("/bgm/"):
             self._serve_bgm(path.split("/", 2)[2])
+        elif path.startswith("/sfx/"):  # 🔔 효과음 들어보기 (v0.60)
+            name = path.split("/", 2)[2]
+            if name not in ("pop", "whoosh", "ding"):
+                self._send_json({"error": "not found"}, 404)
+                return
+            try:
+                from ..core import sfx as sfx_mod  # noqa: PLC0415
+                sp = sfx_mod.ensure_sfx().get(name)
+            except Exception as e:  # noqa: BLE001 — ffmpeg 문제 등
+                self._send_json({"error": f"효과음 준비 실패: {e}"}, 500)
+                return
+            if sp and Path(sp).is_file():
+                self._serve_file(sp)
+            else:
+                self._send_json({"error": "not found"}, 404)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -2523,12 +2538,35 @@ _HTML = """<!doctype html>
   .guide { background:#14233c; border:1px solid #2c4a7a; color:#cfe0ff; border-radius:10px;
            padding:12px 14px; margin-top:14px; font-size:13px; line-height:1.7; }
   .guide a { color:#8ab4ff; }
+  /* ── v0.60 꾸미기 시각화: 견본 칩·미니 데모·톤 스와치 ── */
+  .stylechips { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+  .stylechip { background:#0d0f14; border:1.5px solid #2c3350; border-radius:10px;
+    padding:9px 14px; cursor:pointer; font-weight:800; font-size:15px; line-height:1.2; }
+  .stylechip:hover { border-color:#4266d5; }
+  .stylechip.sel { border-color:#5b7cfa; box-shadow:0 0 0 2px rgba(91,124,250,.28); }
+  .fx-demo { display:inline-flex; width:64px; height:38px; border-radius:6px; flex:none;
+    background:linear-gradient(135deg,#31406e,#7a4a76 60%,#b8875a);
+    align-items:center; justify-content:center; overflow:hidden; }
+  .fx-demo b { color:#fff; font-size:12.5px; text-shadow:0 1px 2px #000; }
+  .punch-demo b { animation:punchD 1.8s ease-in-out infinite; }
+  @keyframes punchD { 0%,55%,100% { transform:scale(1); } 30% { transform:scale(1.28); } }
+  .pop-demo b { animation:popD 2.2s ease-out infinite; color:#ffd400; font-weight:900; font-size:14px; }
+  @keyframes popD { 0%,12% { transform:scale(0); opacity:0; } 22% { transform:scale(1.4); opacity:1; }
+    32% { transform:scale(1); } 74% { opacity:1; transform:scale(1); } 88%,100% { opacity:0; } }
+  .tonerow { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+  .tonecard { cursor:pointer; text-align:center; border:1.5px solid #2c3350; border-radius:10px;
+    padding:5px 6px 4px; background:#0d0f14; }
+  .tonecard:hover { border-color:#4266d5; }
+  .tonecard.sel { border-color:#5b7cfa; box-shadow:0 0 0 2px rgba(91,124,250,.28); }
+  .tonecard .sw { width:76px; height:44px; border-radius:6px;
+    background:linear-gradient(135deg,#4a6fd4 0%,#c76a93 55%,#e8b45a 100%); }
+  .tonecard span { display:block; font-size:11px; color:#aeb6c8; margin-top:4px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.59)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.60)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2807,26 +2845,40 @@ _HTML = """<!doctype html>
 
     <details class="opt" id="optAdv">
       <summary>⚙️ 세부 설정 <span class="hint">— 화면 비율 · 자동 자막/무음 컷 · 음성 인식 엔진</span></summary>
-      <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:6px">
-        <span>💬 자막 글씨 스타일</span>
-        <select id="editSubStyleSel" style="width:auto;padding:6px 8px">
+      <div style="margin-top:6px">
+        <span>💬 자막 글씨 스타일 <span class="hint">— 보이는 그대로 들어가요 (강조색 자동 조정, 기억됨)</span></span>
+        <select id="editSubStyleSel" class="hidden">
           <option value="기본" selected>기본 (흰 글자+검정 테두리)</option>
           <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
           <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
           <option value="네온">네온 (민트 글로우)</option>
         </select>
-        <span class="hint">본문 자막 전체의 글씨 느낌 — 강조색도 자동 조정, 한 번 고르면 기억</span>
+        <div class="stylechips" data-for="editSubStyleSel">
+          <div class="stylechip sel" data-v="기본" onclick="pickStyleChip('editSubStyleSel','기본',event)"
+               style="color:#fff;text-shadow:-1.5px -1.5px 0 #000,1.5px -1.5px 0 #000,-1.5px 1.5px 0 #000,1.5px 1.5px 0 #000,0 2px 3px #000">기본 자막</div>
+          <div class="stylechip" data-v="예능 노랑" onclick="pickStyleChip('editSubStyleSel','예능 노랑',event)"
+               style="color:#ffd400;text-shadow:-1.5px -1.5px 0 #000,1.5px -1.5px 0 #000,-1.5px 1.5px 0 #000,1.5px 1.5px 0 #000,0 2px 3px #000">예능 노랑</div>
+          <div class="stylechip" data-v="말풍선 띠" onclick="pickStyleChip('editSubStyleSel','말풍선 띠',event)"
+               style="background:#f4f5f8;color:#15161c;border-radius:999px">말풍선 띠</div>
+          <div class="stylechip" data-v="네온" onclick="pickStyleChip('editSubStyleSel','네온',event)"
+               style="color:#7dffd4;text-shadow:0 0 8px rgba(125,255,212,.95),0 0 18px rgba(125,255,212,.55)">네온 글로우</div>
+        </div>
       </div>
-      <div class="chk" style="gap:8px;flex-wrap:wrap">
-        <span>🎨 화면 톤(색보정)</span>
-        <select id="editToneSel" style="width:auto;padding:6px 8px">
+      <div style="margin-top:8px">
+        <span>🎨 화면 톤(색보정) <span class="hint">— 같은 장면이 이렇게 달라져요 (자막·제목 글자는 원색 유지)</span></span>
+        <select id="editToneSel" class="hidden">
           <option value="기본" selected>기본 (보정 없음)</option>
           <option value="시네마틱">시네마틱 (영화 느낌 틸·오렌지)</option>
           <option value="화사">화사 (밝고 쨍한 브이로그)</option>
           <option value="선명">선명 (대비·채도·샤픈 업)</option>
           <option value="흑백">흑백 (드라마틱)</option>
         </select>
-        <span class="hint">영상 전체 색감 (자막·제목 글자는 원색 유지)</span>
+        <div class="tonerow" data-for="editToneSel"><div class="tonecard sel" data-v="기본" onclick="pickToneCard('editToneSel','기본',event)"
+               title="기본"><div class="sw" style="filter:none"></div><span>기본</span></div><div class="tonecard" data-v="시네마틱" onclick="pickToneCard('editToneSel','시네마틱',event)"
+               title="시네마틱"><div class="sw" style="filter:sepia(.30) saturate(1.35) contrast(1.08) hue-rotate(-8deg)"></div><span>시네마틱</span></div><div class="tonecard" data-v="화사" onclick="pickToneCard('editToneSel','화사',event)"
+               title="화사"><div class="sw" style="filter:brightness(1.16) saturate(1.18)"></div><span>화사</span></div><div class="tonecard" data-v="선명" onclick="pickToneCard('editToneSel','선명',event)"
+               title="선명"><div class="sw" style="filter:contrast(1.3) saturate(1.4)"></div><span>선명</span></div><div class="tonecard" data-v="흑백" onclick="pickToneCard('editToneSel','흑백',event)"
+               title="흑백"><div class="sw" style="filter:grayscale(1) contrast(1.1)"></div><span>흑백</span></div></div>
       </div>
       <div class="row" style="margin-top:4px">
         <div>
@@ -3039,42 +3091,59 @@ _HTML = """<!doctype html>
 
     <details class="opt">
       <summary>💬 자막 글씨 스타일 <span class="hint">— 본문 자막의 글씨 느낌 고르기</span></summary>
-      <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:6px">
-        <span>💬 자막 글씨 스타일</span>
-        <select id="genSubStyleSel" style="width:auto;padding:6px 8px">
-          <option value="기본" selected>기본 (흰 글자+검정 테두리)</option>
-          <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
-          <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
-          <option value="네온">네온 (민트 글로우)</option>
-        </select>
-        <span class="hint">본문 자막 전체의 글씨 느낌 — 강조색도 자동 조정, 한 번 고르면 기억</span>
-      </div>
+      <select id="genSubStyleSel" class="hidden">
+        <option value="기본" selected>기본 (흰 글자+검정 테두리)</option>
+        <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
+        <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
+        <option value="네온">네온 (민트 글로우)</option>
+      </select>
+      <div class="stylechips" data-for="genSubStyleSel">
+          <div class="stylechip sel" data-v="기본" onclick="pickStyleChip('genSubStyleSel','기본',event)"
+               style="color:#fff;text-shadow:-1.5px -1.5px 0 #000,1.5px -1.5px 0 #000,-1.5px 1.5px 0 #000,1.5px 1.5px 0 #000,0 2px 3px #000">기본 자막</div>
+          <div class="stylechip" data-v="예능 노랑" onclick="pickStyleChip('genSubStyleSel','예능 노랑',event)"
+               style="color:#ffd400;text-shadow:-1.5px -1.5px 0 #000,1.5px -1.5px 0 #000,-1.5px 1.5px 0 #000,1.5px 1.5px 0 #000,0 2px 3px #000">예능 노랑</div>
+          <div class="stylechip" data-v="말풍선 띠" onclick="pickStyleChip('genSubStyleSel','말풍선 띠',event)"
+               style="background:#f4f5f8;color:#15161c;border-radius:999px">말풍선 띠</div>
+          <div class="stylechip" data-v="네온" onclick="pickStyleChip('genSubStyleSel','네온',event)"
+               style="color:#7dffd4;text-shadow:0 0 8px rgba(125,255,212,.95),0 0 18px rgba(125,255,212,.55)">네온 글로우</div>
+        </div>
+      <div class="hint">보이는 그대로 들어가요 — 강조색도 스타일에 맞게 자동 조정, 한 번 고르면 기억</div>
     </details>
 
     <details class="opt">
       <summary>🎬 자동 연출 <span class="hint">— 효과음·줌·숫자 팝·색감 (전부 자동, 여기서 켜고 끔)</span></summary>
-      <div class="chk" style="gap:8px">
-        <input type="checkbox" id="genSfxChk" checked>
-        <span>🔔 <b>효과음 자동</b> — 강조 문장 "뿅" · 장면 전환 "휙" · 제목 등장 "띠링"</span>
-      </div>
-      <div class="chk" style="gap:8px">
-        <input type="checkbox" id="genPunchChk" checked>
-        <span>👊 <b>펀치인 줌</b> — 강조 문장에서 화면이 살짝 확대됐다 복귀 (자막은 고정)</span>
-      </div>
-      <div class="chk" style="gap:8px">
-        <input type="checkbox" id="genInfoChk" checked>
-        <span>🔢 <b>숫자 인포 팝</b> — 강조 문장 속 숫자(3가지·10분·50%)가 크게 뿅!</span>
-      </div>
       <div class="chk" style="gap:8px;flex-wrap:wrap">
-        <span>🎨 화면 톤(색보정)</span>
-        <select id="genToneSel" style="width:auto;padding:6px 8px">
+        <input type="checkbox" id="genSfxChk" checked>
+        <span>🔔 <b>효과음 자동</b> — 눌러서 들어보세요 →</span>
+        <button class="ghost" style="padding:4px 10px;font-size:12.5px" onclick="playSfx(event,'pop')">▶ 뿅 (강조)</button>
+        <button class="ghost" style="padding:4px 10px;font-size:12.5px" onclick="playSfx(event,'whoosh')">▶ 휙 (장면 전환)</button>
+        <button class="ghost" style="padding:4px 10px;font-size:12.5px" onclick="playSfx(event,'ding')">▶ 띠링 (제목 등장)</button>
+      </div>
+      <div class="chk" style="gap:10px">
+        <input type="checkbox" id="genPunchChk" checked>
+        <span class="fx-demo punch-demo"><b>화면 쿵!</b></span>
+        <span>👊 <b>펀치인 줌</b> — 강조 문장에서 옆 미리보기처럼 살짝 확대됐다 복귀 (자막은 고정)</span>
+      </div>
+      <div class="chk" style="gap:10px">
+        <input type="checkbox" id="genInfoChk" checked>
+        <span class="fx-demo pop-demo"><b>50%</b></span>
+        <span>🔢 <b>숫자 인포 팝</b> — 강조 문장 속 숫자(3가지·10분·50%)가 옆처럼 크게 뿅!</span>
+      </div>
+      <div style="margin-top:8px">
+        <span>🎨 화면 톤(색보정) <span class="hint">— 같은 장면이 이렇게 달라져요 (자막·제목 글자는 원색 유지)</span></span>
+        <select id="genToneSel" class="hidden">
           <option value="기본" selected>기본 (보정 없음)</option>
           <option value="시네마틱">시네마틱 (영화 느낌 틸·오렌지)</option>
           <option value="화사">화사 (밝고 쨍한 브이로그)</option>
           <option value="선명">선명 (대비·채도·샤픈 업)</option>
           <option value="흑백">흑백 (드라마틱)</option>
         </select>
-        <span class="hint">영상 전체 색감 — 자막·제목 글자는 원색 유지</span>
+        <div class="tonerow" data-for="genToneSel"><div class="tonecard sel" data-v="기본" onclick="pickToneCard('genToneSel','기본',event)"
+               title="기본"><div class="sw" style="filter:none"></div><span>기본</span></div><div class="tonecard" data-v="시네마틱" onclick="pickToneCard('genToneSel','시네마틱',event)"
+               title="시네마틱"><div class="sw" style="filter:sepia(.30) saturate(1.35) contrast(1.08) hue-rotate(-8deg)"></div><span>시네마틱</span></div><div class="tonecard" data-v="화사" onclick="pickToneCard('genToneSel','화사',event)"
+               title="화사"><div class="sw" style="filter:brightness(1.16) saturate(1.18)"></div><span>화사</span></div><div class="tonecard" data-v="선명" onclick="pickToneCard('genToneSel','선명',event)"
+               title="선명"><div class="sw" style="filter:contrast(1.3) saturate(1.4)"></div><span>선명</span></div><div class="tonecard" data-v="흑백" onclick="pickToneCard('genToneSel','흑백',event)"
+               title="흑백"><div class="sw" style="filter:grayscale(1) contrast(1.1)"></div><span>흑백</span></div></div>
       </div>
     </details>
 
@@ -3654,6 +3723,7 @@ function applyEditLast(el){
   if(el.orig_audio && el.orig_audio !== 'keep') window._origTouched = true;  // 복원값 보호
   set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
   set('hookSizeSel', el.hook_scale); set('hookStyleSel', el.hook_style); set('editSubStyleSel', el.sub_style); set('editToneSel', el.tone); set('photoSec', el.photo_sec);
+  syncDecorChips();
   set('narrStyleSel', el.narr_style); chk('narrSubsOnly', el.narr_subs_only);
   set('narrFitSel', el.narr_fit); set('transSel', el.transition);
   if(el.narr_voice && [...$('narrVoiceSel').options].some(o => o.value === el.narr_voice))
@@ -4027,6 +4097,40 @@ function hookPreviewInto(taId, boxId, scale, styleName){
     '<div style="display:inline-block;padding:4px 12px;margin:2px 0;' +
     'font-weight:800;font-size:' + px + 'px;line-height:1.35;letter-spacing:-0.5px;' + css + '">' +
     hookLineHtml(l) + '</div>').join('<br>');
+}
+
+// ── v0.60 꾸미기 시각화: 견본 칩·톤 스와치·효과음 듣기 ──
+function pickStyleChip(selId, val, ev){
+  if(ev) ev.preventDefault();
+  const sel = $(selId); if(!sel) return;
+  sel.value = val;
+  syncStyleChips(selId);
+}
+function syncStyleChips(selId){
+  const sel = $(selId); if(!sel) return;
+  document.querySelectorAll(".stylechips[data-for='" + selId + "'] .stylechip")
+    .forEach(c => c.classList.toggle('sel', c.dataset.v === sel.value));
+}
+function pickToneCard(selId, val, ev){
+  if(ev) ev.preventDefault();
+  const sel = $(selId); if(!sel) return;
+  sel.value = val;
+  syncToneCards(selId);
+}
+function syncToneCards(selId){
+  const sel = $(selId); if(!sel) return;
+  document.querySelectorAll(".tonerow[data-for='" + selId + "'] .tonecard")
+    .forEach(c => c.classList.toggle('sel', c.dataset.v === sel.value));
+}
+function syncDecorChips(){  // 프로그램이 select 값을 바꾼 뒤 화면 동기화 (복원·초기화·템플릿)
+  ['genSubStyleSel', 'editSubStyleSel'].forEach(syncStyleChips);
+  ['genToneSel', 'editToneSel'].forEach(syncToneCards);
+}
+function playSfx(ev, name){
+  if(ev) ev.preventDefault();
+  const a = new Audio('/sfx/' + name);
+  a.onerror = () => alert('효과음 재생 실패 — FFmpeg 설치를 확인해 주세요 (1_설치.bat)');
+  a.play().catch(() => {});
 }
 
 function renderHookPreview(){
@@ -4796,6 +4900,7 @@ function resetGenForm(ev){
   if($('genSfxChk')) $('genSfxChk').checked = true;    // v0.53 효과음
   if($('genPunchChk')) $('genPunchChk').checked = true; // v0.55 펀치 줌
   set('genToneSel','기본'); if($('genInfoChk')) $('genInfoChk').checked = true; // v0.56
+  syncDecorChips();
 }
 
 function updateLogs(lines){
@@ -5194,6 +5299,7 @@ async function poll(){
     if($('genSubStyleSel')) $('genSubStyleSel').value = sst;
     // v0.56: 화면 톤·숫자 팝 복원 (생성 폼)
     if($('genToneSel')) $('genToneSel').value = ((state.settings || {}).bg || {}).tone || '기본';
+    syncDecorChips();
     if($('genInfoChk')) $('genInfoChk').checked = (((state.settings || {}).subtitle || {}).info_pop !== false);
     // v0.55: 펀치인 줌 체크 복원
     if($('genPunchChk')) $('genPunchChk').checked = (((state.settings || {}).bg || {}).punch_in !== false);
