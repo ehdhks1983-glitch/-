@@ -88,6 +88,7 @@ class Style:
     hook_scale: float = 1.0        # 상단 제목 크기 배수 (0.6~1.6, UI 크기 선택)
     anim: str = "none"             # 자막 등장 애니메이션: none | pop (살짝 커지며 등장)
     hook_style: str = "기본"        # 상단 제목 스타일 프리셋 (v0.52) — ass_writer.HOOK_STYLES 키
+    sub_style: str = "기본"         # 본문 자막 스타일 프리셋 (v0.54) — ass_writer.SUB_STYLES 키
 
 
 @dataclass

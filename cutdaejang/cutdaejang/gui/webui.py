@@ -33,7 +33,7 @@ _LOCK = threading.Lock()
 # 편집 폼에서 "기억해 두는" 세팅 키 — 경로·주제·대본·API 키 같은 작업별 입력은 제외
 _EDIT_LAST_KEYS = (
     "layout", "auto_subtitle", "cut_silence", "denoise", "orig_audio",
-    "bgm", "bgm_db", "hook_scale", "hook_style", "narr_voice", "narr_style", "narr_subs_only",
+    "bgm", "bgm_db", "hook_scale", "hook_style", "sub_style", "narr_voice", "narr_style", "narr_subs_only",
     "stt_provider", "whisper_model", "speed", "quality", "narr_fit", "transition",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
 )
@@ -283,6 +283,9 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
     from ..core.render_engine.ass_writer import HOOK_STYLES  # noqa: PLC0415
     if str(params.get("hook_style") or "") in HOOK_STYLES:  # 🪧 제목 프리셋 (v0.52)
         over_sub["hook_style"] = params["hook_style"]
+    from ..core.render_engine.ass_writer import SUB_STYLES  # noqa: PLC0415
+    if str(params.get("sub_style") or "") in SUB_STYLES:  # 💬 자막 프리셋 (v0.54)
+        over_sub["sub_style"] = params["sub_style"]
     over_sfx = {}
     if "sfx_auto" in params:  # 🔔 효과음 켬/끔 기억 (v0.53)
         over_sfx["enabled"] = bool(params.get("sfx_auto"))
@@ -487,6 +490,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "bgm_db": params.get("bgm_db"),
                          "hook_scale": params.get("hook_scale"),
                          "hook_style": params.get("hook_style") or "",  # v0.52 프리셋
+                         "sub_style": params.get("sub_style") or "",    # v0.54 자막 프리셋
                          "wm_path": (params.get("wm_path") or "").strip().strip('"'),
                          "wm_pos": params.get("wm_pos") or "tr",
                          "wm_scale": params.get("wm_scale") or 0.14},
@@ -639,6 +643,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         style = build_style(settings)
         if ep.get("hook_style"):  # 🪧 상단 제목 스타일 프리셋 (v0.52)
             style.hook_style = str(ep["hook_style"])
+        if ep.get("sub_style"):  # 💬 자막 프리셋 (v0.54)
+            style.sub_style = str(ep["sub_style"])
         try:  # 상단 제목 크기 배수 (훅 스튜디오)
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -871,6 +877,8 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         style = build_style(settings)
         if ep.get("hook_style"):  # 🪧 상단 제목 스타일 프리셋 (v0.52)
             style.hook_style = str(ep["hook_style"])
+        if ep.get("sub_style"):  # 💬 자막 프리셋 (v0.54)
+            style.sub_style = str(ep["sub_style"])
         try:
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -1364,6 +1372,9 @@ class _Handler(BaseHTTPRequestHandler):
                 _set_job(job["id"], edit_params=ep)
             if params.get("hook_style"):  # 🪧 상단 제목 스타일 프리셋 (v0.52)
                 ep["hook_style"] = params.get("hook_style")
+                _set_job(job["id"], edit_params=ep)
+            if params.get("sub_style"):  # 💬 자막 프리셋 (v0.54)
+                ep["sub_style"] = params.get("sub_style")
                 _set_job(job["id"], edit_params=ep)
             if params.get("margin_v"):  # ↕ 검토 화면에서 드래그한 자막 위치 (v0.49)
                 ep["margin_v"] = params.get("margin_v")
@@ -2412,7 +2423,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.53)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.54)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2673,6 +2684,16 @@ _HTML = """<!doctype html>
 
     <details class="opt" id="optAdv">
       <summary>⚙️ 세부 설정 <span class="hint">— 화면 비율 · 자동 자막/무음 컷 · 음성 인식 엔진</span></summary>
+      <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:6px">
+        <span>💬 자막 글씨 스타일</span>
+        <select id="editSubStyleSel" style="width:auto;padding:6px 8px">
+          <option value="기본" selected>기본 (흰 글자+검정 테두리)</option>
+          <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
+          <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
+          <option value="네온">네온 (민트 글로우)</option>
+        </select>
+        <span class="hint">🆕 v0.54 — 본문 자막 전체의 글씨 느낌 (강조색도 자동 조정, 기억됨)</span>
+      </div>
       <div class="row" style="margin-top:4px">
         <div>
           <label>출력 형태</label>
@@ -2881,6 +2902,20 @@ _HTML = """<!doctype html>
         </select>
       </div>
       <div id="genHookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
+    </details>
+
+    <details class="opt">
+      <summary>💬 자막 글씨 스타일 <span class="hint">— 본문 자막의 글씨 느낌 고르기</span></summary>
+      <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:6px">
+        <span>💬 자막 글씨 스타일</span>
+        <select id="genSubStyleSel" style="width:auto;padding:6px 8px">
+          <option value="기본" selected>기본 (흰 글자+검정 테두리)</option>
+          <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
+          <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
+          <option value="네온">네온 (민트 글로우)</option>
+        </select>
+        <span class="hint">🆕 v0.54 — 본문 자막 전체의 글씨 느낌 (강조색도 자동 조정, 기억됨)</span>
+      </div>
     </details>
 
     <details class="opt">
@@ -3452,7 +3487,7 @@ function applyEditLast(el){
   set('denoiseSel', el.denoise); set('origAudioSel', el.orig_audio);
   if(el.orig_audio && el.orig_audio !== 'keep') window._origTouched = true;  // 복원값 보호
   set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
-  set('hookSizeSel', el.hook_scale); set('hookStyleSel', el.hook_style); set('photoSec', el.photo_sec);
+  set('hookSizeSel', el.hook_scale); set('hookStyleSel', el.hook_style); set('editSubStyleSel', el.sub_style); set('photoSec', el.photo_sec);
   set('narrStyleSel', el.narr_style); chk('narrSubsOnly', el.narr_subs_only);
   set('narrFitSel', el.narr_fit); set('transSel', el.transition);
   if(el.narr_voice && [...$('narrVoiceSel').options].some(o => o.value === el.narr_voice))
@@ -3569,6 +3604,7 @@ async function startEdit(){
     photo_path: photos, photo_sec: +(($('photoSec')||{}).value)||15,
     hook_scale: +(($('hookSizeSel')||{}).value)||1,
     hook_style: (($('hookStyleSel')||{}).value)||'기본',
+    sub_style: (($('editSubStyleSel')||{}).value)||'기본',
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
@@ -4070,7 +4106,7 @@ async function renderEdited(){
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
   const quality=($('outQuality')||{}).value || 'standard';
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', sub_style:(($('editSubStyleSel')||{}).value)||'기본', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -4114,6 +4150,7 @@ async function generate(){
       : ((($('genCharSel')||{}).value)||''),
     bg_scene_mode: sceneMode,                                   // v0.51 그림 방식
     hook_style: (($('genHookStyleSel')||{}).value)||'기본',        // v0.52 제목 프리셋
+    sub_style: (($('genSubStyleSel')||{}).value)||'기본',          // v0.54 자막 프리셋
     sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
     bg_max_imgs: Math.max(0, +((($('genMaxImg')||{}).value)||0)), // v0.51 장수 제한
     gemini_key: $('geminiKey').value,
@@ -4510,7 +4547,7 @@ function resetEditForm(ev){
   // 기억된 편집 세팅도 기본값으로 덮어써 저장 (다음 실행에 옛 세팅이 되살아나지 않게)
   fetch('/api/settings', {method:'POST', body: JSON.stringify({settings:{ui:{edit_last:{
     layout:'shorts', auto_subtitle:true, cut_silence:true, denoise:'', orig_audio:'keep',
-    bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
+    bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', sub_style:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
     stt_provider:'', whisper_model:'small', speed:1, quality:'standard', transition:'none',
     auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
     wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
@@ -4521,7 +4558,7 @@ function resetGenForm(ev){
   if(!confirm('생성 폼의 입력을 기본값으로 되돌릴까요?')) return;
   const set = (id, v) => { const el = $(id); if(el) el.value = v; };
   set('topic','하루 10분 정리 습관'); set('genHook','');
-  set('genHookStyleSel','기본'); const gp=$('genHookPreview'); if(gp) gp.style.display='none';
+  set('genHookStyleSel','기본'); set('genSubStyleSel','기본'); const gp=$('genHookPreview'); if(gp) gp.style.display='none';
   const bc = $('batchChk'); if(bc){ bc.checked = false; } set('topicBatch',''); onBatchChange();
   const hc = $('genHookCands'); if(hc) hc.innerHTML='';
   set('bgmSel',''); set('voiceSel', ($('voiceSel').options[0]||{}).value || '');
@@ -4593,6 +4630,7 @@ function collectTplParams(){
     orig_audio: $('origAudioSel').value, bgm: $('bgmEditSel').value,
     bgm_db: +$('bgmVolSel').value, hook_scale: +(($('hookSizeSel')||{}).value)||1,
     hook_style: (($('hookStyleSel')||{}).value)||'기본',
+    sub_style: (($('editSubStyleSel')||{}).value)||'기본',
     narr_voice: (($('narrVoiceSel')||{}).value)||'', narr_style: (($('narrStyleSel')||{}).value)||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
@@ -4909,6 +4947,9 @@ async function poll(){
       else { $('genCharSel').value = 'custom'; $('genCharCustom').value = bgc; }
       onGenCharChange();
     }
+    // v0.54: 자막 글씨 스타일 복원 (생성 폼)
+    const sst = ((state.settings || {}).subtitle || {}).sub_style || '기본';
+    if($('genSubStyleSel')) $('genSubStyleSel').value = sst;
     // v0.53: 효과음 체크 복원
     if($('genSfxChk')) $('genSfxChk').checked = (((state.settings || {}).sfx || {}).enabled !== false);
     // v0.52: 상단 제목 글씨 스타일 복원 (생성 폼)

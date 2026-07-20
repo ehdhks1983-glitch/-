@@ -118,6 +118,18 @@ def colorize_markup(text: str, default_hex: str):
     return "".join(out)
 
 
+# 💬 본문 자막 스타일 프리셋 (v0.54) — Default 스타일의 색·테두리·띠를 통째로.
+# "band" 키가 있으면 사용자의 subtitle.band 설정을 프리셋이 덮는다.
+SUB_STYLES = {
+    "기본": {},
+    "예능 노랑": {"primary": "#FFE14D", "band": False, "outline": 6,
+                "outline_color": "#101010", "shadow": 2, "highlight": "#FF3B30"},
+    "말풍선 띠": {"primary": "#141414", "band": True, "band_color": "&H00F5F5F5",
+                "highlight": "#D62B00"},
+    "네온": {"primary": "#9CFFF0", "band": False, "outline": 3,
+            "outline_color": "#0FB5A0", "shadow": 0, "blur": 4},
+}
+
 # 🪧 상단 제목 스타일 프리셋 (v0.52) — 글자색·테두리·띠를 통째로 바꾼다.
 # band=None이면 사용자의 hook_band 설정 유지, 아니면 프리셋이 강제.
 HOOK_STYLES = {
@@ -244,6 +256,20 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
     def sc(v: float) -> int:
         return max(1, round(v * sf))
 
+    # 💬 본문 자막 프리셋 (v0.54) — 색·강조·띠를 프리셋 값으로 덮은 유효 스타일 사용
+    ss = SUB_STYLES.get(getattr(style, "sub_style", "기본") or "기본", {})
+    if ss:
+        from dataclasses import replace  # noqa: PLC0415
+
+        style = replace(
+            style,
+            primary_color=ss.get("primary", style.primary_color),
+            highlight_color=ss.get("highlight", style.highlight_color),
+            outline_color=ss.get("outline_color", style.outline_color),
+            outline=ss.get("outline", style.outline),
+            shadow=ss.get("shadow", style.shadow),
+            band=ss["band"] if "band" in ss else style.band,
+        )
     # 배경 띠(BorderStyle=3=불투명 박스) — 유튜브 썸네일 스타일. OutlineColour가 박스 색.
     sub_band = getattr(style, "band", False)
     hs = HOOK_STYLES.get(getattr(style, "hook_style", "기본") or "기본", {})
@@ -256,8 +282,9 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         size=sc(style.size),
         primary=ass_color(style.primary_color),
         def_border=3 if sub_band else 1,
-        # 띠일 때: 반투명 검정 박스 + 박스 여백(Outline), 아니면 글자 외곽선
-        def_outline_color="&H90101010" if sub_band else ass_color(style.outline_color),
+        # 띠일 때: 박스 색(기본 반투명 검정, 프리셋이 지정하면 그 색), 아니면 글자 외곽선
+        def_outline_color=(ss.get("band_color", "&H90101010") if sub_band
+                           else ass_color(style.outline_color)),
         def_outline=sc(18) if sub_band else sc(style.outline),
         shadow=0 if sub_band else sc(style.shadow) if style.shadow else 0,
         alignment=presets.subtitle_alignment(style.position),
@@ -291,9 +318,12 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             band_on=hook_band, fade=False,
         )
     for s in spec.subtitles:
+        body = dialogue_text(s, style)
+        if ss.get("blur"):  # 네온 자막 — 외곽선 글로우 (띠 없음 프리셋에서만)
+            body = "{\\blur" + str(max(2, sc(ss["blur"]))) + "}" + body
         lines += band_event_lines(
             "Default", us_to_ass(s.start_us), us_to_ass(s.end_us),
-            dialogue_text(s, style),
+            body,
             band_on=sub_band, fade=bool(style.fade),
         )
     Path(out_path).write_text(header + "\n".join(lines) + "\n", encoding="utf-8")

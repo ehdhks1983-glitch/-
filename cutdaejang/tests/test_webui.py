@@ -816,9 +816,9 @@ def test_hook_ui_order_style_and_voice_pickers(server):
     assert html.index('id="genHookCands"') < html.index('id="genHook"')
     # 글씨 스타일 셀렉트 (양 폼) + 프리셋 4종
     assert 'id="hookStyleSel"' in html and 'id="genHookStyleSel"' in html
-    for name in ("예능 노랑", "화이트 박스"):
-        assert html.count(f'value="{name}"') == 2, name
-    assert html.count('value="네온"') == 3  # 제목 프리셋 2곳 + 그림체(v0.45) 1곳
+    assert html.count('value="화이트 박스"') == 2         # 제목 프리셋 2곳
+    assert html.count('value="예능 노랑"') == 4           # 제목 2곳 + 자막(v0.54) 2곳
+    assert html.count('value="네온"') == 5                # 제목 2 + 자막 2 + 그림체 1
     # 생성 폼 색 칩 + 미리보기
     assert 'id="genHookColorChips"' in html and 'id="genHookPreview"' in html
     # 내 목소리 등록: 📁 픽커 2곳 + 단계 안내 링크
@@ -846,6 +846,31 @@ def test_generate_remembers_hook_style(server):
         assert j["status"] == "ok"
     finally:
         _post(server, "/api/settings", {"settings": {"subtitle": {"hook_style": "기본"}}})
+
+
+def test_sub_style_ui_and_persistence(server):
+    """v0.54 — 자막 프리셋 셀렉트(양 폼) + 생성에서 고르면 기억 + spec에 반영."""
+    from pathlib import Path
+
+    from cutdaejang import config
+    from cutdaejang.spec import TimelineSpec
+
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="genSubStyleSel"' in html and 'id="editSubStyleSel"' in html
+    assert html.count('value="말풍선 띠"') == 2
+
+    res = _post(server, "/api/generate", {
+        "topic": "자막 프리셋", "auto": True,
+        "script_provider": "stub", "tts_provider": "stub", "sub_style": "예능 노랑",
+    })
+    job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert job["status"] == "ok", job.get("errors")
+    try:
+        assert config.load_settings()["subtitle"]["sub_style"] == "예능 노랑"
+        spec = TimelineSpec.load(str(Path(job["mp4"]).parent / "spec.json"))
+        assert spec.style.sub_style == "예능 노랑"
+    finally:
+        _post(server, "/api/settings", {"settings": {"subtitle": {"sub_style": "기본"}}})
 
 
 def test_sfx_checkbox_and_generated_spec(server):

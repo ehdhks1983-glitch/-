@@ -271,3 +271,38 @@ def test_hook_style_presets(tmp_path):
     text = Path(write_ass(spec, tmp_path / "hl.ass")).read_text(encoding="utf-8")
     ev = next(ln for ln in text.splitlines() if ",Title," in ln and "\\1c" in ln)
     assert "\\1c&H141414&" in ev                         # 복원 = 프리셋 검정
+
+
+def test_sub_style_presets(tmp_path):
+    """v0.54 본문 자막 프리셋 — 색·테두리·띠·글로우 + 강조 복원색."""
+    from cutdaejang.spec import Canvas, Style, Subtitle, TimelineSpec
+
+    def build(sub_style, band=False):
+        spec = TimelineSpec(
+            canvas=Canvas(w=1080, h=1920), duration_us=2_000_000,
+            style=Style(sub_style=sub_style, band=band),
+            subtitles=[Subtitle(text="본문 자막 강조", highlight="강조",
+                                start_us=0, end_us=2_000_000)])
+        return Path(write_ass(spec, tmp_path / f"s_{sub_style}.ass")).read_text(encoding="utf-8")
+
+    base = build("기본")
+    d0 = next(ln for ln in base.splitlines() if ln.startswith("Style: Default"))
+    assert "&H00FFFFFF" in d0                       # 흰 글자 유지
+
+    fun = build("예능 노랑")
+    d1 = next(ln for ln in fun.splitlines() if ln.startswith("Style: Default"))
+    assert "&H004DE1FF" in d1                       # FFE14D → BGR 4DE1FF
+    ev = next(ln for ln in fun.splitlines() if ln.startswith("Dialogue"))
+    assert "\\1c&H303BFF&" in ev                    # 강조 FF3B30 → 빨강
+    assert "\\1c&H4DE1FF&" in ev                    # 복원 = 프리셋 노랑
+
+    band = build("말풍선 띠", band=False)            # 사용자 band 꺼도 프리셋이 켬
+    d2 = next(ln for ln in band.splitlines() if ln.startswith("Style: Default"))
+    assert "&H00141414" in d2 and "&H00F5F5F5" in d2  # 검정 글자 + 흰 띠
+    assert ",3," in d2                                # BorderStyle=3 (띠)
+
+    neon = build("네온")
+    ev3 = next(ln for ln in neon.splitlines() if ln.startswith("Dialogue"))
+    assert "\\blur" in ev3
+    d3 = next(ln for ln in neon.splitlines() if ln.startswith("Style: Default"))
+    assert "&H00F0FF9C" in d3                       # 9CFFF0 → BGR F0FF9C
