@@ -97,6 +97,11 @@ kind = sys.argv[1] if len(sys.argv) > 1 else "video"
 r = tk.Tk(); r.withdraw(); r.attributes("-topmost", True)
 if kind == "folder":
     p = filedialog.askdirectory(title="폴더 선택")
+elif kind == "images":
+    ps = filedialog.askopenfilenames(
+        title="사진 여러 장 선택 (Ctrl/Shift로 여러 개)",
+        filetypes=[("사진 파일", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"), ("모든 파일", "*.*")])
+    p = ";".join(ps or [])
 elif kind == "image":
     p = filedialog.askopenfilename(
         title="그림 파일 선택",
@@ -2499,10 +2504,11 @@ _HTML = """<!doctype html>
     <div id="photoBlock" class="hidden">
       <div class="steplabel"><span class="stepnum">1</span>사진 고르기</div>
       <div style="display:flex;gap:8px">
-        <input type="text" id="photoPath" style="flex:1" placeholder="사진이 들어 있는 폴더 경로 (안의 사진 전부, 이름 순서대로)">
-        <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','folder')">📁 폴더 선택</button>
+        <input type="text" id="photoPath" style="flex:1" placeholder="사진 파일들(세미콜론 구분) 또는 폴더 경로">
+        <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','images')">🖼 사진 고르기 (여러 장)</button>
+        <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','folder')">📁 폴더째</button>
       </div>
-      <div class="hint">[📁 폴더 선택]으로 바로 고를 수 있어요. 파일 경로 여러 개를 줄바꿈/세미콜론으로 넣어도 돼요. 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
+      <div class="hint">[🖼 사진 고르기]에서 Ctrl/Shift로 여러 장을 한 번에 — 고른 순서(입력칸의 세미콜론 순서)대로 들어가요. 폴더를 고르면 안의 사진 전부(이름순). 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
       <div class="chk" style="gap:8px">
         <span>영상 전체 길이</span>
         <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px">

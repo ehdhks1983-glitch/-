@@ -983,14 +983,24 @@ def test_sfx_checkbox_and_generated_spec(server):
 
 
 def test_pick_file_kind_routing(server, monkeypatch):
-    """v0.51 — /api/pick_file kind: folder/image는 pick_path로, 기본은 기존 함수로."""
+    """v0.51/0.57.1 — /api/pick_file kind 라우팅 + 사진 여러 장(images)은 ;로 합쳐 반환."""
     from cutdaejang.gui import webui
 
     seen = []
-    monkeypatch.setattr(webui, "pick_path", lambda kind, timeout=600.0: (
-        seen.append(kind) or f"C:/선택/{kind}"))
+
+    def fake_pick(kind, timeout=600.0):
+        seen.append(kind)
+        return "C:/사진/1.png;C:/사진/2.png" if kind == "images" else f"C:/선택/{kind}"
+
+    monkeypatch.setattr(webui, "pick_path", fake_pick)
     data = _post(server, "/api/pick_file", {"kind": "folder"})
     assert data["path"] == "C:/선택/folder" and seen == ["folder"]
+    d2 = _post(server, "/api/pick_file", {"kind": "images"})
+    assert d2["path"].count(";") == 1 and seen[-1] == "images"
+    # 사진 블록에 여러 장 선택 버튼 존재
+    html = _get(server, "/").read().decode("utf-8")
+    assert "pickInto(event,'photoPath','images')" in html
+    assert "사진 고르기" in html
 
 
 def test_thumbnail_api_position(server, tmp_path):
