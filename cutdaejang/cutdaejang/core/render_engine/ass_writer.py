@@ -30,7 +30,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font},{size},{primary},&H000000FF,{def_outline_color},&H80000000,0,0,0,0,100,100,0,0,{def_border},{def_outline},{shadow},{alignment},{sub_ml},{sub_ml},{margin_v},1
-Style: Title,{font},{title_size},&H00FFFFFF,&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,0,{title_border},{title_outline},{title_shadow},8,{title_ml},{title_ml},{title_margin_v},1
+Style: Title,{font},{title_size},{title_primary},&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,0,{title_border},{title_outline},{title_shadow},8,{title_ml},{title_ml},{title_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -118,12 +118,27 @@ def colorize_markup(text: str, default_hex: str):
     return "".join(out)
 
 
-def hook_dialogue_text(hook: str, style) -> str:
+# 🪧 상단 제목 스타일 프리셋 (v0.52) — 글자색·테두리·띠를 통째로 바꾼다.
+# band=None이면 사용자의 hook_band 설정 유지, 아니면 프리셋이 강제.
+HOOK_STYLES = {
+    "기본": {},
+    "예능 노랑": {"primary": "#FFD400", "band": False, "outline": 7,
+                "outline_color": "#101010", "shadow": 2, "highlight": "#FF3B30"},
+    "화이트 박스": {"primary": "#141414", "band": True, "band_color": "&H00F2F2F2",
+                 "highlight": "#D62B00"},
+    "네온": {"primary": "#9CFFF0", "band": False, "outline": 3,
+            "outline_color": "#0FB5A0", "shadow": 0, "blur": 5},
+}
+
+
+def hook_dialogue_text(hook: str, style, primary: str = "#FFFFFF",
+                       highlight: str = "") -> str:
     """상단 제목(훅) 본문 — ``제목 | 강조단어``면 그 단어를 강조색으로 팝 (썸네일 임팩트).
 
-    Title 스타일 기본색은 흰색이므로 강조 뒤 흰색으로 복원한다.
+    강조 뒤에는 제목 기본색(프리셋별로 다름 — v0.52)으로 복원한다.
     """
-    marked = colorize_markup(hook, "#FFFFFF")  # 다색 마크업 우선 (제목 기본 흰색)
+    hl_color = highlight or style.highlight_color
+    marked = colorize_markup(hook, primary)  # 다색 마크업 우선
     if marked is not None:
         return marked
     text, hl = hook, ""
@@ -139,9 +154,9 @@ def hook_dialogue_text(hook: str, style) -> str:
         pre, _, post = text.partition(hl)
         return (
             escape_ass_text(pre)
-            + "{\\1c" + _inline_color(style.highlight_color) + "}"
+            + "{\\1c" + _inline_color(hl_color) + "}"
             + escape_ass_text(hl)
-            + "{\\1c&HFFFFFF&}"
+            + "{\\1c" + _inline_color(primary) + "}"
             + escape_ass_text(post)
         )
     return escape_ass_text(text)
@@ -231,7 +246,9 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
 
     # 배경 띠(BorderStyle=3=불투명 박스) — 유튜브 썸네일 스타일. OutlineColour가 박스 색.
     sub_band = getattr(style, "band", False)
-    hook_band = getattr(style, "hook_band", True)
+    hs = HOOK_STYLES.get(getattr(style, "hook_style", "기본") or "기본", {})
+    hook_band = hs["band"] if "band" in hs else getattr(style, "hook_band", True)
+    hook_primary = hs.get("primary", "#FFFFFF")
     header = _HEADER.format(
         w=spec.canvas.w,
         h=spec.canvas.h,
@@ -251,10 +268,12 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         ),
         title_size=round(presets.title_size(spec.canvas.h)
                          * max(0.6, min(1.6, float(getattr(style, "hook_scale", 1.0) or 1.0)))),
+        title_primary=ass_color(hook_primary),
         title_border=3 if hook_band else 1,
-        title_outline_color="&H90101010" if hook_band else "&H00101010",
-        title_outline=sc(20) if hook_band else sc(presets.TITLE_OUTLINE),
-        title_shadow=0 if hook_band else presets.TITLE_SHADOW,
+        title_outline_color=(hs.get("band_color", "&H90101010") if hook_band
+                             else ass_color(hs.get("outline_color", "#101010"))),
+        title_outline=sc(20) if hook_band else sc(hs.get("outline", presets.TITLE_OUTLINE)),
+        title_shadow=0 if hook_band else hs.get("shadow", presets.TITLE_SHADOW),
         title_margin_v=presets.title_margin_v(spec.canvas.h),
         sub_ml=sc(110),    # 자막 좌우 여백 — 우측 버튼 기둥(~140px)에 긴 줄이 깔리지 않게
         title_ml=sc(90),   # 제목 좌우 여백
@@ -262,9 +281,13 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
     lines = []
     # 상단 제목(훅) — 영상 내내 고정 표시
     if spec.hook.strip():
+        hook_body = hook_dialogue_text(spec.hook.strip(), style, primary=hook_primary,
+                                       highlight=hs.get("highlight", ""))
+        if hs.get("blur"):  # 네온 — 외곽선을 번지게 (글로우)
+            hook_body = "{\\blur" + str(max(2, sc(hs["blur"]))) + "}" + hook_body
         lines += band_event_lines(
             "Title", us_to_ass(0), us_to_ass(spec.duration_us),
-            hook_dialogue_text(spec.hook.strip(), style),
+            hook_body,
             band_on=hook_band, fade=False,
         )
     for s in spec.subtitles:

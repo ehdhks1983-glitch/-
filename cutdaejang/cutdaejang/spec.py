@@ -87,6 +87,7 @@ class Style:
     wrap_chars: int = 16           # 자막 한 줄 최대 글자수(넘으면 2줄로 자동 줄바꿈). 0=끔
     hook_scale: float = 1.0        # 상단 제목 크기 배수 (0.6~1.6, UI 크기 선택)
     anim: str = "none"             # 자막 등장 애니메이션: none | pop (살짝 커지며 등장)
+    hook_style: str = "기본"        # 상단 제목 스타일 프리셋 (v0.52) — ass_writer.HOOK_STYLES 키
 
 
 @dataclass

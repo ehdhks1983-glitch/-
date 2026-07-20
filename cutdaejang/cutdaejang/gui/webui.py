@@ -33,7 +33,7 @@ _LOCK = threading.Lock()
 # 편집 폼에서 "기억해 두는" 세팅 키 — 경로·주제·대본·API 키 같은 작업별 입력은 제외
 _EDIT_LAST_KEYS = (
     "layout", "auto_subtitle", "cut_silence", "denoise", "orig_audio",
-    "bgm", "bgm_db", "hook_scale", "narr_voice", "narr_style", "narr_subs_only",
+    "bgm", "bgm_db", "hook_scale", "hook_style", "narr_voice", "narr_style", "narr_subs_only",
     "stt_provider", "whisper_model", "speed", "quality", "narr_fit", "transition",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
 )
@@ -279,15 +279,23 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
             over["max_scene_images"] = max(0, min(50, int(params.get("bg_max_imgs") or 0)))
         except (TypeError, ValueError):
             pass
-    if not over:
+    over_sub = {}
+    from ..core.render_engine.ass_writer import HOOK_STYLES  # noqa: PLC0415
+    if str(params.get("hook_style") or "") in HOOK_STYLES:  # 🪧 제목 프리셋 (v0.52)
+        over_sub["hook_style"] = params["hook_style"]
+    if not over and not over_sub:
         return settings
-    cur = settings["bg"]
-    if any(cur.get(k) != v for k, v in over.items()):
+    save = {}
+    if over and any(settings["bg"].get(k) != v for k, v in over.items()):
+        save["bg"] = over
+    if over_sub and any(settings["subtitle"].get(k) != v for k, v in over_sub.items()):
+        save["subtitle"] = over_sub
+    if save:
         try:
-            config.save_settings({"bg": over})
+            config.save_settings(save)
         except OSError:
             pass
-    return config.deep_merge(settings, {"bg": over})
+    return config.deep_merge(settings, {"bg": over, "subtitle": over_sub})
 
 
 def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str,
@@ -473,6 +481,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "bgm": (params.get("bgm") or "").strip(),
                          "bgm_db": params.get("bgm_db"),
                          "hook_scale": params.get("hook_scale"),
+                         "hook_style": params.get("hook_style") or "",  # v0.52 프리셋
                          "wm_path": (params.get("wm_path") or "").strip().strip('"'),
                          "wm_pos": params.get("wm_pos") or "tr",
                          "wm_scale": params.get("wm_scale") or 0.14},
@@ -623,6 +632,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             subs = edit_mode.split_long_subtitles(
                 subs, settings["subtitle"].get("wrap_chars", 16))
         style = build_style(settings)
+        if ep.get("hook_style"):  # 🪧 상단 제목 스타일 프리셋 (v0.52)
+            style.hook_style = str(ep["hook_style"])
         try:  # 상단 제목 크기 배수 (훅 스튜디오)
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -853,6 +864,8 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         job_dir = Path(workdir) / job_id
         outs, errors = [], []
         style = build_style(settings)
+        if ep.get("hook_style"):  # 🪧 상단 제목 스타일 프리셋 (v0.52)
+            style.hook_style = str(ep["hook_style"])
         try:
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -1343,6 +1356,9 @@ class _Handler(BaseHTTPRequestHandler):
             ep = job.get("edit_params") or {}
             if params.get("hook_scale") is not None:
                 ep["hook_scale"] = params.get("hook_scale")
+                _set_job(job["id"], edit_params=ep)
+            if params.get("hook_style"):  # 🪧 상단 제목 스타일 프리셋 (v0.52)
+                ep["hook_style"] = params.get("hook_style")
                 _set_job(job["id"], edit_params=ep)
             if params.get("margin_v"):  # ↕ 검토 화면에서 드래그한 자막 위치 (v0.49)
                 ep["margin_v"] = params.get("margin_v")
@@ -2391,7 +2407,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.51)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.52)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2508,12 +2524,17 @@ _HTML = """<!doctype html>
     <div class="steplabel" style="margin-top:20px"><span class="stepnum">3</span>꾸미기 <span class="hint">— 전부 선택사항. 필요한 줄만 눌러서 펼치세요</span></div>
 
     <details class="opt" id="optHook">
-      <summary>🪝 상단 제목 넣기 <span class="hint">— 화면 위에 크게 박히는 한 줄 (색·크기·미리보기)</span></summary>
-      <textarea id="editHook" style="min-height:56px" oninput="renderHookPreview()" placeholder="예) 사진만 넣으면 홍보글이 뚝딱!   (줄바꿈은 Enter)"></textarea>
+      <summary>🪝 상단 제목 넣기 <span class="hint">— 화면 위에 크게 박히는 한 줄 (AI 추천·색·글씨 스타일)</span></summary>
+      <div style="display:flex;gap:6px;margin-top:4px">
+        <input type="text" id="editHookTopic" style="flex:1" placeholder="① 주제 키워드 입력 (예: 블로그 자동화) → AI 추천을 받거나, 아래에 직접 쓰세요">
+        <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ AI 제목 추천</button>
+      </div>
+      <div id="editHookCands" class="hookcands"></div>
+      <textarea id="editHook" style="min-height:56px;margin-top:6px" oninput="renderHookPreview()" placeholder="② 제목 확정 — 추천을 누르면 여기 채워져요 / 직접 써도 됩니다 (줄바꿈은 Enter)"></textarea>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px" id="hookStudio">
-        <span class="hint">색 넣기: 단어에 <b>커서만 두고</b> 색을 누르세요 (다시 누르면 해제) →</span>
+        <span class="hint">색: <b>드래그로 선택</b>하거나 단어에 커서 두고 →</span>
         <span id="hookColorChips"></span>
-        <button class="ghost" style="padding:4px 8px" onclick="clearHookMarkup(event)">색 지우기</button>
+        <button class="ghost" style="padding:4px 8px" onclick="clearHookMarkup(event,'editHook')">색 지우기</button>
         <span class="hint" style="margin-left:6px">· 크기</span>
         <select id="hookSizeSel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
           <option value="0.85">작게</option>
@@ -2521,13 +2542,15 @@ _HTML = """<!doctype html>
           <option value="1.2">크게</option>
           <option value="1.4">아주 크게</option>
         </select>
+        <span class="hint">· 글씨 스타일</span>
+        <select id="hookStyleSel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
+          <option value="기본" selected>기본 (흰 글자+띠)</option>
+          <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
+          <option value="화이트 박스">화이트 박스 (흰 띠+검정 글자)</option>
+          <option value="네온">네온 (민트 글로우)</option>
+        </select>
       </div>
       <div id="hookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <input type="text" id="editHookTopic" style="flex:1" placeholder="뭐라고 쓸지 모르겠다면 → 주제 키워드 입력 (예: 블로그 자동화)">
-        <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ AI 제목 추천</button>
-      </div>
-      <div id="editHookCands" class="hookcands"></div>
       <div class="hint">숫자는 자동으로 노랗게 강조돼요. 직접 표시하려면 <b>| 단어</b>(강조)나 <b>[노랑]글자[/]</b>(색)도 됩니다.</div>
     </details>
 
@@ -2708,7 +2731,10 @@ _HTML = """<!doctype html>
       <div class="row" style="margin-top:6px">
         <div>
           <label>참조 녹음 (5~10초, 깨끗하게)</label>
-          <input type="text" id="sovitsRef" placeholder="예) C:\\Users\\me\\참조녹음.wav">
+          <div style="display:flex;gap:6px">
+            <input type="text" id="sovitsRef" style="flex:1" placeholder="예) C:\\Users\\me\\참조녹음.wav">
+            <button class="ghost" style="white-space:nowrap;padding:6px 10px" onclick="pickInto(event,'sovitsRef','audio')">📁</button>
+          </div>
         </div>
         <div>
           <label>그 녹음에서 말한 문장</label>
@@ -2728,7 +2754,10 @@ _HTML = """<!doctype html>
       <div class="row" style="margin-top:6px">
         <div>
           <label>녹음 파일 (1~3분 낭독, mp3/wav/m4a)</label>
-          <input type="text" id="cloneFile" placeholder="예) C:\\Users\\me\\내녹음.mp3">
+          <div style="display:flex;gap:6px">
+            <input type="text" id="cloneFile" style="flex:1" placeholder="예) C:\\Users\\me\\내녹음.mp3">
+            <button class="ghost" style="white-space:nowrap;padding:6px 10px" onclick="pickInto(event,'cloneFile','audio')">📁</button>
+          </div>
         </div>
         <div>
           <label>ElevenLabs API 키</label>
@@ -2740,6 +2769,11 @@ _HTML = """<!doctype html>
         </div>
       </div>
       <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장됩니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $5)</b>부터 지원.</div>
+      <div class="hint" style="margin-top:6px;line-height:1.7">🧭 <b>처음이라면 이 순서대로</b> (🆕 v0.52 자세한 안내):<br>
+        ① <a href="https://elevenlabs.io" target="_blank" style="color:#7a9bff">elevenlabs.io</a> 가입 → 오른쪽 위 내 계정 → <b>Subscription</b>에서 Starter(월 $5) 구독<br>
+        ② <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" style="color:#7a9bff">API Keys 페이지</a>에서 <b>Create API Key</b> → 복사해 위의 「ElevenLabs API 키」 칸에 붙여넣기<br>
+        ③ [📁]로 내 녹음 파일 선택 → <b>[등록]</b> → 🔊 미리듣기로 확인 (녹음 없이 <b>성우 목소리</b>만 쓰려면 ①②만 하면 돼요 —
+        <a href="https://elevenlabs.io/app/voice-library" target="_blank" style="color:#7a9bff">Voice Library</a>에서 마음에 드는 보이스를 Add하면 컷대장 목록에 나타납니다)</div>
     </div>
 
     <div class="guide" style="margin-top:10px">📌 <b>등록 후 사용법</b> — 영상 만들 때 목소리(보이스)에서 「🎤 내 목소리」만 고르면 끝!<br>
@@ -2826,9 +2860,22 @@ _HTML = """<!doctype html>
 
     <details class="opt">
       <summary>🪝 상단 제목 넣기 <span class="hint">— 비우면 AI가 만든 제목이 자동으로 크게 들어가요</span></summary>
-      <textarea id="genHook" style="min-height:52px" placeholder="비워두면 AI가 만든 제목을 사용 / 직접 쓰려면 여기에 (줄바꿈 Enter)"></textarea>
-      <button class="ghost" style="margin-top:6px" onclick="suggestHooks(event,'topic','genHook')">✨ AI 제목 추천받기</button>
+      <button class="ghost" style="margin-top:4px" onclick="suggestHooks(event,'topic','genHook')">✨ AI 제목 추천받기 <span class="hint">(위의 주제로 추천)</span></button>
       <div id="genHookCands" class="hookcands"></div>
+      <textarea id="genHook" style="min-height:52px;margin-top:6px" oninput="renderGenHookPreview()" placeholder="추천을 누르면 여기 채워져요 / 직접 쓰려면 여기에 · 비워두면 AI 제목 자동 (줄바꿈 Enter)"></textarea>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+        <span class="hint">색: <b>드래그로 선택</b>하거나 단어에 커서 두고 →</span>
+        <span id="genHookColorChips"></span>
+        <button class="ghost" style="padding:4px 8px" onclick="clearHookMarkup(event,'genHook')">색 지우기</button>
+        <span class="hint" style="margin-left:6px">· 글씨 스타일</span>
+        <select id="genHookStyleSel" style="width:auto;padding:4px 8px" onchange="renderGenHookPreview()">
+          <option value="기본" selected>기본 (흰 글자+띠)</option>
+          <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
+          <option value="화이트 박스">화이트 박스 (흰 띠+검정 글자)</option>
+          <option value="네온">네온 (민트 글로우)</option>
+        </select>
+      </div>
+      <div id="genHookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
     </details>
 
     <details class="opt">
@@ -3395,7 +3442,7 @@ function applyEditLast(el){
   set('denoiseSel', el.denoise); set('origAudioSel', el.orig_audio);
   if(el.orig_audio && el.orig_audio !== 'keep') window._origTouched = true;  // 복원값 보호
   set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
-  set('hookSizeSel', el.hook_scale); set('photoSec', el.photo_sec);
+  set('hookSizeSel', el.hook_scale); set('hookStyleSel', el.hook_style); set('photoSec', el.photo_sec);
   set('narrStyleSel', el.narr_style); chk('narrSubsOnly', el.narr_subs_only);
   set('narrFitSel', el.narr_fit); set('transSel', el.transition);
   if(el.narr_voice && [...$('narrVoiceSel').options].some(o => o.value === el.narr_voice))
@@ -3511,6 +3558,7 @@ async function startEdit(){
     auto_subtitle: $('autoSubChk').checked, cut_silence: $('cutSilenceChk').checked,
     photo_path: photos, photo_sec: +(($('photoSec')||{}).value)||15,
     hook_scale: +(($('hookSizeSel')||{}).value)||1,
+    hook_style: (($('hookStyleSel')||{}).value)||'기본',
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
@@ -3551,7 +3599,8 @@ async function suggestHooks(ev, topicId, targetId){
   ev.preventDefault();
   const ctx = ($(topicId).value || '').trim();
   if(!ctx){ alert('주제/키워드를 먼저 입력하세요'); return; }
-  const btn = ev.target; btn.disabled = true; const old = btn.textContent; btn.textContent = '추천 중…';
+  const btn = ev.target.closest('button') || ev.target;  // 버튼 안 힌트 클릭도 안전
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '추천 중…';
   const cands = $(targetId + 'Cands'); cands.innerHTML = '';
   try {
     const key = ensureGeminiKey();
@@ -3561,7 +3610,8 @@ async function suggestHooks(ev, topicId, targetId){
     (data.hooks || []).forEach(h => {
       const b = document.createElement('button');
       b.textContent = h;
-      b.onclick = (e) => { e.preventDefault(); $(targetId).value = h; cands.innerHTML=''; };
+      b.onclick = (e) => { e.preventDefault(); $(targetId).value = h; cands.innerHTML='';
+        if(targetId === 'genHook') renderGenHookPreview(); else if(targetId === 'editHook') renderHookPreview(); };
       cands.appendChild(b);
     });
     if(!(data.hooks||[]).length) cands.innerHTML = '<span class="hint">추천 결과가 없습니다. 키워드를 바꿔보세요.</span>';
@@ -3641,20 +3691,23 @@ const HOOK_COLORS = {'노랑':'#FFD400','빨강':'#FF3B30','초록':'#34C759','�
   '주황':'#FF9500','분홍':'#FF375F','하늘':'#5AC8FA','민트':'#31E1C4','보라':'#BF5AF2','흰':'#FFFFFF'};
 
 function initHookChips(){
-  const box = $('hookColorChips');
-  if(!box || box.childElementCount) return;
-  for(const name in HOOK_COLORS){
-    const b = document.createElement('button');
-    b.className = 'ghost'; b.textContent = name;
-    b.style.cssText = 'padding:3px 8px;border-color:' + HOOK_COLORS[name] + ';color:' + HOOK_COLORS[name] + (name==='흰' ? ';color:#fff' : '');
-    b.onclick = (e) => wrapHookColor(e, name);
-    box.appendChild(b);
+  // v0.52: 편집 폼(editHook)과 생성 폼(genHook) 양쪽에 같은 색 칩
+  for(const [boxId, taId] of [['hookColorChips','editHook'], ['genHookColorChips','genHook']]){
+    const box = $(boxId);
+    if(!box || box.childElementCount) continue;
+    for(const name in HOOK_COLORS){
+      const b = document.createElement('button');
+      b.className = 'ghost'; b.textContent = name;
+      b.style.cssText = 'padding:3px 8px;border-color:' + HOOK_COLORS[name] + ';color:' + HOOK_COLORS[name] + (name==='흰' ? ';color:#fff' : '');
+      b.onclick = (e) => wrapHookColor(e, name, taId);
+      box.appendChild(b);
+    }
   }
 }
 
-function wrapHookColor(ev, name){
+function wrapHookColor(ev, name, taId){
   ev.preventDefault();
-  const ta = $('editHook');
+  const ta = $(taId || 'editHook');
   let s = ta.selectionStart, e = ta.selectionEnd;
   const v = ta.value;
   if(!v.trim()){ alert('먼저 상단 제목을 입력하세요'); ta.focus(); return; }
@@ -3679,14 +3732,16 @@ function wrapHookColor(ev, name){
   // 같은 색을 다시 누르면 해제(토글), 다른 색이면 교체
   ta.value = already ? (before + mid + after)
                      : (before + '[' + name + ']' + mid + '[/]' + after);
-  ta.focus(); renderHookPreview();
+  ta.focus();
+  if(ta.id === 'genHook') renderGenHookPreview(); else renderHookPreview();
 }
 
-function clearHookMarkup(ev){
+function clearHookMarkup(ev, taId){
   ev.preventDefault();
+  const ta = $(taId || 'editHook');
   const re1 = new RegExp('[[](?:[가-힣A-Za-z]+|/[가-힣A-Za-z]*)]', 'g');
-  $('editHook').value = $('editHook').value.replace(re1, '');
-  renderHookPreview();
+  ta.value = ta.value.replace(re1, '');
+  if(ta.id === 'genHook') renderGenHookPreview(); else renderHookPreview();
 }
 
 function hookLineHtml(line){
@@ -3726,18 +3781,35 @@ function hookLineHtml(line){
   return out;
 }
 
-function renderHookPreview(){
+// 🪧 제목 스타일 프리셋의 화면 미리보기 근사값 (실제 렌더는 ass_writer.HOOK_STYLES)
+const HOOK_STYLE_CSS = {
+  '기본':      'background:rgba(10,10,14,.72);color:#fff',
+  '예능 노랑':  'background:transparent;color:#FFD400;text-shadow:-2px -2px 0 #101010,2px -2px 0 #101010,-2px 2px 0 #101010,2px 2px 0 #101010,0 3px 0 #101010',
+  '화이트 박스': 'background:#F2F2F2;color:#141414',
+  '네온':      'background:transparent;color:#9CFFF0;text-shadow:0 0 8px #17E0C4,0 0 16px #0FB5A0',
+};
+
+function hookPreviewInto(taId, boxId, scale, styleName){
   initHookChips();
-  const box = $('hookPreview');
-  const raw = $('editHook').value.trim();
+  const box = $(boxId);
+  const raw = $(taId).value.trim();
   if(!raw){ box.style.display = 'none'; return; }
-  const scale = +(($('hookSizeSel')||{}).value) || 1;
-  const px = Math.round(24 * scale);
+  const px = Math.round(24 * (scale || 1));
+  const css = HOOK_STYLE_CSS[styleName] || HOOK_STYLE_CSS['기본'];
   box.style.display = 'block';
   box.innerHTML = raw.split(new RegExp('[' + String.fromCharCode(10,13) + ']+')).map(l =>
-    '<div style="display:inline-block;background:rgba(10,10,14,.72);padding:4px 12px;margin:2px 0;' +
-    'font-weight:800;font-size:' + px + 'px;line-height:1.35;color:#fff;letter-spacing:-0.5px">' +
+    '<div style="display:inline-block;padding:4px 12px;margin:2px 0;' +
+    'font-weight:800;font-size:' + px + 'px;line-height:1.35;letter-spacing:-0.5px;' + css + '">' +
     hookLineHtml(l) + '</div>').join('<br>');
+}
+
+function renderHookPreview(){
+  hookPreviewInto('editHook', 'hookPreview', +(($('hookSizeSel')||{}).value) || 1,
+                  (($('hookStyleSel')||{}).value) || '기본');
+}
+
+function renderGenHookPreview(){
+  hookPreviewInto('genHook', 'genHookPreview', 1, (($('genHookStyleSel')||{}).value) || '기본');
 }
 
 async function analyzeAI(ev){
@@ -3988,7 +4060,7 @@ async function renderEdited(){
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
   const quality=($('outQuality')||{}).value || 'standard';
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -4031,6 +4103,7 @@ async function generate(){
       ? ((($('genCharCustom')||{}).value)||'').trim()
       : ((($('genCharSel')||{}).value)||''),
     bg_scene_mode: sceneMode,                                   // v0.51 그림 방식
+    hook_style: (($('genHookStyleSel')||{}).value)||'기본',        // v0.52 제목 프리셋
     bg_max_imgs: Math.max(0, +((($('genMaxImg')||{}).value)||0)), // v0.51 장수 제한
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
@@ -4426,7 +4499,7 @@ function resetEditForm(ev){
   // 기억된 편집 세팅도 기본값으로 덮어써 저장 (다음 실행에 옛 세팅이 되살아나지 않게)
   fetch('/api/settings', {method:'POST', body: JSON.stringify({settings:{ui:{edit_last:{
     layout:'shorts', auto_subtitle:true, cut_silence:true, denoise:'', orig_audio:'keep',
-    bgm:'', bgm_db:-14, hook_scale:1, narr_voice:'', narr_style:'', narr_subs_only:false,
+    bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
     stt_provider:'', whisper_model:'small', speed:1, quality:'standard', transition:'none',
     auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
     wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
@@ -4437,6 +4510,7 @@ function resetGenForm(ev){
   if(!confirm('생성 폼의 입력을 기본값으로 되돌릴까요?')) return;
   const set = (id, v) => { const el = $(id); if(el) el.value = v; };
   set('topic','하루 10분 정리 습관'); set('genHook','');
+  set('genHookStyleSel','기본'); const gp=$('genHookPreview'); if(gp) gp.style.display='none';
   const bc = $('batchChk'); if(bc){ bc.checked = false; } set('topicBatch',''); onBatchChange();
   const hc = $('genHookCands'); if(hc) hc.innerHTML='';
   set('bgmSel',''); set('voiceSel', ($('voiceSel').options[0]||{}).value || '');
@@ -4506,6 +4580,7 @@ function collectTplParams(){
     cut_silence: $('cutSilenceChk').checked, denoise: $('denoiseSel').value,
     orig_audio: $('origAudioSel').value, bgm: $('bgmEditSel').value,
     bgm_db: +$('bgmVolSel').value, hook_scale: +(($('hookSizeSel')||{}).value)||1,
+    hook_style: (($('hookStyleSel')||{}).value)||'기본',
     narr_voice: (($('narrVoiceSel')||{}).value)||'', narr_style: (($('narrStyleSel')||{}).value)||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
@@ -4822,6 +4897,9 @@ async function poll(){
       else { $('genCharSel').value = 'custom'; $('genCharCustom').value = bgc; }
       onGenCharChange();
     }
+    // v0.52: 상단 제목 글씨 스타일 복원 (생성 폼)
+    const hks = ((state.settings || {}).subtitle || {}).hook_style || '기본';
+    if($('genHookStyleSel')) $('genHookStyleSel').value = hks;
     // v0.51: 그림 방식·최대 장수 복원
     const scm = ((state.settings || {}).bg || {}).scene_mode || 'auto';
     if($('genSceneMode')) $('genSceneMode').value = scm;

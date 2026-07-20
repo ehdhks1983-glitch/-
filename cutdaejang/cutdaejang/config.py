@@ -81,6 +81,7 @@ DEFAULTS: dict = {
         "hook_band": True,            # 상단 제목 뒤 배경 띠 (기본 켬)
         "wrap_chars": 16,             # 자막 한 줄 최대 글자수(넘으면 2줄). 0=끔
         "anim": "none",               # 자막 등장 애니메이션: none | pop (v0.43)
+        "hook_style": "기본",          # 상단 제목 프리셋 (v0.52): 기본|예능 노랑|화이트 박스|네온
     },
     "branding": {                     # 인트로/아웃트로 (v0.43) — 영상 또는 사진 경로
         "intro": "",

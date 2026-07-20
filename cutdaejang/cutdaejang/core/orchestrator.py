@@ -100,6 +100,7 @@ def build_style(settings: dict) -> Style:
         hook_band=sub.get("hook_band", True),
         wrap_chars=sub.get("wrap_chars", 16),
         anim=sub.get("anim", "none"),
+        hook_style=sub.get("hook_style", "기본"),
     )
 
 

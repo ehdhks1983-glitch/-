@@ -230,3 +230,44 @@ def test_pop_anim_two_layer_band(tmp_path):
     spec.style.anim = "none"
     text2 = Path(write_ass(spec, tmp_path / "nopop.ass")).read_text(encoding="utf-8")
     assert "\\t(0,130" not in text2
+
+
+def test_hook_style_presets(tmp_path):
+    """v0.52 상단 제목 프리셋 — 색·테두리·띠·글로우가 스타일별로 갈리는지."""
+    from cutdaejang.spec import Canvas, Style, Subtitle, TimelineSpec
+
+    def build(hook_style):
+        spec = TimelineSpec(
+            canvas=Canvas(w=1080, h=1920), duration_us=2_000_000,
+            hook="충격 3가지 사실",
+            style=Style(hook_style=hook_style, hook_band=True),
+            subtitles=[Subtitle(text="본문", start_us=0, end_us=2_000_000)])
+        return Path(write_ass(spec, tmp_path / f"{hook_style}.ass")).read_text(encoding="utf-8")
+
+    base = build("기본")
+    title = next(ln for ln in base.splitlines() if ln.startswith("Style: Title"))
+    assert "&H00FFFFFF" in title and ",3," in title      # 흰 글자 + 띠(BorderStyle 3)
+
+    fun = build("예능 노랑")
+    t2 = next(ln for ln in fun.splitlines() if ln.startswith("Style: Title"))
+    assert "&H0000D4FF" in t2                            # FFD400 → BGR 00D4FF
+    assert "&H00101010" in t2 and ",1," in t2            # 검정 테두리, 띠 없음(프리셋 강제)
+
+    box = build("화이트 박스")
+    t3 = next(ln for ln in box.splitlines() if ln.startswith("Style: Title"))
+    assert "&H00141414" in t3 and "&H00F2F2F2" in t3     # 검정 글자 + 흰 띠
+
+    neon = build("네온")
+    hook_ev = next(ln for ln in neon.splitlines()
+                   if ln.startswith("Dialogue") and ",Title," in ln)
+    assert "\\blur" in hook_ev                           # 글로우
+    t4 = next(ln for ln in neon.splitlines() if ln.startswith("Style: Title"))
+    assert "&H00F0FF9C" in t4                            # 9CFFF0 → BGR F0FF9C
+
+    # 강조 복원색이 프리셋 기본색을 따라감 (화이트 박스에서 흰색 복원이면 안 보임)
+    spec = TimelineSpec(canvas=Canvas(w=1080, h=1920), duration_us=2_000_000,
+                        hook="제목 | 제목", style=Style(hook_style="화이트 박스"),
+                        subtitles=[Subtitle(text="x", start_us=0, end_us=1_000_000)])
+    text = Path(write_ass(spec, tmp_path / "hl.ass")).read_text(encoding="utf-8")
+    ev = next(ln for ln in text.splitlines() if ",Title," in ln and "\\1c" in ln)
+    assert "\\1c&H141414&" in ev                         # 복원 = 프리셋 검정

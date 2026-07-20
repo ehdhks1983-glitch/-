@@ -805,6 +805,49 @@ def test_scene_manual_mode_flow(server, tmp_path):
         _post(server, "/api/settings", {"settings": {"bg": {"scene_mode": "auto"}}})
 
 
+def test_hook_ui_order_style_and_voice_pickers(server):
+    """v0.52 — ① AI 제목 추천이 입력칸 위로(순서 교체, 양 폼) ② 글씨 스타일 선택
+    ③ 생성 폼에도 색 칩 ④ 내 목소리 등록에 📁 파일 선택 + 단계 안내 링크."""
+    html = _get(server, "/").read().decode("utf-8")
+    # 순서: 편집 폼 — 추천 입력(editHookTopic)·후보(editHookCands)가 제목 입력(editHook)보다 위
+    assert html.index('id="editHookTopic"') < html.index('id="editHookCands"') \
+        < html.index('id="editHook"')
+    # 순서: 생성 폼 — 추천 버튼·후보(genHookCands)가 제목 입력(genHook)보다 위
+    assert html.index('id="genHookCands"') < html.index('id="genHook"')
+    # 글씨 스타일 셀렉트 (양 폼) + 프리셋 4종
+    assert 'id="hookStyleSel"' in html and 'id="genHookStyleSel"' in html
+    for name in ("예능 노랑", "화이트 박스"):
+        assert html.count(f'value="{name}"') == 2, name
+    assert html.count('value="네온"') == 3  # 제목 프리셋 2곳 + 그림체(v0.45) 1곳
+    # 생성 폼 색 칩 + 미리보기
+    assert 'id="genHookColorChips"' in html and 'id="genHookPreview"' in html
+    # 내 목소리 등록: 📁 픽커 2곳 + 단계 안내 링크
+    assert "pickInto(event,'sovitsRef','audio')" in html
+    assert "pickInto(event,'cloneFile','audio')" in html
+    assert "elevenlabs.io/app/settings/api-keys" in html
+    assert "처음이라면 이 순서대로" in html
+
+
+def test_generate_remembers_hook_style(server):
+    """v0.52 — 생성 폼에서 고른 제목 글씨 스타일이 설정(subtitle.hook_style)에 기억."""
+    from cutdaejang import config
+
+    data = _post(server, "/api/generate", {
+        "topic": "제목 스타일 기억", "auto": True,
+        "script_provider": "stub", "tts_provider": "stub", "hook_style": "예능 노랑",
+    })
+    job = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert job["status"] == "ok", job.get("errors")
+    assert config.load_settings()["subtitle"]["hook_style"] == "예능 노랑"
+    try:
+        # 렌더된 spec에도 프리셋이 박혀 있는지 (제목 노랑 = &H0000D4FF는 ass에서 검증됨)
+        state = json.loads(_get(server, "/api/state").read())
+        j = next(x for x in state["jobs"] if x["id"] == data["job_id"])
+        assert j["status"] == "ok"
+    finally:
+        _post(server, "/api/settings", {"settings": {"subtitle": {"hook_style": "기본"}}})
+
+
 def test_pick_file_kind_routing(server, monkeypatch):
     """v0.51 — /api/pick_file kind: folder/image는 pick_path로, 기본은 기존 함수로."""
     from cutdaejang.gui import webui
