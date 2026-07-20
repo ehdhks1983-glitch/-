@@ -462,6 +462,39 @@ def save_srt(subs: List[Subtitle], path) -> str:
     return str(path)
 
 
+def analyze_narration_file(
+    audio_path: str,
+    workdir,
+    stt: Optional[STTEngine] = None,
+    script_lines: Optional[List[str]] = None,
+    silence_opts: Optional[SilenceOptions] = None,
+    progress_cb: Optional[Callable[[str, float], None]] = None,
+) -> tuple:
+    """녹음 내레이션 파일 → (자막 목록, 녹음 길이 μs) (v0.58).
+
+    녹음은 최종 영상에서 0초부터 통째로 흐르므로 컷 없이 원본 타임라인 그대로
+    자막 시각을 잡는다. 대본이 있으면 발화 구간에 그 글을 배치(비용 0·오인식 0),
+    없으면 구간별 STT(문장 타임스탬프).
+    """
+    dur_us = ff.probe_duration_us(audio_path)
+    try:
+        segments, _ = video_editor.detect_speech_segments(audio_path, silence_opts)
+    except Exception:  # noqa: BLE001 — 감지 실패면 전체를 한 구간으로
+        segments = []
+    if not segments:
+        segments = [(0, dur_us)]
+    clean = [ln.strip() for ln in (script_lines or []) if ln.strip()]
+    if clean:
+        return align_script_to_segments(clean, segments, total_us=dur_us), dur_us
+    if stt is None:
+        return [], dur_us
+    pieces = transcribe_segments_timed(
+        audio_path, segments, stt, Path(workdir),
+        on_progress=(lambda i, n: progress_cb("stt", i / max(n, 1))) if progress_cb else None,
+    )
+    return build_subtitles_timed(segments, pieces), dur_us
+
+
 def analyze_video(
     video_path: str,
     workdir,

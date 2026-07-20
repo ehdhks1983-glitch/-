@@ -500,6 +500,44 @@ def test_template_save_apply_delete(server):
         assert e.code == 400
 
 
+def test_edit_with_recorded_narration_file(server, tmp_path):
+    """v0.58: 🎤 녹음 파일 통째 넣기 — 대본 자막이 녹음 타임라인에, 영상은 녹음 길이로."""
+    import subprocess
+
+    from cutdaejang.utils import ffmpeg as ff
+
+    video = _make_talk_video(tmp_path / "src58.mp4")  # 5.5초 원본
+    rec = tmp_path / "rec58.m4a"                      # 3초 녹음 (440Hz)
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+            "-i", "sine=frequency=440:duration=3", "-c:a", "aac", str(rec)])
+    data = _post(server, "/api/edit", {
+        "video_path": video, "layout": "keep",
+        "auto_subtitle": True, "cut_silence": False, "quality": "draft",
+        "narr_file": str(rec), "script": "녹음 첫 줄\n녹음 둘째 줄",
+    })
+    job = _wait_status(server, data["job_id"], {"review_subtitle", "failed"}, timeout=180)
+    assert job["status"] == "review_subtitle", job.get("errors")
+    subs = job["subtitles"]
+    assert [s["text"] for s in subs] == ["녹음 첫 줄", "녹음 둘째 줄"]
+    assert subs[-1]["end_us"] <= 3_400_000  # 자막 시각은 녹음(3초) 타임라인 안
+    _post(server, "/api/edit_render", {"job_id": data["job_id"], "subtitles": subs,
+                                       "hook": "", "speed": 1, "quality": "draft"})
+    done = _wait_status(server, data["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert done["status"] == "ok", done.get("errors")
+    dur = ff.probe_duration_us(done["mp4"]) / 1e6
+    assert 3.0 <= dur <= 4.2, dur  # 5.5초 영상이 녹음(3초+여유)에 맞춰 다듬어짐
+    r = subprocess.run([ff.ffmpeg_bin(), "-i", done["mp4"], "-af", "volumedetect",
+                        "-f", "null", "-"], capture_output=True)
+    mean = [ln for ln in r.stderr.decode().splitlines() if "mean_volume" in ln]
+    assert mean and float(mean[0].split("mean_volume:")[1].split("dB")[0]) > -30
+
+    # 없는 녹음 파일 → 즉시 실패 + 친절한 메시지
+    bad = _post(server, "/api/edit", {"video_path": video,
+                                      "narr_file": str(tmp_path / "없는녹음.mp3")})
+    j2 = _wait_status(server, bad["job_id"], {"failed"}, timeout=30)
+    assert "녹음 파일" in (j2.get("errors") or [""])[0]
+
+
 def test_edit_photo_transition_fade_and_branding(server, tmp_path):
     """v0.43 — 사진 영상에 전환(fade) 적용 + 설정의 인트로가 완성본 앞에 붙는지."""
     from cutdaejang.utils import ffmpeg as ff

@@ -380,6 +380,11 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         from ..core.video_editor import SilenceOptions, resolve_input_video  # noqa: PLC0415
 
         photo_path = (params.get("photo_path") or "").strip()
+        narr_file = (params.get("narr_file") or "").strip().strip('"')
+        if narr_file and not Path(narr_file).is_file():
+            _set_job(job_id, status="failed",
+                     errors=[f"녹음 파일을 찾을 수 없습니다: {narr_file}"])
+            return
         if photo_path:  # 📸 사진들 → 슬라이드쇼 영상 (장수로 전체 길이 균등 분배)
             from ..core.video_editor import photos_to_video, resolve_photo_inputs  # noqa: PLC0415
             try:
@@ -389,6 +394,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 except (TypeError, ValueError):
                     photo_sec = 15.0
                 photo_sec = max(3.0, min(180.0, photo_sec))
+                if narr_file:  # 🎤 녹음이 있으면 사진 전체 길이 = 녹음 길이 (v0.58)
+                    from ..utils import ffmpeg as _ff  # noqa: PLC0415
+                    photo_sec = max(3.0, _ff.probe_duration_us(narr_file) / 1e6)
                 _set_job(job_id, stage="cut", frac=0.0,
                          note=f"사진 {len(imgs)}장 → {photo_sec:.0f}초 영상 만드는 중…")
                 (Path(workdir) / job_id).mkdir(parents=True, exist_ok=True)
@@ -411,9 +419,10 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         cut_silence = bool(params.get("cut_silence", True)) and not photo_path
         script_lines = (params.get("script") or "").splitlines()
         has_script = any(ln.strip() for ln in script_lines)
-        narr_topic = (params.get("narr_topic") or "").strip()
+        narr_topic = "" if narr_file else (params.get("narr_topic") or "").strip()
         stt = None
-        if auto_subtitle and not has_script and not narr_topic:  # 대본/내레이션 있으면 STT 생략
+        if auto_subtitle and not has_script and not narr_topic and not narr_file:
+            # 대본/내레이션(AI·녹음) 있으면 원본 영상 STT 생략
             stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
             # Whisper 모델(정확도)을 이 작업에서 고른 값으로 덮어씀
             stt_cfg = {**edit_cfg, "whisper_model": params.get("whisper_model") or edit_cfg["whisper_model"]}
@@ -423,8 +432,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 language=params.get("language", "ko"),
             )
         logging.getLogger("cutdaejang").info(
-            "편집 시작: %s (내레이션=%s, 자막만=%s, 완전자동=%s)",
-            Path(video).name, bool(narr_topic), bool(params.get('narr_subs_only')), bool(params.get("auto_edit")))
+            "편집 시작: %s (내레이션=%s, 녹음=%s, 자막만=%s, 완전자동=%s)",
+            Path(video).name, bool(narr_topic), bool(narr_file),
+            bool(params.get('narr_subs_only')), bool(params.get("auto_edit")))
         _set_job(job_id, status="running", stage="analyze", frac=0.0, title=Path(video).stem)
         analysis = edit_mode.analyze_video(
             video, Path(workdir) / job_id, stt,
@@ -444,6 +454,10 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         # 발화 자막이 없는 영상(화면 녹화·b-roll)은 핵심 선별을 못 함 → 완전 자동 +
         # 목표 초면 영상 전체에서 고르게 조각을 뽑아 목표 길이 몽타주로 먼저 자름
         tgt_auto = int(params.get("auto_target_sec") or 0) if params.get("auto_edit") else 0
+        if narr_file and params.get("auto_edit") and not photo_path:
+            # 🎤 녹음 모드 완전 자동: 영상 전체에서 녹음 길이만큼 고르게 (v0.58)
+            from ..utils import ffmpeg as _ff  # noqa: PLC0415
+            tgt_auto = max(5, int(_ff.probe_duration_us(narr_file) / 1e6))
         # '여러 개로 나누기'면 몽타주로 미리 줄이지 않음 — 전체를 그대로 나눠야 하니까
         if (tgt_auto > 0 and not analysis.subtitles and not photo_path
                 and not params.get("auto_multi")
@@ -469,7 +483,37 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 f"자막(발화)이 없어 영상 전체에서 고르게 {tgt_auto}초를 골라 담았어요"))
         review_subs = analysis.subtitles
         narr_subs_only = bool(params.get("narr_subs_only"))
-        if narr_topic:  # AI 내레이션: 대본 생성 → 컷 길이에 비례 배치 (검토에서 수정)
+        if narr_file:  # 🎤 녹음 내레이션: 자막은 녹음에서 — 대본 있으면 그 글대로 (v0.58)
+            _set_job(job_id, stage="stt", note="녹음에서 자막 만드는 중…")
+            n_stt = None
+            if not has_script:
+                try:
+                    stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
+                    stt_cfg = {**edit_cfg, "whisper_model":
+                               params.get("whisper_model") or edit_cfg["whisper_model"]}
+                    n_stt = STTEngine(make_provider(stt_name, stt_cfg),
+                                      Path(workdir) / "cache" / "stt",
+                                      language=params.get("language", "ko"))
+                except Exception as se:  # noqa: BLE001 — STT 없이도 진행(자막만 없음)
+                    logging.getLogger("cutdaejang").warning("녹음 음성 인식 준비 실패: %s", se)
+            try:
+                narr_subs, _rec_us = edit_mode.analyze_narration_file(
+                    narr_file, Path(workdir) / job_id, n_stt,
+                    script_lines=script_lines if has_script else None,
+                    silence_opts=SilenceOptions(
+                        noise_db=edit_cfg["noise_db"],
+                        min_silence_s=edit_cfg["min_silence_s"], pad_s=edit_cfg["pad_s"]),
+                    progress_cb=lambda stage, frac: _set_job(job_id, stage=stage, frac=frac))
+            except Exception as ne:  # noqa: BLE001
+                _set_job(job_id, status="failed", errors=[f"녹음 파일 처리 실패: {ne}"])
+                return
+            review_subs = edit_mode.split_long_subtitles(
+                narr_subs, settings["subtitle"].get("wrap_chars", 16))
+            if not review_subs:
+                w = ("⚠ 녹음에서 자막을 만들지 못했어요 (음성 인식 실패/무음) — "
+                     "「📝 대본 직접 넣기」에 읽은 글을 붙여넣으면 자막이 정확히 들어가요")
+                _set_job(job_id, tts_warn=w)
+        elif narr_topic:  # AI 내레이션: 대본 생성 → 컷 길이에 비례 배치 (검토에서 수정)
             _set_job(job_id, stage="script", note="AI 대본 작성 중…")
             try:
                 provider = SCRIPT_PROVIDERS["gemini"]() if os.environ.get("GEMINI_API_KEY") \
@@ -492,12 +536,14 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          # 자막만 모드면 대본은 쓰되 목소리(TTS)는 넣지 않음
                          "denoise": denoise,
                          "narration": bool(narr_topic) and not narr_subs_only,
+                         "narr_file": narr_file,  # 🎤 녹음 내레이션 (v0.58)
                          "narr_voice": (params.get("narr_voice") or "").strip(),
                          "narr_style": (params.get("narr_style") or "").strip(),
                          "narr_fit": params.get("narr_fit") or "freeze",
                          # 원본 소리: 목소리를 얹을 때만 기본 무음 (자막만이면 유지)
                          "orig_audio": params.get("orig_audio")
-                         or ("mute" if narr_topic and not narr_subs_only else "keep"),
+                         or ("mute" if (narr_topic and not narr_subs_only) or narr_file
+                             else "keep"),
                          "bgm": (params.get("bgm") or "").strip(),
                          "bgm_db": params.get("bgm_db"),
                          "hook_scale": params.get("hook_scale"),
@@ -519,7 +565,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             from ..core import script_generator as sg  # noqa: PLC0415
 
             subs_d = edit_mode.subtitles_to_dicts(analysis.subtitles)
-            if subs_d and os.environ.get("GEMINI_API_KEY") and not narr_topic and not has_script:
+            if subs_d and os.environ.get("GEMINI_API_KEY") and not narr_topic and not has_script and not narr_file:
                 _set_job(job_id, stage="script", note="AI가 대본을 다듬는 중…")
                 try:
                     lines = sg.refine_subtitles([d["text"] for d in subs_d])
@@ -535,7 +581,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             except (TypeError, ValueError):
                 auto_speed = 1.0
             multi = bool(params.get("auto_multi")) and not photo_path
-            if multi and narr_topic:  # 내레이션 대본은 영상 전체 기준 → 분할과 배타
+            if multi and (narr_topic or narr_file):  # 내레이션은 영상 전체 기준 → 분할과 배타
                 multi = False
                 prev = (_get_job(job_id) or {}).get("tts_warn") or ""
                 w = "ℹ 내레이션과 '여러 개로 나누기'는 함께 쓸 수 없어 1개로 만들었어요"
@@ -547,7 +593,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                                params.get("quality") or "standard", denoise)
                 return
             # 내레이션 대본은 이미 목표 길이로 새로 쓴 글 → 핵심 선별로 또 자르지 않음
-            if subs_d and tgt > 0 and not narr_topic:
+            if subs_d and tgt > 0 and not narr_topic and not narr_file:
                 _set_job(job_id, note=f"핵심 구간 골라 {tgt}초 쇼츠 구성 중…")
                 try:
                     pick = sg.suggest_highlights(subs_d, target_sec=tgt)
@@ -690,7 +736,38 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 transition=(ep.get("transition") or "none"),
             )
         narration_wav = None
-        if ep.get("narration") and subs:
+        narr_rec = (ep.get("narr_file") or "").strip()
+        if narr_rec and Path(narr_rec).is_file():
+            # 🎤 녹음 내레이션 통째 넣기 (v0.58) — TTS 없이 녹음이 그대로 목소리 트랙
+            from ..core import video_editor  # noqa: PLC0415
+            from ..utils import ffmpeg as ff  # noqa: PLC0415
+            cut_us = ff.probe_duration_us(cut_video)
+            rec_us = ff.probe_duration_us(narr_rec)
+            narr_fit = ep.get("narr_fit") or "freeze"
+            narr_end_us = rec_us + 400_000  # 말 끝나고 살짝 여유
+            if narr_fit in ("freeze", "loop") and narr_end_us > cut_us + 50_000:
+                extra_s = (narr_end_us - cut_us) / 1e6
+                _set_job(job_id, stage="cut", note="녹음 길이에 맞춰 영상을 늘리는 중…")
+                cut_video = video_editor.extend_video(
+                    cut_video, narr_end_us,
+                    str(Path(workdir) / job_id / "narr_ext.mp4"), mode=narr_fit)
+                cut_us = ff.probe_duration_us(cut_video)
+                mode_ko = "마지막 장면 정지" if narr_fit == "freeze" else "영상 반복"
+                w2 = f"⏱ 녹음이 영상보다 길어 {mode_ko}로 {extra_s:.1f}초 연장했어요"
+                prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                _set_job(job_id, tts_warn=f"{prev} · {w2}" if prev else w2)
+            elif cut_us > narr_end_us + 1_500_000:
+                _set_job(job_id, stage="cut", note="녹음 길이에 맞춰 영상을 다듬는 중…")
+                cut_video = video_editor.cut_and_concat(
+                    cut_video, [(0, narr_end_us)],
+                    str(Path(workdir) / job_id / "narr_fit.mp4"))
+                cut_us = ff.probe_duration_us(cut_video)
+            narration_wav = str(Path(workdir) / job_id / "narration.wav")
+            # 영상 길이에 맞춰 뒤 무음 패드/초과 컷 (원본 소리는 렌더에서 무음/덕킹)
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(narr_rec),
+                    "-af", f"apad,atrim=0:{cut_us / 1e6:.3f}",
+                    "-ar", "44100", "-ac", "2", narration_wav])
+        elif ep.get("narration") and subs:
             import re as _re  # noqa: PLC0415
             from ..core import tts_engine  # noqa: PLC0415
 
@@ -2443,7 +2520,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.57)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.58)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2592,7 +2669,23 @@ _HTML = """<!doctype html>
     </details>
 
     <details class="opt" id="optNarr">
-      <summary>🎙️ AI 내레이션 <span class="hint">— 주제만 쓰면 대본+목소리+자막을 자동으로 얹어요 (내 목소리 등록도 여기)</span></summary>
+      <summary>🎙️ 내레이션 (해설 목소리) <span class="hint">— AI가 대본 쓰고 읽거나, 내가 녹음한 파일을 통째로</span></summary>
+      <div class="chk" style="gap:14px;margin-top:4px;flex-wrap:wrap">
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+          <input type="radio" name="narrMode" value="ai" checked onchange="onNarrModeChange()"> ✍ AI가 대본 쓰고 읽기</label>
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+          <input type="radio" name="narrMode" value="file" onchange="onNarrModeChange()"> 🎤 내가 녹음한 파일 넣기</label>
+      </div>
+      <div id="narrFileBox" class="hidden">
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <input type="text" id="narrFile" placeholder="녹음 파일 (mp3 · m4a · wav · aac …) — 폰 녹음 파일 그대로 OK" style="flex:1">
+          <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'narrFile','audio')">🎵 녹음 파일 고르기</button>
+        </div>
+        <div class="hint">녹음이 <b>영상 목소리로 통째로</b> 들어가요 (원본 소리는 자동 무음, 아래 🎵 소리에서 변경 가능).
+          자막은 녹음을 음성 인식해 자동으로 만들고, 읽은 글을 「📝 대본 직접 넣기」에 붙여넣으면 <b>그 글자 그대로</b> 자막이 돼 더 정확해요.
+          영상·사진 길이는 녹음 길이에 자동으로 맞춰집니다.</div>
+      </div>
+      <div id="narrAiBox">
       <input type="text" id="narrTopic" oninput="onNarrTopicInput()" placeholder="영상 주제/내용 입력 (예: 동네 라멘 맛집 소개) — 비우면 사용 안 함">
       <div class="row" style="margin-top:8px">
         <div>
@@ -2611,8 +2704,9 @@ _HTML = """<!doctype html>
         <input type="checkbox" id="narrSubsOnly" onchange="onNarrTopicInput()">
         <span>🔇 목소리는 빼고 <b>자막만</b> 넣기 (AI가 쓴 대본을 하단 자막으로만)</span>
       </div>
+      </div>
       <div class="chk" style="gap:8px">
-        <span class="hint">내레이션이 영상보다 길면</span>
+        <span class="hint">내레이션(녹음)이 영상보다 길면</span>
         <select id="narrFitSel" style="width:auto;padding:6px 8px">
           <option value="freeze" selected>⏸ 마지막 장면 정지로 늘려 다 담기 (추천)</option>
           <option value="loop">🔁 영상을 처음부터 반복해 다 담기</option>
@@ -3637,6 +3731,12 @@ function onScriptInput(){
     : '붙여넣으면 <b>음성 인식을 건너뛰고</b> 이 대본을 영상 타이밍에 맞춰 자막으로 넣어요 (오인식·비용 없음). 내레이션 없는 영상에도 쓸 수 있어요.';
 }
 
+function onNarrModeChange(){
+  const file = (document.querySelector("input[name='narrMode'][value='file']")||{}).checked;
+  $('narrAiBox').classList.toggle('hidden', !!file);
+  $('narrFileBox').classList.toggle('hidden', !file);
+}
+
 async function startEdit(){
   const kind = window._editKind || 'edit';
   const video = kind === 'photo' ? '' : $('editVideo').value.trim();
@@ -3648,10 +3748,15 @@ async function startEdit(){
     alert('여러 개로 나누려면 쇼츠 1개당 길이를 정해주세요 (예: 60초)'); return;
   }
   const nv = ($('narrVoiceSel')||{}).value||'';
+  const narrFileMode = !!(document.querySelector("input[name='narrMode'][value='file']")||{}).checked;
+  const narrFileVal = narrFileMode ? (($('narrFile')||{}).value||'').trim() : '';
+  if(narrFileMode && !narrFileVal){
+    alert('🎤 녹음 파일을 골라주세요 — [🎵 녹음 파일 고르기] 버튼을 눌러보세요'); return;
+  }
   let editKey = $('editGeminiKey').value;
   // 내레이션 보이스는 제미나이 키가 있어야 적용 — 없으면 여기서 물어봐 저장
   const subsOnly = ($('narrSubsOnly')||{}).checked;
-  if((($('narrTopic')||{}).value||'').trim() && !window._hasGeminiKey && !editKey){
+  if(!narrFileMode && (($('narrTopic')||{}).value||'').trim() && !window._hasGeminiKey && !editKey){
     editKey = ensureGeminiKey();   // 대본 품질(+목소리)에 필요
     if(!editKey && !subsOnly && nv && nv !== '__mine__' && nv !== '__sovits__'
        && !confirm('제미나이 키가 없으면 보이스 선택 없이 내장 음성으로 만들어져요.\\n그래도 진행할까요?')) return;
@@ -3664,7 +3769,9 @@ async function startEdit(){
     hook_style: (($('hookStyleSel')||{}).value)||'기본',
     sub_style: (($('editSubStyleSel')||{}).value)||'기본',
     tone: (($('editToneSel')||{}).value)||'기본',
-    denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
+    denoise: $('denoiseSel').value,
+    narr_topic: narrFileMode ? '' : (($('narrTopic')||{}).value||''),
+    narr_file: narrFileVal,
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
