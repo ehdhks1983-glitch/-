@@ -848,6 +848,33 @@ def test_generate_remembers_hook_style(server):
         _post(server, "/api/settings", {"settings": {"subtitle": {"hook_style": "기본"}}})
 
 
+def test_tone_and_infopop_ui_and_spec(server):
+    """v0.56 — 톤 셀렉트(양 폼)·숫자 팝 체크: 기억 + spec 반영."""
+    from pathlib import Path
+
+    from cutdaejang import config
+    from cutdaejang.spec import TimelineSpec
+
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="genToneSel"' in html and 'id="editToneSel"' in html
+    assert html.count('value="시네마틱"') == 2 and 'id="genInfoChk"' in html
+
+    res = _post(server, "/api/generate", {
+        "topic": "톤 3가지 테스트", "auto": True,
+        "script_provider": "stub", "tts_provider": "stub",
+        "tone": "흑백", "info_pop": True,
+    })
+    job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=240)
+    assert job["status"] == "ok", job.get("errors")
+    try:
+        assert config.load_settings()["bg"]["tone"] == "흑백"
+        spec = TimelineSpec.load(str(Path(job["mp4"]).parent / "spec.json"))
+        assert spec.style.tone == "흑백"
+        assert spec.infopops  # 스텁 대본 강조 문장의 숫자("한 번"은 아님 — 실제 숫자 존재 여부)
+    finally:
+        _post(server, "/api/settings", {"settings": {"bg": {"tone": "기본"}}})
+
+
 def test_punch_in_checkbox_and_spec(server):
     """v0.55 — 👊 펀치인 줌: 체크박스, spec.punchins 기록, 끄면 기억+미배치."""
     from pathlib import Path

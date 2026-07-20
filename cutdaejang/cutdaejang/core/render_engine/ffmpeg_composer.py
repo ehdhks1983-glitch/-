@@ -175,6 +175,12 @@ def build_command(
         last_label = "grad"
         next_input += 1
 
+    # ── 🎨 화면 톤(색보정) 프리셋 (v0.56) — 자막·제목 전에 적용 (글자는 원색 유지) ──
+    tone_f = TONE_PRESETS.get(getattr(spec.style, "tone", "기본") or "기본", "")
+    if tone_f:
+        filters.append(f"[{last_label}]{tone_f}[tone]")
+        last_label = "tone"
+
     # ── 👊 펀치인 줌 (v0.55) — 강조 문장 구간에서 화면이 살짝 확대됐다 복귀.
     # 자막 굽기 전에 적용해 자막·제목은 고정(가독성). on(출력 프레임 번호) 기반이라
     # ffmpeg 버전 무관, zoom 변수로 램프 인(빠르게)/아웃(부드럽게).
@@ -213,6 +219,17 @@ def build_command(
         str(out_path),
     ]
     return args
+
+
+# 🎨 화면 톤(색보정) 프리셋 (v0.56) — 시각 체인 마지막(자막 전)에 적용
+TONE_PRESETS = {
+    "기본": "",
+    "시네마틱": ("curves=preset=medium_contrast,"
+              "colorbalance=rm=.04:bm=-.04:rh=.05:bh=-.07,eq=saturation=1.06"),
+    "화사": "eq=brightness=0.03:saturation=1.18:contrast=1.05",
+    "선명": "eq=contrast=1.12:saturation=1.15,unsharp=5:5:0.6:5:5:0.0",
+    "흑백": "hue=s=0,eq=contrast=1.1",
+}
 
 
 PUNCH_SCALE = 1.10   # 펀치인 최대 배율 (v0.55)

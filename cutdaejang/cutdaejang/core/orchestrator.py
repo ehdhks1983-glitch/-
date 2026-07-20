@@ -102,6 +102,7 @@ def build_style(settings: dict) -> Style:
         anim=sub.get("anim", "none"),
         hook_style=sub.get("hook_style", "기본"),
         sub_style=sub.get("sub_style", "기본"),
+        tone=settings["bg"].get("tone", "기본"),
     )
 
 
@@ -305,6 +306,29 @@ def run_job(
             spec.punchins = wins
             if wins:
                 note(f"👊 펀치인 줌 {len(wins)}곳 (강조 문장)")
+
+        # 🔢 숫자 인포 팝 (v0.56) — 강조 문장 속 숫자를 화면 중상단에 크게 (최대 4곳)
+        if settings["subtitle"].get("info_pop", True):
+            from ..spec import InfoPop  # noqa: PLC0415
+
+            num_re = re.compile(r"\d[\d,.]*\s?[가-힣%]{0,3}")
+            pops = []
+            for clip, sub in zip(spec.audio, spec.subtitles):
+                emphasized = bool((sub.highlight or "").strip()) or "[" in (sub.text or "")
+                if not emphasized:
+                    continue
+                plain = re.sub(r"\[[^\]]*\]", "", sub.text or "")  # 색 마크업 제거
+                m = num_re.search(plain)
+                if m and m.group(0).strip():
+                    pops.append(InfoPop(
+                        text=m.group(0).strip(),
+                        start_us=clip.start_us + 100_000,
+                        end_us=min(clip.start_us + 1_200_000, clip.end_us)))
+                if len(pops) >= 4:
+                    break
+            spec.infopops = pops
+            if pops:
+                note(f"🔢 숫자 인포 팝 {len(pops)}곳 ({', '.join(p.text for p in pops[:3])}…)")
 
         spec_path = job_dir / "spec.json"
         spec.save(spec_path)

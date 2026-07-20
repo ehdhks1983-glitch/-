@@ -33,7 +33,7 @@ _LOCK = threading.Lock()
 # 편집 폼에서 "기억해 두는" 세팅 키 — 경로·주제·대본·API 키 같은 작업별 입력은 제외
 _EDIT_LAST_KEYS = (
     "layout", "auto_subtitle", "cut_silence", "denoise", "orig_audio",
-    "bgm", "bgm_db", "hook_scale", "hook_style", "sub_style", "narr_voice", "narr_style", "narr_subs_only",
+    "bgm", "bgm_db", "hook_scale", "hook_style", "sub_style", "tone", "narr_voice", "narr_style", "narr_subs_only",
     "stt_provider", "whisper_model", "speed", "quality", "narr_fit", "transition",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
 )
@@ -281,6 +281,9 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
             pass
     if "punch_in" in params:  # 👊 펀치인 줌 켬/끔 기억 (v0.55)
         over["punch_in"] = bool(params.get("punch_in"))
+    from ..core.render_engine.ffmpeg_composer import TONE_PRESETS  # noqa: PLC0415
+    if str(params.get("tone") or "") in TONE_PRESETS:  # 🎨 화면 톤 기억 (v0.56)
+        over["tone"] = params["tone"]
     over_sub = {}
     from ..core.render_engine.ass_writer import HOOK_STYLES  # noqa: PLC0415
     if str(params.get("hook_style") or "") in HOOK_STYLES:  # 🪧 제목 프리셋 (v0.52)
@@ -288,6 +291,8 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
     from ..core.render_engine.ass_writer import SUB_STYLES  # noqa: PLC0415
     if str(params.get("sub_style") or "") in SUB_STYLES:  # 💬 자막 프리셋 (v0.54)
         over_sub["sub_style"] = params["sub_style"]
+    if "info_pop" in params:  # 🔢 숫자 팝 켬/끔 기억 (v0.56)
+        over_sub["info_pop"] = bool(params.get("info_pop"))
     over_sfx = {}
     if "sfx_auto" in params:  # 🔔 효과음 켬/끔 기억 (v0.53)
         over_sfx["enabled"] = bool(params.get("sfx_auto"))
@@ -493,6 +498,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "hook_scale": params.get("hook_scale"),
                          "hook_style": params.get("hook_style") or "",  # v0.52 프리셋
                          "sub_style": params.get("sub_style") or "",    # v0.54 자막 프리셋
+                         "tone": params.get("tone") or "",              # v0.56 화면 톤
                          "wm_path": (params.get("wm_path") or "").strip().strip('"'),
                          "wm_pos": params.get("wm_pos") or "tr",
                          "wm_scale": params.get("wm_scale") or 0.14},
@@ -647,6 +653,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.hook_style = str(ep["hook_style"])
         if ep.get("sub_style"):  # 💬 자막 프리셋 (v0.54)
             style.sub_style = str(ep["sub_style"])
+        if ep.get("tone"):  # 🎨 화면 톤 (v0.56)
+            style.tone = str(ep["tone"])
         try:  # 상단 제목 크기 배수 (훅 스튜디오)
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -881,6 +889,8 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.hook_style = str(ep["hook_style"])
         if ep.get("sub_style"):  # 💬 자막 프리셋 (v0.54)
             style.sub_style = str(ep["sub_style"])
+        if ep.get("tone"):  # 🎨 화면 톤 (v0.56)
+            style.tone = str(ep["tone"])
         try:
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -1377,6 +1387,9 @@ class _Handler(BaseHTTPRequestHandler):
                 _set_job(job["id"], edit_params=ep)
             if params.get("sub_style"):  # 💬 자막 프리셋 (v0.54)
                 ep["sub_style"] = params.get("sub_style")
+                _set_job(job["id"], edit_params=ep)
+            if params.get("tone"):  # 🎨 화면 톤 (v0.56)
+                ep["tone"] = params.get("tone")
                 _set_job(job["id"], edit_params=ep)
             if params.get("margin_v"):  # ↕ 검토 화면에서 드래그한 자막 위치 (v0.49)
                 ep["margin_v"] = params.get("margin_v")
@@ -2425,7 +2438,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.55)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.56)</small></h1>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
@@ -2696,6 +2709,17 @@ _HTML = """<!doctype html>
         </select>
         <span class="hint">🆕 v0.54 — 본문 자막 전체의 글씨 느낌 (강조색도 자동 조정, 기억됨)</span>
       </div>
+      <div class="chk" style="gap:8px;flex-wrap:wrap">
+        <span>🎨 화면 톤(색보정)</span>
+        <select id="editToneSel" style="width:auto;padding:6px 8px">
+          <option value="기본" selected>기본 (보정 없음)</option>
+          <option value="시네마틱">시네마틱 (영화 느낌 틸·오렌지)</option>
+          <option value="화사">화사 (밝고 쨍한 브이로그)</option>
+          <option value="선명">선명 (대비·채도·샤픈 업)</option>
+          <option value="흑백">흑백 (드라마틱)</option>
+        </select>
+        <span class="hint">🆕 v0.56 — 영상 전체 색감 (자막·제목 글자는 원색 유지)</span>
+      </div>
       <div class="row" style="margin-top:4px">
         <div>
           <label>출력 형태</label>
@@ -2917,6 +2941,22 @@ _HTML = """<!doctype html>
           <option value="네온">네온 (민트 글로우)</option>
         </select>
         <span class="hint">🆕 v0.54 — 본문 자막 전체의 글씨 느낌 (강조색도 자동 조정, 기억됨)</span>
+      </div>
+      <div class="chk" style="gap:8px;flex-wrap:wrap">
+        <span>🎨 화면 톤(색보정)</span>
+        <select id="genToneSel" style="width:auto;padding:6px 8px">
+          <option value="기본" selected>기본 (보정 없음)</option>
+          <option value="시네마틱">시네마틱 (영화 느낌 틸·오렌지)</option>
+          <option value="화사">화사 (밝고 쨍한 브이로그)</option>
+          <option value="선명">선명 (대비·채도·샤픈 업)</option>
+          <option value="흑백">흑백 (드라마틱)</option>
+        </select>
+        <span class="hint">🆕 v0.56 — 영상 전체 색감 (자막·제목 글자는 원색 유지)</span>
+      </div>
+      <div class="chk" style="gap:8px">
+        <input type="checkbox" id="genInfoChk" checked>
+        <span>🔢 <b>숫자 인포 팝</b> — 강조 문장 속 숫자(3가지·10분·50%)가 화면에 크게 뿅!</span>
+        <span class="hint">🆕 v0.56</span>
       </div>
       <div class="chk" style="gap:8px">
         <input type="checkbox" id="genPunchChk" checked>
@@ -3494,7 +3534,7 @@ function applyEditLast(el){
   set('denoiseSel', el.denoise); set('origAudioSel', el.orig_audio);
   if(el.orig_audio && el.orig_audio !== 'keep') window._origTouched = true;  // 복원값 보호
   set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
-  set('hookSizeSel', el.hook_scale); set('hookStyleSel', el.hook_style); set('editSubStyleSel', el.sub_style); set('photoSec', el.photo_sec);
+  set('hookSizeSel', el.hook_scale); set('hookStyleSel', el.hook_style); set('editSubStyleSel', el.sub_style); set('editToneSel', el.tone); set('photoSec', el.photo_sec);
   set('narrStyleSel', el.narr_style); chk('narrSubsOnly', el.narr_subs_only);
   set('narrFitSel', el.narr_fit); set('transSel', el.transition);
   if(el.narr_voice && [...$('narrVoiceSel').options].some(o => o.value === el.narr_voice))
@@ -3612,6 +3652,7 @@ async function startEdit(){
     hook_scale: +(($('hookSizeSel')||{}).value)||1,
     hook_style: (($('hookStyleSel')||{}).value)||'기본',
     sub_style: (($('editSubStyleSel')||{}).value)||'기본',
+    tone: (($('editToneSel')||{}).value)||'기본',
     denoise: $('denoiseSel').value, narr_topic: ($('narrTopic')||{}).value||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
@@ -4113,7 +4154,7 @@ async function renderEdited(){
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
   const quality=($('outQuality')||{}).value || 'standard';
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', sub_style:(($('editSubStyleSel')||{}).value)||'기본', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', sub_style:(($('editSubStyleSel')||{}).value)||'기본', tone:(($('editToneSel')||{}).value)||'기본', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -4160,6 +4201,8 @@ async function generate(){
     sub_style: (($('genSubStyleSel')||{}).value)||'기본',          // v0.54 자막 프리셋
     sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
     punch_in: !!(($('genPunchChk')||{}).checked),                  // v0.55 펀치 줌
+    tone: (($('genToneSel')||{}).value)||'기본',                    // v0.56 화면 톤
+    info_pop: !!(($('genInfoChk')||{}).checked),                   // v0.56 숫자 팝
     bg_max_imgs: Math.max(0, +((($('genMaxImg')||{}).value)||0)), // v0.51 장수 제한
     gemini_key: $('geminiKey').value,
     save_key: $('saveKeyChk').checked,
@@ -4555,7 +4598,7 @@ function resetEditForm(ev){
   // 기억된 편집 세팅도 기본값으로 덮어써 저장 (다음 실행에 옛 세팅이 되살아나지 않게)
   fetch('/api/settings', {method:'POST', body: JSON.stringify({settings:{ui:{edit_last:{
     layout:'shorts', auto_subtitle:true, cut_silence:true, denoise:'', orig_audio:'keep',
-    bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', sub_style:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
+    bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', sub_style:'기본', tone:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
     stt_provider:'', whisper_model:'small', speed:1, quality:'standard', transition:'none',
     auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
     wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
@@ -4576,6 +4619,7 @@ function resetGenForm(ev){
   set('genSceneMode','auto'); set('genMaxImg','0');   // v0.51 그림 방식·장수
   if($('genSfxChk')) $('genSfxChk').checked = true;    // v0.53 효과음
   if($('genPunchChk')) $('genPunchChk').checked = true; // v0.55 펀치 줌
+  set('genToneSel','기본'); if($('genInfoChk')) $('genInfoChk').checked = true; // v0.56
 }
 
 function updateLogs(lines){
@@ -4640,6 +4684,7 @@ function collectTplParams(){
     bgm_db: +$('bgmVolSel').value, hook_scale: +(($('hookSizeSel')||{}).value)||1,
     hook_style: (($('hookStyleSel')||{}).value)||'기본',
     sub_style: (($('editSubStyleSel')||{}).value)||'기본',
+    tone: (($('editToneSel')||{}).value)||'기본',
     narr_voice: (($('narrVoiceSel')||{}).value)||'', narr_style: (($('narrStyleSel')||{}).value)||'',
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
@@ -4959,6 +5004,9 @@ async function poll(){
     // v0.54: 자막 글씨 스타일 복원 (생성 폼)
     const sst = ((state.settings || {}).subtitle || {}).sub_style || '기본';
     if($('genSubStyleSel')) $('genSubStyleSel').value = sst;
+    // v0.56: 화면 톤·숫자 팝 복원 (생성 폼)
+    if($('genToneSel')) $('genToneSel').value = ((state.settings || {}).bg || {}).tone || '기본';
+    if($('genInfoChk')) $('genInfoChk').checked = (((state.settings || {}).subtitle || {}).info_pop !== false);
     // v0.55: 펀치인 줌 체크 복원
     if($('genPunchChk')) $('genPunchChk').checked = (((state.settings || {}).bg || {}).punch_in !== false);
     // v0.53: 효과음 체크 복원

@@ -259,6 +259,9 @@ def render_edited(
     work = Path(out_path).parent
     ass_path = ass_writer.write_ass(ass_spec, work / "subs.ass")
 
+    from .render_engine.ffmpeg_composer import TONE_PRESETS  # noqa: PLC0415
+
+    tone_f = TONE_PRESETS.get(getattr(style, "tone", "기본") or "기본", "")
     subs_arg = (
         f"subtitles=filename={ff.escape_filter_value(str(ass_path))}"
         f":fontsdir={ff.escape_filter_value(str(fonts_dir))}"
@@ -281,6 +284,8 @@ def render_edited(
         wm_pre = (f"[{wm_idx}:v]scale={wm_w}:-1,format=rgba,"
                   f"colorchannelmixer=aa={op:.2f}[wmimg];")
         wm_over = f"[wmimg]overlay={x}:{y}[wmk];[wmk]"
+    if tone_f:  # 🎨 화면 톤 (v0.56) — 자막 굽기 직전 (글자는 원색 유지)
+        subs_arg = f"{tone_f},{subs_arg}"
     sharp = f",{_SHARPEN[sharpen]}" if sharpen else ""  # 전경만 선명화(자막·블러배경은 제외)
     if layout == "shorts":
         # 블러 커버 배경 + 원본 비율 유지 전경 오버레이 (가로영상도 세로로 자연스럽게)

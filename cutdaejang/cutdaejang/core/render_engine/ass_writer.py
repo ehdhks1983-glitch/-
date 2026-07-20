@@ -31,6 +31,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font},{size},{primary},&H000000FF,{def_outline_color},&H80000000,0,0,0,0,100,100,0,0,{def_border},{def_outline},{shadow},{alignment},{sub_ml},{sub_ml},{margin_v},1
 Style: Title,{font},{title_size},{title_primary},&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,0,{title_border},{title_outline},{title_shadow},8,{title_ml},{title_ml},{title_margin_v},1
+Style: Info,{font},{info_size},{info_primary},&H000000FF,&H00101010,&HA0000000,0,0,0,0,100,100,0,0,1,{info_outline},2,5,60,60,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -302,6 +303,9 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         title_outline=sc(20) if hook_band else sc(hs.get("outline", presets.TITLE_OUTLINE)),
         title_shadow=0 if hook_band else hs.get("shadow", presets.TITLE_SHADOW),
         title_margin_v=presets.title_margin_v(spec.canvas.h),
+        info_size=round(spec.canvas.h * 0.085),          # 🔢 숫자 인포 팝 (v0.56)
+        info_primary=ass_color(style.highlight_color),
+        info_outline=sc(9),
         sub_ml=sc(110),    # 자막 좌우 여백 — 우측 버튼 기둥(~140px)에 긴 줄이 깔리지 않게
         title_ml=sc(90),   # 제목 좌우 여백
     )
@@ -317,6 +321,15 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             hook_body,
             band_on=hook_band, fade=False,
         )
+    # 🔢 숫자 인포 팝 (v0.56) — 문장 속 숫자를 중상단에 크게, 팝 등장 + 페이드 아웃
+    cx, cy = spec.canvas.w // 2, round(spec.canvas.h * 0.40)
+    for ip in getattr(spec, "infopops", []) or []:
+        lines.append(
+            f"Dialogue: 1,{us_to_ass(ip.start_us)},{us_to_ass(ip.end_us)},Info,,0,0,0,,"
+            + "{\\an5\\pos(" + str(cx) + "," + str(cy) + ")"
+            + "\\fscx55\\fscy55\\t(0,140,\\fscx100\\fscy100)\\fad(60,200)}"
+            + escape_ass_text(ip.text))
+
     for s in spec.subtitles:
         body = dialogue_text(s, style)
         if ss.get("blur"):  # 네온 자막 — 외곽선 글로우 (띠 없음 프리셋에서만)

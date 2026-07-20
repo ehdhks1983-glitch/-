@@ -89,6 +89,16 @@ class Style:
     anim: str = "none"             # 자막 등장 애니메이션: none | pop (살짝 커지며 등장)
     hook_style: str = "기본"        # 상단 제목 스타일 프리셋 (v0.52) — ass_writer.HOOK_STYLES 키
     sub_style: str = "기본"         # 본문 자막 스타일 프리셋 (v0.54) — ass_writer.SUB_STYLES 키
+    tone: str = "기본"             # 화면 톤(색보정) 프리셋 (v0.56) — composer.TONE_PRESETS 키
+
+
+@dataclass
+class InfoPop:
+    """숫자 인포그래픽 팝 (v0.56) — 문장 속 숫자를 화면 중상단에 크게 띄운다."""
+
+    text: str = ""
+    start_us: int = 0
+    end_us: int = 0
 
 
 @dataclass
@@ -123,6 +133,7 @@ class TimelineSpec:
     style: Style = field(default_factory=Style)
     sfx: List[Sfx] = field(default_factory=list)  # 효과음 (v0.53) — 없으면 빈 목록
     punchins: List[Punch] = field(default_factory=list)  # 펀치인 줌 (v0.55)
+    infopops: List[InfoPop] = field(default_factory=list)  # 숫자 인포 팝 (v0.56)
 
     # ---------- 직렬화 ----------
 
@@ -159,6 +170,7 @@ class TimelineSpec:
             style=pick(Style, d.get("style")),
             sfx=[pick(Sfx, s) for s in d.get("sfx", [])],
             punchins=[pick(Punch, s) for s in d.get("punchins", [])],
+            infopops=[pick(InfoPop, s) for s in d.get("infopops", [])],
         )
 
     @classmethod

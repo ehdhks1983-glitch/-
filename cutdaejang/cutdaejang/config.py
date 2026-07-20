@@ -70,6 +70,7 @@ DEFAULTS: dict = {
         "scene_mode": "auto",         # 장면 그림 방식 (v0.51): auto=AI 생성 | manual=내가 넣기 | off=끄기
         "max_scene_images": 0,        # 장면 그림 최대 장수 (v0.51) — 0=문장마다, N=N장만(비용 절감)
         "punch_in": True,             # 👊 강조 문장 펀치인 줌 (v0.55) — 살짝 확대됐다 복귀
+        "tone": "기본",                # 🎨 화면 톤(색보정) 프리셋 (v0.56)
     },
     "subtitle": {
         "font_size": 84,             # 유튜브 쇼츠 기본 (v0.23 상향)
@@ -84,6 +85,7 @@ DEFAULTS: dict = {
         "anim": "none",               # 자막 등장 애니메이션: none | pop (v0.43)
         "hook_style": "기본",          # 상단 제목 프리셋 (v0.52): 기본|예능 노랑|화이트 박스|네온
         "sub_style": "기본",           # 본문 자막 프리셋 (v0.54): 기본|예능 노랑|말풍선 띠|네온
+        "info_pop": True,             # 🔢 숫자 인포 팝 (v0.56) — 강조 문장 속 숫자를 크게
     },
     "branding": {                     # 인트로/아웃트로 (v0.43) — 영상 또는 사진 경로
         "intro": "",
