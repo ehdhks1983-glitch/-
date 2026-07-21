@@ -125,6 +125,19 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def resources_dir() -> Path:
+    """resources/ 루트 — 배포 방식과 무관하게 찾는다 (v0.70).
+
+    zip·소스 배포는 프로젝트 루트에, wheel(pip) 설치는 패키지 안에 리소스가 있다.
+    있는 쪽을 먼저 쓰고, 둘 다 없으면 패키지 내부를 기본(쓰기용)으로 반환한다.
+    """
+    pkg = Path(__file__).resolve().parent          # cutdaejang 패키지 디렉토리
+    for cand in (pkg / "resources", pkg.parent / "resources"):
+        if cand.is_dir():
+            return cand
+    return pkg / "resources"
+
+
 def _settings_candidates(path: Optional[str] = None) -> list:
     return [
         path,

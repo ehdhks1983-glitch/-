@@ -26,7 +26,7 @@ from .script_generator import Script, ScriptParseError
 
 log = logging.getLogger("cutdaejang")
 
-DEFAULT_BGM_DIR = Path(__file__).resolve().parents[2] / "resources" / "bgm"
+DEFAULT_BGM_DIR = config.resources_dir() / "bgm"
 _BGM_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 
 

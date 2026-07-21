@@ -84,7 +84,8 @@ def fetch(url: str, dest: Path, timeout: float = 180.0) -> bool:
 
 
 def default_bgm_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "resources" / "bgm"
+    from ..config import resources_dir
+    return resources_dir() / "bgm"
 
 
 def main(bgm_dir=None, fetch_fn=fetch) -> tuple:

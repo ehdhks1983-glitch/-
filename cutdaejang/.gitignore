@@ -11,12 +11,12 @@ windows/ffmpeg/
 api_keys.json
 logs/
 settings.json
-resources/bgm/
-resources/sfx/
+cutdaejang/resources/bgm/
+cutdaejang/resources/sfx/
 # v0.63 무료 글씨체 (사용자가 [⬇ 받기]로 내려받음 — 리포·zip엔 미포함)
-resources/fonts/BlackHanSans-Regular.ttf
-resources/fonts/Jua-Regular.ttf
-resources/fonts/DoHyeon-Regular.ttf
-resources/fonts/Gugi-Regular.ttf
-resources/fonts/NanumPenScript-Regular.ttf
-resources/fonts/무료글씨체_라이선스.txt
+cutdaejang/resources/fonts/BlackHanSans-Regular.ttf
+cutdaejang/resources/fonts/Jua-Regular.ttf
+cutdaejang/resources/fonts/DoHyeon-Regular.ttf
+cutdaejang/resources/fonts/Gugi-Regular.ttf
+cutdaejang/resources/fonts/NanumPenScript-Regular.ttf
+cutdaejang/resources/fonts/무료글씨체_라이선스.txt

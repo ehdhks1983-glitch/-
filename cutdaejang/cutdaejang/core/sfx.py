@@ -20,7 +20,8 @@ from typing import List, Optional
 from ..spec import Sfx, TimelineSpec
 from ..utils import ffmpeg as ff
 
-SFX_DIR = Path(__file__).resolve().parents[2] / "resources" / "sfx"
+from ..config import resources_dir as _res_dir
+SFX_DIR = _res_dir() / "sfx"
 
 # 이름 → (파일명, ffmpeg 합성 필터)
 _SYNTH = {

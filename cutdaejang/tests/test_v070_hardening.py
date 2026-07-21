@@ -55,3 +55,22 @@ def test_readme_and_init_are_mp4_only():
     readme = open("README.md", encoding="utf-8").read()
     assert "CapCut 쇼츠·영상 조립 자동화" not in readme
     assert "--outputs mp4,draft" not in readme  # draft를 지원 기능으로 안내 금지
+
+
+def test_resources_bundled_in_package():
+    """v0.70: 리소스가 패키지 안에 있어 wheel/zip 모두에서 찾을 수 있다."""
+    from cutdaejang import config
+
+    rd = config.resources_dir()
+    assert rd.name == "resources" and rd.parent.name == "cutdaejang"
+    assert (rd / "fonts" / "Pretendard-ExtraBold.ttf").is_file()
+    # pyproject에 리소스가 패키지 데이터로 선언되어 있어야 wheel에 포함된다
+    pj = open("pyproject.toml", encoding="utf-8").read()
+    assert "package-data" in pj and "resources/fonts/*.ttf" in pj
+
+
+def test_key_storage_docs_are_honest():
+    """v0.70: 가이드가 키 평문 저장 사실을 정확히 안내(‘저장 안됨’ 문구 제거)."""
+    guide = open("docs/카페가이드.txt", encoding="utf-8").read()
+    assert "키는 저장되지 않습니다" not in guide
+    assert "평문으로 저장" in guide or "평문 저장" in guide

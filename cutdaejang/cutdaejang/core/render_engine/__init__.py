@@ -21,7 +21,8 @@ from ...utils.png import bottom_gradient_overlay_png
 from . import ass_writer, audio_assembler, ffmpeg_composer
 from .ffmpeg_composer import RenderOptions
 
-DEFAULT_FONTS_DIR = str(Path(__file__).resolve().parents[3] / "resources" / "fonts")
+from ...config import resources_dir as _res_dir
+DEFAULT_FONTS_DIR = str(_res_dir() / "fonts")  # zip·wheel 모두 대응 (v0.70)
 SYNC_TOLERANCE_US = 50_000  # ±50ms (기획안 §5.5-4)
 
 
