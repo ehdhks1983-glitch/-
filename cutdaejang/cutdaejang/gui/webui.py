@@ -4189,6 +4189,9 @@ _HTML = """<!doctype html>
 <script>
 let currentJob = null, timer = null;
 const $ = id => document.getElementById(id);
+// 🔒 XSS 방어 (v0.70) — 제목·AI응답·경로 등 신뢰할 수 없는 값을 innerHTML에 넣기 전 이스케이프
+const escHtml = s => String(s==null?'':s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STAGE_KO = {script:'대본 생성', tts:'목소리 합성(TTS)', background:'배경 준비',
                   timeline:'타임라인 계산', render:'영상 렌더링',
                   review:'대본 검토 대기', done:'완료',
@@ -4709,7 +4712,7 @@ function renderSubRows(){
       `<input type="checkbox" class="keepchk" ${dropped?'':'checked'} title="이 구간을 쇼츠에 넣기" onchange="window._subs[${i}].keep=this.checked; renderSubRows(); updateKeepInfo()">`+
       `<button class="ghost" title="이 줄부터 재생" onclick="seekCut(${sub.start_us})">▶</button>`+
       `<span class="hint" style="min-width:50px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
-      `<input type="text" style="flex:1" value="${(sub.text||'').replace(/"/g,'&quot;')}" onfocus="pauseCut()" oninput="window._subs[${i}].text=this.value">`+
+      `<input type="text" style="flex:1" value="${escHtml(sub.text||'')}" onfocus="pauseCut()" oninput="window._subs[${i}].text=this.value">`+
       `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆</button>`+
       `<button class="ghost" title="이 줄을 둘로 나누기" onclick="splitSub(${i})">✂</button>`+
       `<button class="ghost" title="자막+영상 구간 통째 삭제 (브루식 — 체크박스로 복구)" onclick="dropSeg(${i})">🗑</button>`+
@@ -5640,9 +5643,9 @@ function renderKit(data){
   const th = kit.threads || {};
   $('kitThreads').value = th.post
     ? (th.post + (th.topic ? (NL + NL + '토픽 태그: ' + th.topic) : '')) : '';
-  $('kitKeywords').innerHTML = '<b>🔑 키워드 10:</b> ' + (kit.keywords || []).join(' · ');
-  $('kitCategory').innerHTML = '<b>📂 카테고리:</b> ' + (kit.category || '') +
-    (kit.category_reason ? (' — ' + kit.category_reason) : '');
+  $('kitKeywords').innerHTML = '<b>🔑 키워드 10:</b> ' + escHtml((kit.keywords || []).join(' · '));
+  $('kitCategory').innerHTML = '<b>📂 카테고리:</b> ' + escHtml(kit.category || '') +
+    (kit.category_reason ? (' — ' + escHtml(kit.category_reason)) : '');
   $('kitChecklist').textContent = (kit.checklist || []).map(c => '□ ' + c)
     .join(String.fromCharCode(10));
   $('kitPath').textContent = data.path
@@ -6472,7 +6475,7 @@ async function poll(){
       $('player').src = '/video/' + job.id + '?t=' + Date.now() + '#t=0.1';
       if(job.mp4s && job.mp4s.length > 1){
         $('outPaths').innerHTML = '🎬 쇼츠 ' + job.mp4s.length + '개 완성:<br>' +
-          job.mp4s.map((p,i)=>('  '+(i+1)+') '+p)).join('<br>') +
+          job.mp4s.map((p,i)=>('  '+(i+1)+') '+escHtml(p))).join('<br>') +
           '<br><span class="hint">(위 플레이어는 1번 쇼츠. 나머지는 [📂 폴더 열기]에서 확인)</span>';
       } else {
         $('outPaths').textContent = 'mp4: ' + job.mp4;
@@ -6502,8 +6505,8 @@ function renderHistory(rows){
       r.has_mp4 ? `<button class="ghost" onclick="kitHist('${r.id}')" title="유튜브 업로드 문구(제목·태그·설명) 만들기">📦 업로드 키트</button>` : '',
       r.has_spec ? `<button class="ghost" onclick="regen('${r.id}')" title="저장된 설계로 mp4 재렌더">♻ 재생성</button>` : '',
     ].join(' ');
-    tr.innerHTML = `<td>${(r.created_at||'').replace('T',' ').slice(5,16)}</td>
-      <td>${r.title||r.id}</td><td>${PROV_KO[r.tts_provider]||'-'}</td>
+    tr.innerHTML = `<td>${escHtml((r.created_at||'').replace('T',' ').slice(5,16))}</td>
+      <td>${escHtml(r.title||r.id)}</td><td>${escHtml(PROV_KO[r.tts_provider]||'-')}</td>
       <td>${r.status==='ok'?'<span class="ok-badge">완료</span>':r.status}</td>
       <td style="white-space:nowrap">${btns}</td>`;
     tb.appendChild(tr);

@@ -1568,3 +1568,13 @@ def test_v070_csrf_origin_guard(server):
     assert post("/api/keys", {"Origin": f"http://127.0.0.1:{port}"}) != 403
     # Origin 없음(우리 화면 fetch가 헤더 안 붙이는 경우) → 통과
     assert post("/api/keys", {}) != 403
+
+
+def test_v070_xss_escape_applied(server):
+    """v0.70: 신뢰불가 값(제목·경로·키트)이 escHtml로 이스케이프되어 innerHTML에 들어간다."""
+    html = _get(server, "/").read().decode("utf-8")
+    assert "const escHtml" in html                       # 헬퍼 정의
+    assert "escHtml(r.title||r.id)" in html              # 히스토리 제목
+    assert "escHtml(p)" in html                          # 출력 경로
+    assert "escHtml((kit.keywords || []).join" in html   # 업로드 키트 키워드
+    assert "escHtml(sub.text||'')" in html               # 자막 텍스트
