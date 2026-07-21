@@ -1455,3 +1455,51 @@ def test_v066_narr_eleven_panel(server):
     # 공용 렌더러 — 두 패널이 같은 함수를 쓴다
     assert html.count("browseEleven(el, 'elevenBrowseState'") == 1
     assert html.count("browseEleven(el, 'narrBrowseState'") == 1
+
+
+def test_v067_eleven_favorites(server, monkeypatch):
+    """v0.67: ⭐ 성우 즐겨찾기 저장/해제 + 목록 응답에 favs + 지난 성우 기억."""
+    import os as _os
+
+    from cutdaejang.core import tts_engine as te
+
+    html = _get(server, "/").read().decode("utf-8")
+    assert html.count('id="elevenFavBtn"') == 1
+    assert html.count('id="narrFavBtn"') == 1
+
+    # 즐겨찾기 켜기 → 저장 확인
+    d = _post(server, "/api/eleven_fav", {"voice_id": "v_fav1", "on": True})
+    assert d["ok"] and d["favs"] == ["v_fav1"]
+    d = _post(server, "/api/eleven_fav", {"voice_id": "v_fav2", "on": True})
+    assert d["favs"] == ["v_fav1", "v_fav2"]
+
+    # 목록 응답에 favs가 실려 온다 (키 유무와 무관)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_ok")
+    monkeypatch.setattr(te, "list_elevenlabs_voices",
+                        lambda api_key=None: [{"voice_id": "v_fav1", "name": "A",
+                                               "category": "premade"}])
+    r = _post(server, "/api/eleven_voices", {"refresh": True})
+    assert r["favs"] == ["v_fav1", "v_fav2"]
+
+    # 끄기 → 목록에서 빠짐
+    d = _post(server, "/api/eleven_fav", {"voice_id": "v_fav1", "on": False})
+    assert d["favs"] == ["v_fav2"]
+
+    # 정리
+    _post(server, "/api/eleven_fav", {"voice_id": "v_fav2", "on": False})
+    _post(server, "/api/keys", {"action": "clear"})
+    assert not _os.environ.get("ELEVENLABS_API_KEY")
+
+
+def test_v067_gen_voice_memory(server):
+    """v0.67: 제작에 쓴 일레븐랩스 성우가 ui.gen_eleven_voice로 기억된다."""
+    from cutdaejang import config
+    from cutdaejang.gui import webui as w
+
+    w._apply_bg_style({"tts_provider": "elevenlabs", "voice": "vid_memory1"},
+                      config.load_settings())
+    assert config.load_settings()["ui"].get("gen_eleven_voice") == "vid_memory1"
+    # 다른 제공자는 건드리지 않는다
+    w._apply_bg_style({"tts_provider": "gemini", "voice": "Kore"},
+                      config.load_settings())
+    assert config.load_settings()["ui"].get("gen_eleven_voice") == "vid_memory1"

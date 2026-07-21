@@ -392,6 +392,8 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
             over_ui["gen_target_sec"] = max(10, min(600, int(params["target_sec"])))
         except (TypeError, ValueError):
             pass
+    if params.get("tts_provider") == "elevenlabs" and (params.get("voice") or "").strip():
+        over_ui["gen_eleven_voice"] = str(params["voice"]).strip()[:80]  # 🎙 지난 성우 기억 (v0.67)
     if not over and not over_sub and not over_sfx and not over_ui:
         return settings
     save = {}
@@ -1969,6 +1971,20 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"voices": rows})
             except Exception as e:
                 self._send_json({"voices": [], "error": str(e)[:300]})
+        elif path == "/api/eleven_fav":  # ⭐ 성우 즐겨찾기 저장/해제 (v0.67)
+            vid = str(params.get("voice_id") or "").strip()[:80]
+            if not vid:
+                self._send_json({"error": "voice_id가 없습니다"}, 400)
+                return
+            favs = [str(x) for x in (config.load_settings()["tts"].get("eleven_favs") or [])]
+            favs = [x for x in favs if x != vid]
+            if params.get("on"):
+                favs.append(vid)
+            try:
+                config.save_settings_replace("tts.eleven_favs", favs[-30:])
+                self._send_json({"ok": True, "favs": favs[-30:]})
+            except OSError as e:
+                self._send_json({"error": f"저장 실패: {e}"}, 500)
         elif path == "/api/eleven_add":  # 🇰🇷 성우 내 계정에 담기 (v0.65)
             try:
                 vid = tts_engine.add_shared_voice(
@@ -2520,22 +2536,23 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _eleven_voices(self, params: Optional[dict] = None) -> None:
         """내 ElevenLabs 계정 보이스 목록 — 10분 캐시 (v0.46 성우 보이스 선택)."""
+        favs = [str(x) for x in (config.load_settings()["tts"].get("eleven_favs") or [])]
         if not os.environ.get("ELEVENLABS_API_KEY"):
-            self._send_json({"voices": [], "no_key": True})
+            self._send_json({"voices": [], "no_key": True, "favs": favs})
             return
         if (params or {}).get("refresh"):  # 🔄 다시 불러오기 — 캐시 버리고 새로 (v0.64.1)
             type(self.server)._eleven_cache = None
         now = time.time()
         cache = getattr(type(self.server), "_eleven_cache", None)
         if cache and now - cache[0] < 600:
-            self._send_json({"voices": cache[1]})
+            self._send_json({"voices": cache[1], "favs": favs})
             return
         try:
             voices = tts_engine.list_elevenlabs_voices()
             type(self.server)._eleven_cache = (now, voices)
-            self._send_json({"voices": voices})
+            self._send_json({"voices": voices, "favs": favs})
         except Exception as e:  # 키 거부·네트워크 문제 — 사유를 화면까지 (v0.64.1)
-            self._send_json({"voices": [], "error": str(e)[:300]})
+            self._send_json({"voices": [], "error": str(e)[:300], "favs": favs})
 
     def _preview(self, params: dict) -> None:
         _apply_keys(params)
@@ -2922,7 +2939,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.66)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.67)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3105,7 +3122,7 @@ _HTML = """<!doctype html>
       <div class="row" style="margin-top:8px">
         <div>
           <label>목소리(보이스)</label>
-          <select id="narrVoiceSel"></select>
+          <select id="narrVoiceSel" onchange="updateFavBtns()"></select>
         </div>
         <div>
           <label>말투 스타일</label>
@@ -3113,6 +3130,7 @@ _HTML = """<!doctype html>
         </div>
         <div style="display:flex;align-items:flex-end;gap:6px">
           <button class="ghost" style="margin-bottom:1px" onclick="previewNarrVoice(event)">🔊 미리듣기</button>
+          <button class="ghost" id="narrFavBtn" style="margin-bottom:1px" title="이 일레븐랩스 성우를 즐겨찾기 — 목록 맨 위 고정" onclick="toggleElevenFav(event,'narr')">☆</button>
           <button class="ghost" style="margin-bottom:1px" title="일레븐랩스 성우 목록 새로고침" onclick="loadElevenVoices(true);return false">🔄</button>
         </div>
       </div>
@@ -3482,10 +3500,11 @@ _HTML = """<!doctype html>
       <div class="row">
         <div>
           <label>일레븐랩스 보이스 <span class="hint">— 내 계정에 담긴 보이스 그대로</span></label>
-          <select id="elevenVoiceSel"></select>
+          <select id="elevenVoiceSel" onchange="updateFavBtns()"></select>
         </div>
         <div style="display:flex;align-items:flex-end;gap:6px">
           <button class="ghost" style="margin-bottom:1px" onclick="previewElevenVoice(event)">🔊 미리듣기</button>
+          <button class="ghost" id="elevenFavBtn" style="margin-bottom:1px" title="이 성우를 즐겨찾기 — 목록 맨 위 고정, 다음에도 기억" onclick="toggleElevenFav(event,'gen')">☆ 즐겨찾기</button>
           <button class="ghost" style="margin-bottom:1px" onclick="loadElevenVoices(true);return false">🔄 다시 불러오기</button>
         </div>
       </div>
@@ -4138,20 +4157,20 @@ async function loadElevenVoices(force){
       }
       return;
     }
-    const sel = $('elevenVoiceSel');
-    sel.innerHTML = '';
-    for(const v of voices){
-      const tag = v.category === 'cloned' ? ' (내 클론)' : '';
-      sel.add(new Option(v.name + tag, v.voice_id));
-      // 내레이션 보이스 목록에도 추가 (편집·사진 모드)
-      const nv = $('narrVoiceSel');
-      if(nv && ![...nv.options].some(o => o.value === 'el:' + v.voice_id))
-        nv.add(new Option('🎙 ' + v.name + ' (일레븐랩스)', 'el:' + v.voice_id));
-    }
+    window._elevenData = voices;                       // ⭐ 즐겨찾기 렌더용 캐시 (v0.67)
+    window._elevenFavs = data.favs || [];
+    renderElevenLists();
     // 기억된 내레이션 보이스가 일레븐랩스면 목록이 채워진 지금 복원
     if(window._wantNarrVoice && [...$('narrVoiceSel').options].some(o => o.value === window._wantNarrVoice)){
       $('narrVoiceSel').value = window._wantNarrVoice;
       window._wantNarrVoice = '';
+    }
+    // 🤖 지난번 제작에 쓴 성우 복원 (v0.67 — 목록이 채워진 뒤에만 가능)
+    const sel = $('elevenVoiceSel');
+    if(window._wantGenElevenVoice){
+      if([...sel.options].some(o => o.value === window._wantGenElevenVoice))
+        sel.value = window._wantGenElevenVoice;
+      window._wantGenElevenVoice = '';
     }
     // 🇰🇷 방금 담은 성우가 있으면 바로 선택 (v0.65) — 내레이션 목록에도 (v0.66)
     if(window._wantElevenVoice){
@@ -4161,13 +4180,64 @@ async function loadElevenVoices(force){
       if(nv2 && [...nv2.options].some(o => o.value === wantNv)) nv2.value = wantNv;
       window._wantElevenVoice = '';
     }
-    if(st) st.textContent = '✅ 성우 ' + voices.length + '명 불러왔어요 — 위에서 골라 🔊 미리듣기로 확인하세요';
-    if(st2) st2.textContent = '🎙 일레븐랩스 성우 ' + voices.length + '명이 보이스 목록에 들어와 있어요 — 이름 뒤 (일레븐랩스) 표기';
+    updateFavBtns();
+    if(st) st.textContent = '✅ 성우 ' + voices.length + '명 — ★ 즐겨찾기는 맨 위로, (담은 성우)는 Starter부터 재생돼요';
+    if(st2) st2.textContent = '🎙 일레븐랩스 성우 ' + voices.length + '명이 보이스 목록에 들어와 있어요 — ★는 즐겨찾기';
   } catch(e){
     window._elevenLoaded = false;
     if(st) st.textContent = '⚠ 서버와 통신 실패 — 컷대장 콘솔 창이 켜져 있는지 확인하고 🔄 다시 불러오기를 눌러주세요';
     if(st2) st2.textContent = '⚠ 서버와 통신 실패 — 🔄 를 눌러주세요';
   }
+}
+
+// ── ⭐ 성우 즐겨찾기 (v0.67) — ★는 맨 위, 저장돼서 다음에도 유지 ──
+function renderElevenLists(){
+  const voices = window._elevenData || [], favs = window._elevenFavs || [];
+  const sel = $('elevenVoiceSel'), nv = $('narrVoiceSel');
+  if(!voices.length || !sel) return;
+  const rank = v => favs.includes(v.voice_id) ? 0 : (v.category === 'premade' ? 1 : 2);
+  const sorted = [...voices].sort((a, b) => rank(a) - rank(b)
+    || favs.indexOf(a.voice_id) - favs.indexOf(b.voice_id));
+  const keepSel = sel.value, keepNv = nv ? nv.value : '';
+  sel.innerHTML = '';
+  if(nv) [...nv.options].filter(o => o.value.indexOf('el:') === 0).forEach(o => o.remove());
+  for(const v of sorted){
+    const star = favs.includes(v.voice_id) ? '★ ' : '';
+    const tag = v.category === 'cloned' ? ' (내 클론)'
+              : (v.category !== 'premade' ? ' (담은 성우)' : '');
+    sel.add(new Option(star + v.name + tag, v.voice_id));
+    if(nv) nv.add(new Option('🎙 ' + star + v.name + tag + ' (일레븐랩스)', 'el:' + v.voice_id));
+  }
+  if(keepSel && [...sel.options].some(o => o.value === keepSel)) sel.value = keepSel;
+  if(nv && keepNv && [...nv.options].some(o => o.value === keepNv)) nv.value = keepNv;
+}
+function updateFavBtns(){
+  const favs = window._elevenFavs || [];
+  const b1 = $('elevenFavBtn'), b2 = $('narrFavBtn');
+  if(b1){
+    const v = ($('elevenVoiceSel')||{}).value || '';
+    b1.textContent = favs.includes(v) ? '★ 즐겨찾기됨' : '☆ 즐겨찾기';
+  }
+  if(b2){
+    const nvv = ($('narrVoiceSel')||{}).value || '';
+    b2.textContent = (nvv.indexOf('el:') === 0 && favs.includes(nvv.slice(3))) ? '★' : '☆';
+  }
+}
+async function toggleElevenFav(ev, which){
+  ev.preventDefault();
+  const raw = which === 'narr' ? (($('narrVoiceSel')||{}).value || '') : (($('elevenVoiceSel')||{}).value || '');
+  const vid = which === 'narr' ? (raw.indexOf('el:') === 0 ? raw.slice(3) : '') : raw;
+  if(!vid){ alert('일레븐랩스 성우를 고른 상태에서 ★를 눌러주세요'); return; }
+  const favs = window._elevenFavs || [];
+  const on = !favs.includes(vid);
+  try{
+    const d = await (await fetch('/api/eleven_fav', {method:'POST',
+      body: JSON.stringify({voice_id: vid, on})})).json();
+    if(d.error){ alert(d.error); return; }
+    window._elevenFavs = d.favs || [];
+    renderElevenLists();
+    updateFavBtns();
+  } catch(e){ alert('서버 통신 실패 — 다시 시도해주세요'); }
 }
 
 // ── 🇰🇷 한국어 성우 담기 (v0.65) — 라이브러리 목록·미리듣기·➕ 담기 ──
@@ -6169,6 +6239,8 @@ async function poll(){
     const glen = ((state.settings || {}).ui || {}).gen_target_sec;
     if(glen && $('genLenSel') && [...$('genLenSel').options].some(o => +o.value === +glen))
       $('genLenSel').value = String(glen);
+    // 🎙 지난 제작에 쓴 일레븐랩스 성우 — 목록이 채워지면 자동 선택 (v0.67)
+    window._wantGenElevenVoice = ((state.settings || {}).ui || {}).gen_eleven_voice || '';
     // v0.51: 그림 방식·최대 장수 복원
     const scm = ((state.settings || {}).bg || {}).scene_mode || 'auto';
     if($('genSceneMode')) $('genSceneMode').value = scm;
