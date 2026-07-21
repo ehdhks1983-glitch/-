@@ -95,3 +95,19 @@ def test_synth_402_paid_plan_is_nonretryable(monkeypatch):
         p.synthesize("안녕하세요", "shared_voice_id", "/tmp/x.mp3")
     msg = str(ei.value)
     assert "Starter" in msg and "무료" in msg
+
+
+def test_synth_402_key_quota_message(monkeypatch):
+    """v0.65.1: 키 크레딧 한도(quota of 0)는 유료 안내가 아니라 새 키 안내."""
+    def fake_urlopen(req, timeout=0):
+        raise urllib.error.HTTPError(
+            req.full_url, 402, "payment", None,
+            io.BytesIO(b'{"detail":{"type":"invalid_request","code":"quota_exceeded",'
+                       b'"message":"This request exceeds your API key quota of 0."}}'))
+
+    monkeypatch.setattr(te.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_test")
+    with pytest.raises(te.TTSNonRetryable) as ei:
+        te.ElevenLabsTTS().synthesize("안녕", "premade_id", "/tmp/x.mp3")
+    msg = str(ei.value)
+    assert "크레딧" in msg and "새 키" in msg and "Starter" not in msg

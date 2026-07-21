@@ -3342,7 +3342,7 @@ _HTML = """<!doctype html>
     </div>
 
     <div style="margin-top:10px;padding:10px 12px;border:1px solid #2c3350;border-radius:10px">
-      <b style="font-size:14px">방법 B — 유료 · 간편 (ElevenLabs, 월 $5)</b>
+      <b style="font-size:14px">방법 B — 유료 · 간편 (ElevenLabs, 월 $6)</b>
       <span class="hint">설치 없이 인터넷만 있으면 됨. 품질 안정적</span>
       <div class="row" style="margin-top:6px">
         <div>
@@ -3361,9 +3361,9 @@ _HTML = """<!doctype html>
           <button class="ghost" style="margin-bottom:1px" onclick="previewMyVoice(event,'elevenlabs')">🔊 미리듣기</button>
         </div>
       </div>
-      <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장됩니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $5)</b>부터 지원.</div>
+      <div class="hint">조용한 곳에서 또박또박 1~3분 읽은 녹음이면 충분해요. 한 번 등록하면 저장됩니다. ⚠ 클로닝은 ElevenLabs <b>유료 구독(Starter, 월 $6)</b>부터 지원.</div>
       <div class="hint" style="margin-top:6px;line-height:1.7">🧭 <b>처음이라면 이 순서대로</b>:<br>
-        ① <a href="https://elevenlabs.io" target="_blank" style="color:#7a9bff">elevenlabs.io</a> 가입 → 오른쪽 위 내 계정 → <b>Subscription</b>에서 Starter(월 $5) 구독<br>
+        ① <a href="https://elevenlabs.io" target="_blank" style="color:#7a9bff">elevenlabs.io</a> 가입 → 오른쪽 위 내 계정 → <b>Subscription</b>에서 Starter(월 $6) 구독<br>
         ② <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" style="color:#7a9bff">API Keys 페이지</a>에서 <b>Create API Key</b> → 복사해 위의 「ElevenLabs API 키」 칸에 붙여넣기<br>
         ③ [📁]로 내 녹음 파일 선택 → <b>[등록]</b> → 🔊 미리듣기로 확인 (녹음 없이 <b>성우 목소리</b>만 쓰려면 ①②만 하면 돼요 —
         <a href="https://elevenlabs.io/app/voice-library" target="_blank" style="color:#7a9bff">Voice Library</a>에서 마음에 드는 보이스를 Add하면 컷대장 목록에 나타납니다)</div>
@@ -4168,7 +4168,7 @@ async function onElevenBrowse(el){
       window._elevenBrowseLoaded = false;
       return;
     }
-    st.textContent = '▶ 듣고 [➕ 담기] — 담기는 무료예요. 단, 담은 성우로 영상 제작은 Starter(월 $5)부터 — 무료 플랜은 기본 성우(영어 이름)나 ⭐ AI 성우로 만들 수 있어요';
+    st.textContent = '▶ 듣고 [➕ 담기] — 담기는 무료예요. 단, 담은 성우로 영상 제작은 Starter(월 $6)부터 — 무료 플랜은 기본 성우(영어 이름)나 ⭐ AI 성우로 만들 수 있어요';
     list.innerHTML = '';
     for(const v of rows){
       const row = document.createElement('div');
