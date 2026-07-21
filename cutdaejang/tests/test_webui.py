@@ -1384,3 +1384,62 @@ def test_v0641_eleven_key_check_and_list_feedback(server, monkeypatch):
     assert not _os.environ.get("ELEVENLABS_API_KEY")
     r = _post(server, "/api/eleven_voices", {})
     assert r.get("no_key") is True and r["voices"] == []
+
+
+def test_v065_browse_and_add_korean_voices(server, monkeypatch):
+    """v0.65: 🇰🇷 라이브러리 조회 + ➕ 담기 → 계정 목록 캐시 갱신."""
+    import os as _os
+
+    from cutdaejang.core import tts_engine as te
+
+    # ── 화면: 담기 패널이 실려 있어야 한다 ──
+    html = _get(server, "/").read().decode("utf-8")
+    assert html.count('id="elevenBrowse"') == 1
+    assert "한국어 성우 담기" in html
+
+    # ── 조회: tts_engine 결과를 그대로 내려준다 ──
+    lib = [{"voice_id": "kv1", "owner_id": "own1", "name": "Anna Kim",
+            "desc": "female · narration", "preview_url": "http://x/p.mp3",
+            "free_ok": True}]
+    monkeypatch.setattr(te, "list_shared_voices", lambda language="ko": lib)
+    r = _post(server, "/api/eleven_browse", {})
+    assert r["voices"] == lib
+
+    # 조회 실패도 조용히 비우지 않고 사유 전달
+    def _boom(language="ko"):
+        raise te.TTSError("성우 라이브러리 조회 실패 401: nope")
+
+    monkeypatch.setattr(te, "list_shared_voices", _boom)
+    r = _post(server, "/api/eleven_browse", {})
+    assert r["voices"] == [] and "401" in r["error"]
+
+    # ── 담기: 성공 시 계정 보이스 캐시가 버려져 다음 조회에 새 성우가 보인다 ──
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_ok")
+    base = [{"voice_id": "v1", "name": "Adam", "category": "premade"}]
+    monkeypatch.setattr(te, "list_elevenlabs_voices", lambda api_key=None: list(base))
+    r = _post(server, "/api/eleven_voices", {"refresh": True})
+    assert len(r["voices"]) == 1                     # 캐시 프라임
+
+    monkeypatch.setattr(
+        te, "add_shared_voice", lambda o, v, n, api_key=None: "kv1")
+    base.append({"voice_id": "kv1", "name": "Anna Kim", "category": "shared"})
+    d = _post(server, "/api/eleven_add",
+              {"owner_id": "own1", "voice_id": "kv1", "name": "Anna Kim"})
+    assert d["ok"] and d["voice_id"] == "kv1"
+    r = _post(server, "/api/eleven_voices", {})      # refresh 없이도 캐시 무효화됨
+    assert [v["voice_id"] for v in r["voices"]] == ["v1", "kv1"]
+
+    # 담기 실패(슬롯 초과 등)는 400 + 사유
+    def _full(o, v, n, api_key=None):
+        raise te.TTSError("보이스 슬롯이 가득 찼어요 — ...")
+
+    monkeypatch.setattr(te, "add_shared_voice", _full)
+    try:
+        _post(server, "/api/eleven_add", {"owner_id": "o", "voice_id": "v", "name": "n"})
+        raised = False
+    except Exception:
+        raised = True
+    assert raised
+
+    _post(server, "/api/keys", {"action": "clear"})
+    assert not _os.environ.get("ELEVENLABS_API_KEY")

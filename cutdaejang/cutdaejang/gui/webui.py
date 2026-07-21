@@ -1962,6 +1962,22 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"lines": [pronounce_ko(l) for l in params.get("lines", [])]})
         elif path == "/api/eleven_voices":  # 🎙 일레븐랩스 계정 보이스 목록 (v0.46)
             self._eleven_voices(params)
+        elif path == "/api/eleven_browse":  # 🇰🇷 라이브러리 한국어 성우 찾아보기 (v0.65)
+            try:
+                rows = tts_engine.list_shared_voices(
+                    language=str(params.get("language") or "ko")[:8])
+                self._send_json({"voices": rows})
+            except Exception as e:
+                self._send_json({"voices": [], "error": str(e)[:300]})
+        elif path == "/api/eleven_add":  # 🇰🇷 성우 내 계정에 담기 (v0.65)
+            try:
+                vid = tts_engine.add_shared_voice(
+                    str(params.get("owner_id") or ""), str(params.get("voice_id") or ""),
+                    str(params.get("name") or ""))
+                type(self.server)._eleven_cache = None   # 담았으니 계정 목록 캐시 갱신
+                self._send_json({"ok": True, "voice_id": vid})
+            except Exception as e:
+                self._send_json({"error": str(e)[:300]}, 400)
         elif path == "/api/scene_regen":  # 🖼 장면 검토 — 한 장면만 다시 (v0.50)
             job = _get_job(params.get("job_id", ""))
             if not job or job.get("status") != "review_scenes":
@@ -2906,7 +2922,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.64)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.65)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3467,8 +3483,12 @@ _HTML = """<!doctype html>
         </div>
       </div>
       <div class="hint" id="elevenListState"></div>
-      <div class="hint">elevenlabs.io의 <b>Voices</b>에서 마음에 드는 보이스를 내 계정에 담으면(Add)
-        여기 목록에 나타나요 (10분 정도 뒤 반영, 클론 보이스 포함). 글자 수 과금 — 60초 쇼츠 1편 ≈ 300자.</div>
+      <details id="elevenBrowse" class="opt" ontoggle="onElevenBrowse(this)">
+        <summary>🇰🇷 한국어 성우 담기 <span class="hint">— 사이트 안 가고 여기서 듣고 ➕ 한 번이면 추가</span></summary>
+        <div class="hint" id="elevenBrowseState" style="margin-top:6px"></div>
+        <div id="elevenBrowseList" style="max-height:300px;overflow-y:auto;margin-top:6px"></div>
+      </details>
+      <div class="hint">글자 수 과금 — 60초 쇼츠 1편 ≈ 300자. 클론 보이스·직접 담은 보이스도 위 목록에 같이 나와요.</div>
     </div>
 
     <div class="steplabel" style="margin-top:20px"><span class="stepnum">3</span>꾸미기 <span class="hint">— 전부 선택사항. 필요한 줄만 눌러서 펼치세요</span></div>
@@ -4120,10 +4140,86 @@ async function loadElevenVoices(force){
       $('narrVoiceSel').value = window._wantNarrVoice;
       window._wantNarrVoice = '';
     }
+    // 🇰🇷 방금 담은 성우가 있으면 바로 선택 (v0.65)
+    if(window._wantElevenVoice && [...sel.options].some(o => o.value === window._wantElevenVoice)){
+      sel.value = window._wantElevenVoice;
+      window._wantElevenVoice = '';
+    }
     if(st) st.textContent = '✅ 성우 ' + voices.length + '명 불러왔어요 — 위에서 골라 🔊 미리듣기로 확인하세요';
   } catch(e){
     window._elevenLoaded = false;
     if(st) st.textContent = '⚠ 서버와 통신 실패 — 컷대장 콘솔 창이 켜져 있는지 확인하고 🔄 다시 불러오기를 눌러주세요';
+  }
+}
+
+// ── 🇰🇷 한국어 성우 담기 (v0.65) — 라이브러리 목록·미리듣기·➕ 담기 ──
+async function onElevenBrowse(el){
+  if(!el.open || window._elevenBrowseLoaded) return;
+  window._elevenBrowseLoaded = true;
+  const st = $('elevenBrowseState'), list = $('elevenBrowseList');
+  st.textContent = '⏳ 한국어 성우 목록 불러오는 중...';
+  try{
+    const data = await (await fetch('/api/eleven_browse', {method:'POST', body:'{}'})).json();
+    const rows = data.voices || [];
+    if(!rows.length){
+      st.textContent = data.error
+        ? '⚠ 못 불러왔어요: ' + data.error
+        : '⚠ 지금은 라이브러리 응답이 비어 있어요 — 잠시 후 다시 열어보세요';
+      window._elevenBrowseLoaded = false;
+      return;
+    }
+    st.textContent = '▶ 로 들어보고 [➕ 담기] — 담으면 위 보이스 목록에 바로 추가돼요 (무료 플랜은 슬롯 3개 안팎)';
+    list.innerHTML = '';
+    for(const v of rows){
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #232838';
+      const play = document.createElement('button');
+      play.className = 'ghost'; play.textContent = '▶';
+      play.onclick = (e) => { e.preventDefault(); playBrowsePreview(v.preview_url, play); };
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0';
+      const nm = document.createElement('div'); nm.textContent = v.name; nm.style.fontWeight = '700';
+      const ds = document.createElement('div'); ds.className = 'hint';
+      ds.textContent = (v.free_ok ? '무료 OK' : '유료 전용') + (v.desc ? ' · ' + v.desc : '');
+      info.appendChild(nm); info.appendChild(ds);
+      const add = document.createElement('button');
+      add.className = 'ghost'; add.textContent = '➕ 담기';
+      add.onclick = (e) => { e.preventDefault(); addBrowseVoice(v, add); };
+      row.appendChild(play); row.appendChild(info); row.appendChild(add);
+      list.appendChild(row);
+    }
+  } catch(e){
+    st.textContent = '⚠ 서버 통신 실패 — 접었다 다시 열어보세요';
+    window._elevenBrowseLoaded = false;
+  }
+}
+function playBrowsePreview(url, btn){
+  if(window._browseAudio){
+    window._browseAudio.pause();
+    if(window._browseBtn) window._browseBtn.textContent = '▶';
+    const same = window._browseBtn === btn;
+    window._browseAudio = null; window._browseBtn = null;
+    if(same) return;                       // 같은 버튼 다시 누르면 정지만
+  }
+  if(!url){ alert('이 성우는 미리듣기 샘플이 없어요 — 담은 뒤 위의 🔊 미리듣기로 들어보세요'); return; }
+  const a = new Audio(url);
+  a.onended = () => { btn.textContent = '▶'; window._browseAudio = null; window._browseBtn = null; };
+  a.onerror = () => { btn.textContent = '▶'; };
+  a.play(); btn.textContent = '⏹';
+  window._browseAudio = a; window._browseBtn = btn;
+}
+async function addBrowseVoice(v, btn){
+  btn.disabled = true; btn.textContent = '담는 중...';
+  try{
+    const d = await (await fetch('/api/eleven_add', {method:'POST', body: JSON.stringify(
+      {owner_id: v.owner_id, voice_id: v.voice_id, name: v.name})})).json();
+    if(d.error){ btn.disabled = false; btn.textContent = '➕ 담기'; alert('⚠ ' + d.error); return; }
+    btn.textContent = '✅ 담김';
+    window._wantElevenVoice = d.voice_id || v.voice_id;   // 채워지면 자동 선택
+    loadElevenVoices(true);
+  } catch(e){
+    btn.disabled = false; btn.textContent = '➕ 담기';
+    alert('서버 통신 실패 — 다시 시도해주세요');
   }
 }
 

@@ -21,6 +21,7 @@ import random
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections import deque
@@ -297,6 +298,64 @@ def list_elevenlabs_voices(api_key: Optional[str] = None) -> list:
         for v in data.get("voices", []) if v.get("voice_id")
     ]
     return sorted(out, key=lambda v: (v["category"] != "cloned", v["name"].lower()))
+
+
+def list_shared_voices(language: str = "ko", page_size: int = 50,
+                       api_key: Optional[str] = None) -> list:
+    """일레븐랩스 Voice Library(공유 보이스) 검색 — 한국어 성우 담기용 (v0.65).
+
+    반환: [{"voice_id","owner_id","name","desc","preview_url","free_ok"}].
+    """
+    key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
+    if not key:
+        raise TTSError("ELEVENLABS_API_KEY가 설정되어 있지 않습니다")
+    url = ("https://api.elevenlabs.io/v1/shared-voices"
+           f"?page_size={int(page_size)}&language={urllib.parse.quote(language)}")
+    req = urllib.request.Request(url, headers={"xi-api-key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise TTSError(f"성우 라이브러리 조회 실패 {e.code}: "
+                       f"{e.read().decode('utf-8', 'replace')[:200]}") from e
+    out = []
+    for v in data.get("voices", []):
+        if not (v.get("voice_id") and v.get("public_owner_id")):
+            continue
+        bits = [str(v.get(k) or "").strip()
+                for k in ("gender", "age", "use_case", "descriptive")]
+        out.append({
+            "voice_id": v["voice_id"],
+            "owner_id": v["public_owner_id"],
+            "name": str(v.get("name") or v["voice_id"]),
+            "desc": " · ".join(b for b in bits if b),
+            "preview_url": str(v.get("preview_url") or ""),
+            "free_ok": bool(v.get("free_users_allowed", True)),
+        })
+    return out
+
+
+def add_shared_voice(owner_id: str, voice_id: str, name: str,
+                     api_key: Optional[str] = None) -> str:
+    """라이브러리 보이스를 내 계정(내 음성)에 담기 — 담아야 API 목록에 나온다 (v0.65)."""
+    key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
+    if not key:
+        raise TTSError("ELEVENLABS_API_KEY가 설정되어 있지 않습니다")
+    url = (f"https://api.elevenlabs.io/v1/voices/add/"
+           f"{urllib.parse.quote(owner_id)}/{urllib.parse.quote(voice_id)}")
+    body = json.dumps({"new_name": (name or "성우")[:80]}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body, headers={"xi-api-key": key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        if "voice_limit" in detail or "maximum" in detail.lower():
+            raise TTSError("보이스 슬롯이 가득 찼어요 — elevenlabs.io 내 음성에서 "
+                           "안 쓰는 보이스를 지우거나 플랜을 올려주세요") from e
+        raise TTSError(f"보이스 담기 실패 {e.code}: {detail}") from e
+    return str(data.get("voice_id") or voice_id)
 
 
 class GPTSoVITSTTS:
