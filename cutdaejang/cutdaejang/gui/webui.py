@@ -550,6 +550,11 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         # 발화 자막이 없는 영상(화면 녹화·b-roll)은 핵심 선별을 못 함 → 완전 자동 +
         # 목표 초면 영상 전체에서 고르게 조각을 뽑아 목표 길이 몽타주로 먼저 자름
         tgt_auto = int(params.get("auto_target_sec") or 0) if params.get("auto_edit") else 0
+        # 🧠 무음 대본(v0.71): 요약이면 그 길이로 몽타주, 원본이면 몽타주 안 함(전체 유지)
+        if narr_analyze:
+            _nl_mode = params.get("narr_len") or "summary"
+            tgt_auto = max(20, min(600, int(params.get("narr_target_sec") or 60))) \
+                if _nl_mode == "summary" else 0
         if narr_file and params.get("auto_edit") and not photo_path:
             # 🎤 녹음 모드 완전 자동: 영상 전체에서 녹음 길이만큼 고르게 (v0.58)
             from ..utils import ffmpeg as _ff  # noqa: PLC0415
@@ -618,11 +623,14 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 # 🧠 무음 시연영상 등 — 화면을 직접 보고 대본을 쓴다 (v0.69)
                 try:
                     from ..core import edit_mode as _em, script_generator as _sg  # noqa: PLC0415
+                    # 이 시점 cut_us = (요약이면) 몽타주된 길이 / (원본이면) 전체 길이
                     dur_s = max(1.0, analysis.cut_us / 1e6)
-                    nfr = max(6, min(16, round(dur_s / 20)))  # 길이 비례 6~16컷
-                    _set_job(job_id, note=f"화면 {nfr}컷 분석해 대본 쓰는 중…")
+                    nfr = max(6, min(20, round(dur_s / 20)))  # 길이 비례 6~20컷
+                    n_sent = max(6, min(80, round(dur_s / 4)))  # 대본 분량을 길이에 비례 (v0.71)
+                    _set_job(job_id, note=f"화면 {nfr}컷 분석해 대본({n_sent}문장 내외) 쓰는 중…")
                     frames = _em.extract_frames_b64(analysis.cut_video, n=nfr)
-                    out = _sg.suggest_from_video(frames, transcript="", topic=narr_topic)
+                    out = _sg.suggest_from_video(frames, transcript="", topic=narr_topic,
+                                                 n_sentences=n_sent)
                     lines = [s for s in (out.get("script") or []) if s.strip()]
                     if lines:
                         script = Script(title="", sentences=lines)
@@ -698,7 +706,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             except (TypeError, ValueError):
                 auto_speed = 1.0
             multi = bool(params.get("auto_multi")) and not photo_path
-            if multi and (narr_topic or narr_file):  # 내레이션은 영상 전체 기준 → 분할과 배타
+            if multi and (narr_topic or narr_file or narr_analyze):  # 내레이션은 영상 전체 기준 → 분할과 배타
                 multi = False
                 prev = (_get_job(job_id) or {}).get("tts_warn") or ""
                 w = "ℹ 내레이션과 '여러 개로 나누기'는 함께 쓸 수 없어 1개로 만들었어요"
@@ -710,7 +718,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                                params.get("quality") or "standard", denoise)
                 return
             # 내레이션 대본은 이미 목표 길이로 새로 쓴 글 → 핵심 선별로 또 자르지 않음
-            if subs_d and tgt > 0 and not narr_topic and not narr_file:
+            # (🧠 화면분석 대본도 길이를 이미 정했으므로 재차 자르지 않음 — v0.71)
+            if subs_d and tgt > 0 and not narr_topic and not narr_file and not narr_analyze:
                 _set_job(job_id, note=f"핵심 구간 골라 {tgt}초 쇼츠 구성 중…")
                 try:
                     pick = sg.suggest_highlights(subs_d, target_sec=tgt)
@@ -2996,7 +3005,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.70)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.71)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3178,7 +3187,24 @@ _HTML = """<!doctype html>
       <input type="text" id="narrTopic" oninput="onNarrTopicInput()" placeholder="영상 주제/내용 입력 (예: 동네 라멘 맛집 소개) — 비우면 사용 안 함">
       <div class="chk" style="margin-top:6px">
         <input type="checkbox" id="narrAnalyzeChk" onchange="onNarrTopicInput()">
-        <span>🧠 <b>화면을 보고 대본 자동 작성</b> (무음·시연 영상용) — AI가 영상 장면을 분석해 위 주제에 맞춰 대본을 써요 <span class="hint">(제미나이 키 필요, 4분이면 화면 12컷 분석)</span></span>
+        <span>🧠 <b>화면을 보고 대본 자동 작성</b> (무음·시연 영상용) — AI가 영상 장면을 분석해 위 주제에 맞춰 대본을 써요 <span class="hint">(제미나이 키 필요)</span></span>
+      </div>
+      <div id="narrAnalyzeLenBox" class="hidden" style="margin:6px 0 2px 22px;padding:8px 10px;border:1px solid #2c3350;border-radius:8px">
+        <div class="chk" style="gap:14px;flex-wrap:wrap">
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+            <input type="radio" name="narrLen" value="summary" checked onchange="onNarrLenChange()"> ✂ 요약(짧게)</label>
+          <span id="narrLenSecBox">
+            길이 <select id="narrLenSec" style="width:auto;padding:4px 8px">
+              <option value="30">약 30초</option>
+              <option value="60" selected>약 1분</option>
+              <option value="120">약 2분</option>
+              <option value="180">약 3분</option>
+            </select>
+          </span>
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+            <input type="radio" name="narrLen" value="full" onchange="onNarrLenChange()"> 📼 원본 길이 그대로(전체 내레이션)</label>
+        </div>
+        <div class="hint" id="narrLenHint" style="margin-top:4px">긴 영상을 짧게 요약해요 — 8분 영상도 고른 길이로 추립니다. (원본 길이는 문장·목소리 합성이 많아 시간·API를 더 써요)</div>
       </div>
       <div class="row" style="margin-top:8px">
         <div>
@@ -4638,6 +4664,8 @@ async function startEdit(){
     denoise: $('denoiseSel').value,
     narr_topic: narrFileMode ? '' : (($('narrTopic')||{}).value||''),
     narr_analyze: !narrFileMode && !!(($('narrAnalyzeChk')||{}).checked),  // 🧠 화면 분석 대본 (v0.69)
+    narr_len: (document.querySelector("input[name=narrLen]:checked")||{}).value || 'summary',  // v0.71
+    narr_target_sec: +(($('narrLenSec')||{}).value) || 60,                 // v0.71 요약 길이
     narr_file: narrFileVal,
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
@@ -5339,10 +5367,22 @@ async function previewVoice(ev){
 
 // ── 편집 모드 내레이션 (v0.26) ──
 function onNarrTopicInput(){
+  // 🧠 화면분석 켜면 길이 옵션 노출 (v0.71)
+  const box = $('narrAnalyzeLenBox');
+  if(box) box.classList.toggle('hidden', !(($('narrAnalyzeChk')||{}).checked));
   // AI '목소리'를 얹을 때만 원본 자동 무음 (자막만 모드는 원본 소리 유지)
   if(window._origTouched) return;
-  const voiceOn = $('narrTopic').value.trim() && !(($('narrSubsOnly')||{}).checked);
+  const voiceOn = ($('narrTopic').value.trim() || (($('narrAnalyzeChk')||{}).checked))
+                  && !(($('narrSubsOnly')||{}).checked);
   $('origAudioSel').value = voiceOn ? 'mute' : 'keep';
+}
+function onNarrLenChange(){  // 요약이면 길이 선택 보이기, 원본이면 숨기기 (v0.71)
+  const full = (document.querySelector("input[name=narrLen]:checked")||{}).value === 'full';
+  const sb = $('narrLenSecBox'); if(sb) sb.style.display = full ? 'none' : '';
+  const h = $('narrLenHint');
+  if(h) h.textContent = full
+    ? '원본 8분이면 결과도 8분 — 화면 진행에 맞춰 처음부터 끝까지 내레이션을 깔아요 (문장·목소리 합성이 많아 시간·API를 더 써요).'
+    : '긴 영상을 고른 길이로 요약해요 — 8분 영상도 전체에서 고르게 추립니다.';
 }
 
 async function loadWinVoices(saved){

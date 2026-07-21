@@ -510,7 +510,7 @@ VIDEO_ANALYZE_PROMPT = """\
  "summary": "영상 내용 한두 문장 요약",
  "titles": ["유튜브 제목 후보 3개 — 짧고 후킹 있게"],
  "hooks": ["영상 위에 크게 얹을 상단 훅 문구 3개 — 1~2줄, 궁금증/숫자/이득"],
- "script": ["이 영상에 어울리는 내레이션 대본 — 화면 순서대로 진행을 설명, 한 문장씩 8~14줄, 각 24자 이내"],
+ "script": ["이 영상에 어울리는 내레이션 대본 — 화면 순서대로 진행을 설명, 한 문장씩 {n_lines}줄 내외, 각 24자 이내"],
  "hashtags": ["해시태그 5개"]
 }}
 낚시성 과장 금지. 화면에 실제로 보이는 것만 근거로. 전부 한국어.
@@ -518,11 +518,13 @@ VIDEO_ANALYZE_PROMPT = """\
 
 
 def suggest_from_video(frames_b64: list, transcript: str = "", topic: str = "",
+                       n_sentences: int = 10,
                        model: str = "gemini-2.5-flash", api_key=None) -> dict:
     """장면 캡처(+자막 텍스트/+주제 힌트)를 Gemini에 보내 제목·훅·대본·해시태그 추천.
 
     무음 영상(대사 없음)도 화면만 보고 대본을 쓴다. topic이 있으면 그 주제·맥락에
-    맞춰 대본 방향을 잡는다 (예: "블로그 글쓰기 시연").
+    맞춰 대본 방향을 잡는다 (예: "블로그 글쓰기 시연"). n_sentences로 대본 분량을
+    영상 길이·목표에 맞춘다 (짧은 요약 ~ 원본 길이 walkthrough).
     """
     import os  # noqa: PLC0415
 
@@ -532,8 +534,9 @@ def suggest_from_video(frames_b64: list, transcript: str = "", topic: str = "",
     tr = f"\n[영상 속 대사(자동 인식)]\n{transcript.strip()}" if transcript.strip() else ""
     th = (f"\n이 영상의 주제·맥락: {topic.strip()} — 이 주제에 맞춰, 화면에 보이는 진행"
           f"·시연 순서를 설명하는 대본을 써라." if topic.strip() else "")
+    n_lines = max(4, min(80, int(n_sentences)))
     prompt = VIDEO_ANALYZE_PROMPT.format(
-        with_tr="과 대사" if tr else "", topic_hint=th, transcript=tr)
+        with_tr="과 대사" if tr else "", topic_hint=th, transcript=tr, n_lines=n_lines)
     parts = [{"text": prompt}] + [
         {"inline_data": {"mime_type": "image/jpeg", "data": b64}} for b64 in frames_b64
     ]
@@ -551,7 +554,7 @@ def suggest_from_video(frames_b64: list, transcript: str = "", topic: str = "",
         "summary": str(out.get("summary", "")),
         "titles": [str(x) for x in out.get("titles", [])][:5],
         "hooks": [str(x) for x in out.get("hooks", [])][:5],
-        "script": [str(x) for x in out.get("script", [])][:15],
+        "script": [str(x) for x in out.get("script", [])][:80],  # 원본 길이 walkthrough 허용 (v0.71)
         "hashtags": [str(x) for x in out.get("hashtags", [])][:8],
     }
 

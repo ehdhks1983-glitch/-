@@ -39,10 +39,13 @@ def test_no_topic_no_hint(monkeypatch):
 
 
 def test_frame_count_scales_with_duration():
-    """webui 화면분석의 프레임 수 공식: 길이 비례 6~16컷 (4분 → 12컷)."""
+    """webui 화면분석의 프레임 수 공식: 길이 비례 6~20컷 (4분 → 12컷).
+
+    (v0.71에서 긴 원본 대응으로 상한을 16 → 20으로 상향.)
+    """
     def nfr(dur_s):
-        return max(6, min(16, round(dur_s / 20)))
+        return max(6, min(20, round(dur_s / 20)))
 
     assert nfr(30) == 6          # 짧으면 최소 6
     assert nfr(240) == 12        # 4분 → 12컷
-    assert nfr(600) == 16        # 길어도 최대 16
+    assert nfr(600) == 20        # 길어도 최대 20
