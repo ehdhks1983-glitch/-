@@ -132,7 +132,9 @@ def resources_dir() -> Path:
     있는 쪽을 먼저 쓰고, 둘 다 없으면 패키지 내부를 기본(쓰기용)으로 반환한다.
     """
     pkg = Path(__file__).resolve().parent          # cutdaejang 패키지 디렉토리
-    for cand in (pkg / "resources", pkg.parent / "resources"):
+    # 프로젝트 루트(기존 zip 설치·사용자가 받아둔 BGM/글씨체가 있는 곳)를 먼저,
+    # 없으면 패키지 내부(wheel·새 배포 번들)를 쓴다 — 업그레이드 시 다운로드 보존.
+    for cand in (pkg.parent / "resources", pkg / "resources"):
         if cand.is_dir():
             return cand
     return pkg / "resources"
