@@ -389,7 +389,7 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
         over_ui["gen_product"] = str(params.get("product") or "")
     if params.get("target_sec"):  # ⏱ 영상 길이 기억 (v0.61)
         try:
-            over_ui["gen_target_sec"] = max(10, min(600, int(params["target_sec"])))
+            over_ui["gen_target_sec"] = max(10, min(900, int(params["target_sec"])))  # 최대 15분 (v0.68)
         except (TypeError, ValueError):
             pass
     if params.get("tts_provider") == "elevenlabs" and (params.get("voice") or "").strip():
@@ -1536,6 +1536,17 @@ class _Handler(BaseHTTPRequestHandler):
             mp4 = (job or {}).get("mp4")
             fp = (Path(mp4).parent / name) if mp4 and name.endswith(".mp3") else None
             if fp and fp.is_file():
+                self._serve_file(str(fp))
+            else:
+                self._send_json({"error": "not found"}, 404)
+        elif path.startswith("/font/"):  # 🔤 글씨체 실물 미리보기 (v0.68) — resources/fonts만
+            stem = path.split("/", 2)[2]
+            from ..core import render_engine as _re  # noqa: PLC0415
+            from .. import presets as _pr  # noqa: PLC0415
+
+            allowed = set(_pr.FONT_FAMILY_ALIASES.keys())  # 화이트리스트 (경로 주입 차단)
+            fp = Path(_re.DEFAULT_FONTS_DIR) / (stem + ".ttf")
+            if stem in allowed and fp.is_file():
                 self._serve_file(str(fp))
             else:
                 self._send_json({"error": "not found"}, 404)
@@ -2716,6 +2727,7 @@ class _Handler(BaseHTTPRequestHandler):
         ctype = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                  ".webp": "image/webp", ".mp3": "audio/mpeg", ".wav": "audio/wav",
                  ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".flac": "audio/flac",
+                 ".ttf": "font/ttf", ".otf": "font/otf",  # 🔤 글씨체 미리보기 (v0.68)
                  }.get(Path(path).suffix.lower(), "video/mp4")
         self.send_response(206 if range_header else 200)
         self.send_header("Content-Type", ctype)
@@ -2939,7 +2951,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.67)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.68)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3260,7 +3272,7 @@ _HTML = """<!doctype html>
       </div>
       <div class="chk" style="gap:8px;margin-top:6px">
         <span>글씨체</span>
-        <select id="editSubFontSel" class="fontsel" style="width:auto;padding:4px 8px">
+        <select id="editSubFontSel" class="fontsel" style="width:auto;padding:4px 8px" onchange="renderSubFontPrev('editSubFontSel','editSubFontPrev')">
           <option value="">기본 (프리텐다드)</option>
           <option value="BlackHanSans-Regular">블랙한산스 — 임팩트 굵은</option>
           <option value="Jua-Regular">주아 — 둥근 포근</option>
@@ -3270,6 +3282,7 @@ _HTML = """<!doctype html>
         </select>
         <span class="hint">본문 자막 글씨체 (기억됨)</span>
       </div>
+      <div id="editSubFontPrev" style="margin-top:6px;padding:10px 12px;border-radius:10px;background:#14161c;border:1px solid #2c3350;font-size:26px;font-weight:800;text-align:center">가나다 라마바 ABC 12 — 자막 미리보기</div>
       <div style="margin-top:8px">
         <span>🎨 화면 톤(색보정) <span class="hint">— 같은 장면이 이렇게 달라져요 (자막·제목 글자는 원색 유지)</span></span>
         <select id="editToneSel" class="hidden">
@@ -3436,7 +3449,7 @@ _HTML = """<!doctype html>
         <label><input type="radio" name="genOrient" value="wide"><span>🖥 가로 롱폼 (16:9)</span></label>
       </div>
       <span style="margin-left:6px">길이</span>
-      <select id="genLenSel" style="width:auto;padding:6px 8px">
+      <select id="genLenSel" style="width:auto;padding:6px 8px" onchange="onGenLenChange()">
         <option value="30">약 30초</option>
         <option value="45">약 45초</option>
         <option value="60" selected>약 1분 (기본)</option>
@@ -3444,8 +3457,14 @@ _HTML = """<!doctype html>
         <option value="120">약 2분</option>
         <option value="180">약 3분</option>
         <option value="300">약 5분</option>
+        <option value="custom">직접 입력…</option>
       </select>
+      <span id="genLenCustomBox" class="hidden" style="margin-left:4px">
+        <input type="number" id="genLenCustomMin" min="1" max="15" step="0.5" value="7"
+               style="width:64px;padding:6px 8px"> 분
+      </span>
       <span class="hint">길이는 AI 대본 분량 기준(말 속도에 따라 조금 달라져요) — 대본을 직접 넣으면 그 분량대로</span>
+      <div class="hint" style="margin-top:4px">💡 기본을 5분까지만 둔 이유: 더 길면 AI 대본이 반복·빈약해지고, 문장마다 목소리(TTS)를 만들어 시간·비용이 커져요. 더 필요하면 [직접 입력]으로 최대 15분까지 — 이땐 대본을 직접 넣는 걸 권장해요.</div>
     </div>
     <details class="opt" style="margin-top:8px">
       <summary>📝 대본 직접 넣기 <span class="hint">— 써둔 대본이 있으면 AI 대본 대신 그대로 (한 줄 = 자막 하나)</span></summary>
@@ -3575,7 +3594,7 @@ _HTML = """<!doctype html>
         </div>
       <div class="chk" style="gap:8px;margin-top:6px">
         <span>글씨체</span>
-        <select id="genSubFontSel" class="fontsel" style="width:auto;padding:4px 8px">
+        <select id="genSubFontSel" class="fontsel" style="width:auto;padding:4px 8px" onchange="renderSubFontPrev('genSubFontSel','genSubFontPrev')">
           <option value="">기본 (프리텐다드)</option>
           <option value="BlackHanSans-Regular">블랙한산스 — 임팩트 굵은</option>
           <option value="Jua-Regular">주아 — 둥근 포근</option>
@@ -3585,7 +3604,8 @@ _HTML = """<!doctype html>
         </select>
         <span class="hint">본문 자막 글씨체 — [⬇ 무료 글씨체 받기]는 상단 제목 그룹에</span>
       </div>
-      <div class="hint">보이는 그대로 들어가요 — 강조색도 스타일에 맞게 자동 조정, 한 번 고르면 기억</div>
+      <div id="genSubFontPrev" style="margin-top:6px;padding:10px 12px;border-radius:10px;background:#14161c;border:1px solid #2c3350;font-size:26px;font-weight:800;text-align:center">가나다 라마바 ABC 12 — 자막 미리보기</div>
+      <div class="hint">위 미리보기가 실제 자막 글씨예요 (받은 글씨체만 보여요) — 강조색은 스타일에 맞게 자동, 한 번 고르면 기억</div>
     </details>
 
     <details class="opt">
@@ -4795,17 +4815,44 @@ const HOOK_STYLE_CSS = {
   '네온':      'background:transparent;color:#9CFFF0;text-shadow:0 0 8px #17E0C4,0 0 16px #0FB5A0',
 };
 
-function hookPreviewInto(taId, boxId, scale, styleName){
+// ── 🔤 글씨체 실물 미리보기 (v0.68) — 받은 폰트를 브라우저에 등록해 화면에 그대로 ──
+const FONT_FAMILY_MAP = {
+  'Pretendard-ExtraBold':'Pretendard ExtraBold', 'BlackHanSans-Regular':'Black Han Sans',
+  'Jua-Regular':'Jua', 'DoHyeon-Regular':'Do Hyeon', 'Gugi-Regular':'Gugi',
+  'NanumPenScript-Regular':'Nanum Pen Script',
+};
+function injectFontFaces(installed){
+  const have = new Set(['Pretendard-ExtraBold'].concat(installed || []));
+  let css = '';
+  have.forEach(stem => {
+    const fam = FONT_FAMILY_MAP[stem]; if(!fam) return;
+    css += "@font-face{font-family:'" + fam + "';src:url('/font/" + stem +
+           "') format('truetype');font-display:swap;}";
+  });
+  let el = $('dynFontFaces');
+  if(!el){ el = document.createElement('style'); el.id = 'dynFontFaces'; document.head.appendChild(el); }
+  el.textContent = css;
+}
+function fontFamilyOf(stem){
+  return "'" + (FONT_FAMILY_MAP[stem] || 'Pretendard ExtraBold') + "', sans-serif";
+}
+function renderSubFontPrev(selId, prevId){
+  const sel = $(selId), box = $(prevId); if(!box) return;
+  box.style.fontFamily = fontFamilyOf(sel ? sel.value : '');
+}
+
+function hookPreviewInto(taId, boxId, scale, styleName, fontId){
   initHookChips();
   const box = $(boxId);
   const raw = $(taId).value.trim();
   if(!raw){ box.style.display = 'none'; return; }
   const px = Math.round(24 * (scale || 1));
   const css = HOOK_STYLE_CSS[styleName] || HOOK_STYLE_CSS['기본'];
+  const fam = 'font-family:' + fontFamilyOf(fontId) + ';';
   box.style.display = 'block';
   box.innerHTML = raw.split(new RegExp('[' + String.fromCharCode(10,13) + ']+')).map(l =>
     '<div style="display:inline-block;padding:4px 12px;margin:2px 0;' +
-    'font-weight:800;font-size:' + px + 'px;line-height:1.35;letter-spacing:-0.5px;' + css + '">' +
+    'font-weight:800;font-size:' + px + 'px;line-height:1.35;letter-spacing:-0.5px;' + fam + css + '">' +
     hookLineHtml(l) + '</div>').join('<br>');
 }
 
@@ -4845,11 +4892,12 @@ function playSfx(ev, name){
 
 function renderHookPreview(){
   hookPreviewInto('editHook', 'hookPreview', +(($('hookSizeSel')||{}).value) || 1,
-                  (($('hookStyleSel')||{}).value) || '기본');
+                  (($('hookStyleSel')||{}).value) || '기본', (($('editHookFontSel')||{}).value) || '');
 }
 
 function renderGenHookPreview(){
-  hookPreviewInto('genHook', 'genHookPreview', 1, (($('genHookStyleSel')||{}).value) || '기본');
+  hookPreviewInto('genHook', 'genHookPreview', 1, (($('genHookStyleSel')||{}).value) || '기본',
+                  (($('genHookFontSel')||{}).value) || '');
 }
 
 async function analyzeAI(ev){
@@ -5155,7 +5203,7 @@ async function generate(){
     product: (($('genProductSel')||{}).value)||'',                 // 📇 제품 프로필 (v0.64)
     context_memo: (($('genContext')||{}).value)||'',               // 📎 이번 영상 참고 (v0.64)
     orientation: pick('genOrient') || 'shorts',                    // v0.61 화면 형태
-    target_sec: +(($('genLenSel')||{}).value) || 60,               // v0.61 영상 길이
+    target_sec: genTargetSec(),                                    // v0.61 영상 길이 (직접 입력 v0.68)
     script_text: (($('genScript')||{}).value)||'',                 // v0.61 내 대본
     sub_style: (($('genSubStyleSel')||{}).value)||'기본',          // v0.54 자막 프리셋
     sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
@@ -5728,6 +5776,22 @@ async function clearAllKeys(ev){
   refreshApiStates();
 }
 
+// ── ⏱ 영상 길이 직접 입력 (v0.68) ──
+function onGenLenChange(){
+  const custom = (($('genLenSel')||{}).value) === 'custom';
+  const box = $('genLenCustomBox');
+  if(box) box.classList.toggle('hidden', !custom);
+}
+function genTargetSec(){
+  const sel = ($('genLenSel')||{}).value;
+  if(sel === 'custom'){
+    let m = parseFloat(($('genLenCustomMin')||{}).value) || 7;
+    m = Math.max(1, Math.min(15, m));       // 1~15분 (백엔드도 같은 상한)
+    return Math.round(m * 60);
+  }
+  return (+sel) || 60;
+}
+
 // ── ⬇ 무료 글씨체 (v0.63) ──
 function fillFontSels(installed){
   const have = new Set(installed || []);
@@ -5737,6 +5801,10 @@ function fillFontSels(installed){
     o.disabled = !have.has(o.value);
     o.textContent = o.disabled ? base + ' — 받기 필요' : base;
   });
+  injectFontFaces(installed);                       // 🔤 받은 글씨체를 미리보기용으로 등록 (v0.68)
+  renderSubFontPrev('genSubFontSel', 'genSubFontPrev');
+  renderSubFontPrev('editSubFontSel', 'editSubFontPrev');
+  renderGenHookPreview(); renderHookPreview();
 }
 async function fetchFonts(ev){
   ev.preventDefault();
@@ -6237,8 +6305,15 @@ async function poll(){
     const gor = ((state.settings || {}).ui || {}).gen_orientation;
     if(gor){ const r = document.querySelector("input[name=genOrient][value='" + gor + "']"); if(r) r.checked = true; }
     const glen = ((state.settings || {}).ui || {}).gen_target_sec;
-    if(glen && $('genLenSel') && [...$('genLenSel').options].some(o => +o.value === +glen))
-      $('genLenSel').value = String(glen);
+    if(glen && $('genLenSel')){
+      if([...$('genLenSel').options].some(o => +o.value === +glen)){
+        $('genLenSel').value = String(glen);
+      } else {                                  // 프리셋에 없는 값 → 직접 입력으로 복원 (v0.68)
+        $('genLenSel').value = 'custom';
+        if($('genLenCustomMin')) $('genLenCustomMin').value = String(Math.round(glen / 60 * 10) / 10);
+      }
+      onGenLenChange();
+    }
     // 🎙 지난 제작에 쓴 일레븐랩스 성우 — 목록이 채워지면 자동 선택 (v0.67)
     window._wantGenElevenVoice = ((state.settings || {}).ui || {}).gen_eleven_voice || '';
     // v0.51: 그림 방식·최대 장수 복원
@@ -6418,6 +6493,7 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault(); togglePlay();
 });
 
+injectFontFaces([]);  // 🔤 번들 프리텐다드 즉시 등록 — 받은 글씨체는 poll의 fillFontSels가 추가 (v0.68)
 poll(); setInterval(()=>{ if(!currentJob) poll(); }, 5000);
 </script>
 </body>

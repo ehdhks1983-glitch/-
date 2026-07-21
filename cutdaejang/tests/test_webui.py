@@ -1503,3 +1503,37 @@ def test_v067_gen_voice_memory(server):
     w._apply_bg_style({"tts_provider": "gemini", "voice": "Kore"},
                       config.load_settings())
     assert config.load_settings()["ui"].get("gen_eleven_voice") == "vid_memory1"
+
+
+def test_v068_font_route_and_length(server):
+    """v0.68: 🔤 /font 라우트로 실물 글씨체 서빙 + ⏱ 길이 직접입력 클램프."""
+    from cutdaejang import config
+    from cutdaejang.gui import webui as w
+
+    # ── /font: 화이트리스트 안(번들된 Pretendard)만 서빙, 그 외 404 ──
+    r = _get(server, "/font/Pretendard-ExtraBold")
+    assert r.status == 200
+    ctype = r.headers.get("Content-Type", "")
+    assert "font" in ctype or "ttf" in ctype
+    body = r.read()
+    assert body[:4] in (b"\x00\x01\x00\x00", b"true", b"OTTO")   # TTF/OTF 시그니처
+
+    # 경로 주입·미허용 스템은 404
+    import urllib.error as _ue
+    for bad in ("/font/evil", "/font/Adam"):
+        try:
+            code = _get(server, bad).status
+        except _ue.HTTPError as e:
+            code = e.code
+        assert code == 404, bad
+
+    # ── 길이 직접 입력: 15분(900초)까지 기억, 초과는 클램프 ──
+    w._apply_bg_style({"target_sec": 900}, config.load_settings())
+    assert config.load_settings()["ui"].get("gen_target_sec") == 900
+    w._apply_bg_style({"target_sec": 1200}, config.load_settings())  # 20분 → 15분으로
+    assert config.load_settings()["ui"].get("gen_target_sec") == 900
+
+    # 화면: 직접 입력 UI + 실물 미리보기 요소가 실려 있어야 한다
+    html = _get(server, "/").read().decode("utf-8")
+    assert 'id="genLenCustomMin"' in html and "직접 입력" in html
+    assert 'id="genSubFontPrev"' in html and "injectFontFaces" in html

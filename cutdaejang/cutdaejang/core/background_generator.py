@@ -185,14 +185,22 @@ CHARACTER_PRESETS = {
 
 
 # 그림체 프리셋 — UI(genBgStyle)와 키를 맞춘다. 프롬프트 앞에 붙어 전 장면 통일.
+# v0.68: 단순 키워드 → 매체·색감·조명·품질을 담은 서술형 (Google 이미지 프롬프트 가이드 반영)
 IMAGE_STYLES = {
-    "일러스트": "따뜻한 플랫 벡터 일러스트 스타일, 부드러운 색감",
-    "실사풍": "사실적인 고품질 사진 스타일, 자연스러운 빛",
-    "3D": "귀여운 3D 렌더 스타일, 파스텔 톤, 부드러운 조명",
-    "수채화": "은은한 수채화 그림 스타일, 종이 질감",
-    "네온": "네온 빛 사이버 스타일, 어두운 배경에 형광 포인트",
-    "미니멀": "미니멀 그래픽 스타일, 단순한 도형과 넉넉한 여백",
+    "일러스트": "따뜻한 플랫 벡터 일러스트레이션, 부드러운 파스텔 색감과 깔끔한 윤곽선, 균형 잡힌 구도",
+    "실사풍": "사실적인 고품질 사진, 부드러운 자연광, 얕은 심도와 선명한 디테일, 전문가용 카메라 감성",
+    "3D": "귀여운 3D 렌더 스타일, 파스텔 톤, 부드러운 전역 조명과 은은한 그림자, 매끈하고 입체적인 질감",
+    "수채화": "손으로 그린 수채화, 번지는 물감과 종이 질감, 은은하고 서정적인 색감",
+    "네온": "네온 사이버펑크 분위기, 어두운 배경에 형광 핑크·시안 조명, 반사와 빛 번짐, 영화적 대비",
+    "미니멀": "미니멀 플랫 그래픽, 단순한 도형과 넉넉한 여백, 두세 가지 색으로 절제된 구성",
 }
+
+# 조사 반영: 서술형 프롬프트 끝에 구도·조명·품질을 명시하면 결과가 안정적이고 선명해진다.
+_QUALITY_TAIL = ("주제를 화면 중앙에 크고 명확하게 배치, 균형 잡힌 구도와 적절한 여백, "
+                 "또렷한 초점과 고해상도 디테일, 깔끔한 배경")
+# 🚫 이미지 속 한글은 거의 항상 깨진다 — 자막은 컷대장이 얹으니 그림엔 글자 금지
+_NO_TEXT_GUARD = ("중요: 그림 안에 글자·문자·자막·간판 텍스트·로고를 절대 넣지 말 것 "
+                  "(글자 없는 순수한 장면만)")
 
 
 _QUOTED_RE = __import__("re").compile(r'["\u201c\u201d\u2018\u2019\'`]([^"\u201c\u201d\u2018\u2019\'`]{2,60})["\u201c\u201d\u2018\u2019\'`]')
@@ -209,21 +217,24 @@ def strip_caption_text(prompt: str) -> str:
 
 
 def scene_prompt_text(prompt: str, style: str = "일러스트", character: str = "") -> str:
-    """장면 프롬프트 조립 — 그림체 + (있으면) 마스코트 + 장면 묘사 + 글자 금지 (v0.50/0.63)."""
+    """장면 프롬프트 조립 — 서술형 그림체 + 마스코트 + 장면 + 구도·조명·품질 + 글자 금지.
+
+    v0.68: 키워드 나열 대신 '매체 → 장면 → 구도/조명/품질 → 글자 금지' 서술 구조.
+    이미지 모델(Gemini 등)은 짧은 키워드보다 자연스러운 서술 문장에서 더 안정적이다.
+    """
     parts = []
-    style_text = IMAGE_STYLES.get(style, "")
-    if style_text:
-        parts.append(style_text)
+    parts.append(IMAGE_STYLES.get(style, IMAGE_STYLES["일러스트"]))
     ch = (character or "").strip()
     ch = CHARACTER_PRESETS.get(ch, ch)  # 프리셋 키면 상세 묘사로 치환
-    if ch:
+    scene = strip_caption_text(prompt)
+    if ch and scene:
+        parts.append(f"주인공 {ch}이(가) {scene} — 모든 장면에서 같은 모습·같은 그림체 유지")
+    elif ch:
         parts.append(f"주인공: {ch} — 모든 장면에 같은 모습·같은 그림체로 등장")
-    p = strip_caption_text(prompt)
-    if p:
-        parts.append(p if not ch else f"장면: 이 캐릭터가 {p}")
-    # 🚫 이미지 속 한글은 거의 항상 깨진다 — 자막은 컷대장이 얹으니 그림엔 글자 금지
-    parts.append("중요: 그림 안에 글자·문자·자막·간판 텍스트·로고를 절대 넣지 말 것 "
-                 "(글자 없는 순수 장면만)")
+    elif scene:
+        parts.append(f"장면: {scene}")
+    parts.append(_QUALITY_TAIL)
+    parts.append(_NO_TEXT_GUARD)
     return ". ".join(parts)
 
 

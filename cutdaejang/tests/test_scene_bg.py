@@ -209,7 +209,7 @@ def test_gemini_image_text_reply_retry(monkeypatch, tmp_path):
 def test_scene_prompt_character_injection():
     """v0.50 — 캐릭터 프리셋 키/직접 묘사가 프롬프트에 주입되는지."""
     t = bg.scene_prompt_text("바다를 바라본다", "일러스트", "해골")
-    assert "해골 캐릭터" in t and "같은 모습" in t and "이 캐릭터가 바다를" in t
+    assert "해골 캐릭터" in t and "같은 모습" in t and "바다를 바라본다" in t
     t2 = bg.scene_prompt_text("웃는다", "3D", "파란 모자 쓴 문어")
     assert "파란 모자 쓴 문어" in t2
     t3 = bg.scene_prompt_text("장면", "일러스트", "")
