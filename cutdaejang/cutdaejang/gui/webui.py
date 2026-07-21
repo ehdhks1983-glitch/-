@@ -2922,7 +2922,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.65)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.66)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3111,10 +3111,17 @@ _HTML = """<!doctype html>
           <label>말투 스타일</label>
           <select id="narrStyleSel"></select>
         </div>
-        <div style="display:flex;align-items:flex-end">
+        <div style="display:flex;align-items:flex-end;gap:6px">
           <button class="ghost" style="margin-bottom:1px" onclick="previewNarrVoice(event)">🔊 미리듣기</button>
+          <button class="ghost" style="margin-bottom:1px" title="일레븐랩스 성우 목록 새로고침" onclick="loadElevenVoices(true);return false">🔄</button>
         </div>
       </div>
+      <div class="hint" id="narrElevenState"></div>
+      <details id="narrBrowse" class="opt" ontoggle="onNarrBrowse(this)">
+        <summary>🇰🇷 한국어 성우 담기 <span class="hint">— 여기서 듣고 ➕ 담기 (담기 무료 · 제작 사용은 Starter부터)</span></summary>
+        <div class="hint" id="narrBrowseState" style="margin-top:6px"></div>
+        <div id="narrBrowseList" style="max-height:300px;overflow-y:auto;margin-top:6px"></div>
+      </details>
       <div class="chk" style="margin-top:6px">
         <input type="checkbox" id="narrSubsOnly" onchange="onNarrTopicInput()">
         <span>🔇 목소리는 빼고 <b>자막만</b> 넣기 (AI가 쓴 대본을 하단 자막으로만)</span>
@@ -4110,8 +4117,9 @@ document.querySelectorAll('input[name=prov]').forEach(r => r.onchange = () => {
 async function loadElevenVoices(force){
   if(window._elevenLoaded && !force) return;
   window._elevenLoaded = true;
-  const st = $('elevenListState');
+  const st = $('elevenListState'), st2 = $('narrElevenState');  // 제작 폼 + 내레이션 박스(편집·사진)
   if(st) st.textContent = '⏳ 일레븐랩스에서 목록 불러오는 중...';
+  if(st2) st2.textContent = '⏳ 일레븐랩스 성우 불러오는 중...';
   try{
     const body = force ? JSON.stringify({refresh:true}) : '{}';
     const data = await (await fetch('/api/eleven_voices', {method:'POST', body})).json();
@@ -4122,6 +4130,11 @@ async function loadElevenVoices(force){
         if(data.no_key) st.textContent = '⬜ 키 미등록 — 첫 화면 「🔑 API 연동」에서 ElevenLabs 키를 저장한 뒤 🔄 다시 불러오기를 누르세요';
         else if(data.error) st.textContent = '⚠ 불러오기 실패: ' + data.error + ' → elevenlabs.io의 API Keys에서 권한 기본값 그대로 새 키를 만들어 다시 저장해 보세요';
         else st.textContent = '⚠ 계정에 보이스가 하나도 없어요 — elevenlabs.io의 Voices에서 담아주세요';
+      }
+      if(st2){
+        if(data.no_key) st2.textContent = '일레븐랩스 키를 연동하면 성우 목소리가 여기에도 추가돼요 — 첫 화면 「🔑 API 연동」';
+        else if(data.error) st2.textContent = '⚠ 일레븐랩스 목록 실패: ' + data.error;
+        else st2.textContent = '';
       }
       return;
     }
@@ -4140,37 +4153,52 @@ async function loadElevenVoices(force){
       $('narrVoiceSel').value = window._wantNarrVoice;
       window._wantNarrVoice = '';
     }
-    // 🇰🇷 방금 담은 성우가 있으면 바로 선택 (v0.65)
-    if(window._wantElevenVoice && [...sel.options].some(o => o.value === window._wantElevenVoice)){
-      sel.value = window._wantElevenVoice;
+    // 🇰🇷 방금 담은 성우가 있으면 바로 선택 (v0.65) — 내레이션 목록에도 (v0.66)
+    if(window._wantElevenVoice){
+      if([...sel.options].some(o => o.value === window._wantElevenVoice))
+        sel.value = window._wantElevenVoice;
+      const nv2 = $('narrVoiceSel'), wantNv = 'el:' + window._wantElevenVoice;
+      if(nv2 && [...nv2.options].some(o => o.value === wantNv)) nv2.value = wantNv;
       window._wantElevenVoice = '';
     }
     if(st) st.textContent = '✅ 성우 ' + voices.length + '명 불러왔어요 — 위에서 골라 🔊 미리듣기로 확인하세요';
+    if(st2) st2.textContent = '🎙 일레븐랩스 성우 ' + voices.length + '명이 보이스 목록에 들어와 있어요 — 이름 뒤 (일레븐랩스) 표기';
   } catch(e){
     window._elevenLoaded = false;
     if(st) st.textContent = '⚠ 서버와 통신 실패 — 컷대장 콘솔 창이 켜져 있는지 확인하고 🔄 다시 불러오기를 눌러주세요';
+    if(st2) st2.textContent = '⚠ 서버와 통신 실패 — 🔄 를 눌러주세요';
   }
 }
 
 // ── 🇰🇷 한국어 성우 담기 (v0.65) — 라이브러리 목록·미리듣기·➕ 담기 ──
-async function onElevenBrowse(el){
-  if(!el.open || window._elevenBrowseLoaded) return;
-  window._elevenBrowseLoaded = true;
-  const st = $('elevenBrowseState'), list = $('elevenBrowseList');
+// v0.66: 제작·편집·사진 어디서든 같은 패널 — 렌더러 공용 + 목록 1회 캐시
+function onElevenBrowse(el){ return browseEleven(el, 'elevenBrowseState', 'elevenBrowseList'); }
+function onNarrBrowse(el){ return browseEleven(el, 'narrBrowseState', 'narrBrowseList'); }
+async function browseEleven(el, stId, listId){
+  const st = $(stId), list = $(listId);
+  if(!el.open || !st || !list || list.dataset.loaded === '1') return;
   st.textContent = '⏳ 한국어 성우 목록 불러오는 중...';
-  try{
-    const data = await (await fetch('/api/eleven_browse', {method:'POST', body:'{}'})).json();
-    const rows = data.voices || [];
-    if(!rows.length){
-      st.textContent = data.error
-        ? '⚠ 못 불러왔어요: ' + data.error
-        : '⚠ 지금은 라이브러리 응답이 비어 있어요 — 잠시 후 다시 열어보세요';
-      window._elevenBrowseLoaded = false;
+  let rows = window._elevenBrowseRows;
+  if(!rows){
+    try{
+      const data = await (await fetch('/api/eleven_browse', {method:'POST', body:'{}'})).json();
+      rows = data.voices || [];
+      if(!rows.length){
+        st.textContent = data.error
+          ? '⚠ 못 불러왔어요: ' + data.error
+          : '⚠ 지금은 라이브러리 응답이 비어 있어요 — 잠시 후 다시 열어보세요';
+        return;
+      }
+      window._elevenBrowseRows = rows;
+    } catch(e){
+      st.textContent = '⚠ 서버 통신 실패 — 접었다 다시 열어보세요';
       return;
     }
-    st.textContent = '▶ 듣고 [➕ 담기] — 담기는 무료예요. 단, 담은 성우로 영상 제작은 Starter(월 $6)부터 — 무료 플랜은 기본 성우(영어 이름)나 ⭐ AI 성우로 만들 수 있어요';
-    list.innerHTML = '';
-    for(const v of rows){
+  }
+  list.dataset.loaded = '1';
+  st.textContent = '▶ 듣고 [➕ 담기] — 담기는 무료예요. 단, 담은 성우로 영상 제작은 Starter(월 $6)부터 — 무료 플랜은 기본 성우(영어 이름)나 ⭐ AI 성우로 만들 수 있어요';
+  list.innerHTML = '';
+  for(const v of rows){
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #232838';
       const play = document.createElement('button');
@@ -4187,10 +4215,6 @@ async function onElevenBrowse(el){
       add.onclick = (e) => { e.preventDefault(); addBrowseVoice(v, add); };
       row.appendChild(play); row.appendChild(info); row.appendChild(add);
       list.appendChild(row);
-    }
-  } catch(e){
-    st.textContent = '⚠ 서버 통신 실패 — 접었다 다시 열어보세요';
-    window._elevenBrowseLoaded = false;
   }
 }
 function playBrowsePreview(url, btn){

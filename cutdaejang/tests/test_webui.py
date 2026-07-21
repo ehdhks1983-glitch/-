@@ -1443,3 +1443,15 @@ def test_v065_browse_and_add_korean_voices(server, monkeypatch):
 
     _post(server, "/api/keys", {"action": "clear"})
     assert not _os.environ.get("ELEVENLABS_API_KEY")
+
+
+def test_v066_narr_eleven_panel(server):
+    """v0.66: 편집·사진 공용 내레이션 박스에도 일레븐랩스 담기 패널·상태줄·🔄."""
+    html = _get(server, "/").read().decode("utf-8")
+    for el_id in ("narrElevenState", "narrBrowse", "narrBrowseState", "narrBrowseList"):
+        assert html.count(f'id="{el_id}"') == 1, el_id
+    # 내레이션 박스 안에 🔄 새로고침 버튼(성우 목록 갱신)이 있어야 한다
+    assert "일레븐랩스 성우 목록 새로고침" in html
+    # 공용 렌더러 — 두 패널이 같은 함수를 쓴다
+    assert html.count("browseEleven(el, 'elevenBrowseState'") == 1
+    assert html.count("browseEleven(el, 'narrBrowseState'") == 1
