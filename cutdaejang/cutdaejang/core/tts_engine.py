@@ -269,6 +269,12 @@ class ElevenLabsTTS:
                 Path(out_path).write_bytes(resp.read())
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "replace")
+            if e.code == 402 or "paid_plan_required" in body:
+                # 일레븐랩스 정책: 라이브러리 성우는 담기 무료·API 합성은 유료 (v0.65.1)
+                raise TTSNonRetryable(
+                    "이 성우는 무료 플랜에선 영상 제작(API)에 쓸 수 없어요 — 라이브러리에서 "
+                    "담은 성우는 Starter(월 $5)부터 사용 가능해요. 무료로 만들려면 기본 성우"
+                    "(Adam·Bella 같은 영어 이름)나 ⭐ AI 성우(제미나이)를 골라주세요") from e
             if e.code in (401, 403):
                 raise TTSNonRetryable(f"ElevenLabs 키/권한 오류 {e.code}: {body[:200]}") from e
             raise TTSHTTPError(e.code, None, body) from e

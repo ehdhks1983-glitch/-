@@ -78,3 +78,20 @@ def test_add_shared_voice_and_slot_limit(monkeypatch):
     with pytest.raises(te.TTSError) as ei:
         te.add_shared_voice("o1", "v1", "Anna Kim")
     assert "슬롯" in str(ei.value)
+
+
+def test_synth_402_paid_plan_is_nonretryable(monkeypatch):
+    """v0.65.1: 라이브러리 성우 402(무료 플랜) → 재시도 없이 한국어 안내."""
+    def fake_urlopen(req, timeout=0):
+        raise urllib.error.HTTPError(
+            req.full_url, 402, "payment", None,
+            io.BytesIO(b'{"detail":{"code":"paid_plan_required",'
+                       b'"message":"Free users cannot use library voices via the API."}}'))
+
+    monkeypatch.setattr(te.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_test")
+    p = te.ElevenLabsTTS()
+    with pytest.raises(te.TTSNonRetryable) as ei:
+        p.synthesize("안녕하세요", "shared_voice_id", "/tmp/x.mp3")
+    msg = str(ei.value)
+    assert "Starter" in msg and "무료" in msg

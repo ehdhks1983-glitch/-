@@ -3484,7 +3484,7 @@ _HTML = """<!doctype html>
       </div>
       <div class="hint" id="elevenListState"></div>
       <details id="elevenBrowse" class="opt" ontoggle="onElevenBrowse(this)">
-        <summary>🇰🇷 한국어 성우 담기 <span class="hint">— 사이트 안 가고 여기서 듣고 ➕ 한 번이면 추가</span></summary>
+        <summary>🇰🇷 한국어 성우 담기 <span class="hint">— 여기서 듣고 ➕ 담기 (담기 무료 · 제작 사용은 Starter부터)</span></summary>
         <div class="hint" id="elevenBrowseState" style="margin-top:6px"></div>
         <div id="elevenBrowseList" style="max-height:300px;overflow-y:auto;margin-top:6px"></div>
       </details>
@@ -4168,7 +4168,7 @@ async function onElevenBrowse(el){
       window._elevenBrowseLoaded = false;
       return;
     }
-    st.textContent = '▶ 로 들어보고 [➕ 담기] — 담으면 위 보이스 목록에 바로 추가돼요 (무료 플랜은 슬롯 3개 안팎)';
+    st.textContent = '▶ 듣고 [➕ 담기] — 담기는 무료예요. 단, 담은 성우로 영상 제작은 Starter(월 $5)부터 — 무료 플랜은 기본 성우(영어 이름)나 ⭐ AI 성우로 만들 수 있어요';
     list.innerHTML = '';
     for(const v of rows){
       const row = document.createElement('div');
@@ -4180,7 +4180,7 @@ async function onElevenBrowse(el){
       info.style.cssText = 'flex:1;min-width:0';
       const nm = document.createElement('div'); nm.textContent = v.name; nm.style.fontWeight = '700';
       const ds = document.createElement('div'); ds.className = 'hint';
-      ds.textContent = (v.free_ok ? '무료 OK' : '유료 전용') + (v.desc ? ' · ' + v.desc : '');
+      ds.textContent = v.desc || '';
       info.appendChild(nm); info.appendChild(ds);
       const add = document.createElement('button');
       add.className = 'ghost'; add.textContent = '➕ 담기';
