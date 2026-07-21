@@ -504,30 +504,36 @@ SCRIPT_PROVIDERS = {"gemini": GeminiScript, "stub": StubScript}
 # ─────────── v0.31: 영상 AI 분석 → 제목·대본 추천 (멀티모달) ───────────
 
 VIDEO_ANALYZE_PROMPT = """\
-역할: 유튜브 쇼츠 기획자. 아래는 한 영상의 장면 캡처들{with_tr}이다.
+역할: 유튜브 쇼츠 기획자. 아래는 한 영상의 장면 캡처들{with_tr}이다.{topic_hint}
 영상 내용을 파악해 JSON으로만 답하라 (설명 없이):
 {{
  "summary": "영상 내용 한두 문장 요약",
  "titles": ["유튜브 제목 후보 3개 — 짧고 후킹 있게"],
  "hooks": ["영상 위에 크게 얹을 상단 훅 문구 3개 — 1~2줄, 궁금증/숫자/이득"],
- "script": ["이 영상에 어울리는 내레이션 대본 — 한 문장씩 6~10줄, 각 22자 이내"],
+ "script": ["이 영상에 어울리는 내레이션 대본 — 화면 순서대로 진행을 설명, 한 문장씩 8~14줄, 각 24자 이내"],
  "hashtags": ["해시태그 5개"]
 }}
-낚시성 과장 금지. 전부 한국어.
+낚시성 과장 금지. 화면에 실제로 보이는 것만 근거로. 전부 한국어.
 {transcript}"""
 
 
-def suggest_from_video(frames_b64: list, transcript: str = "",
+def suggest_from_video(frames_b64: list, transcript: str = "", topic: str = "",
                        model: str = "gemini-2.5-flash", api_key=None) -> dict:
-    """장면 캡처(+자막 텍스트)를 Gemini에 보내 제목·훅·대본·해시태그 추천."""
+    """장면 캡처(+자막 텍스트/+주제 힌트)를 Gemini에 보내 제목·훅·대본·해시태그 추천.
+
+    무음 영상(대사 없음)도 화면만 보고 대본을 쓴다. topic이 있으면 그 주제·맥락에
+    맞춰 대본 방향을 잡는다 (예: "블로그 글쓰기 시연").
+    """
     import os  # noqa: PLC0415
 
     key = api_key or os.environ.get("GEMINI_API_KEY", "")
     if not key:
         raise ScriptError("GEMINI_API_KEY가 없어 영상 분석을 쓸 수 없습니다")
     tr = f"\n[영상 속 대사(자동 인식)]\n{transcript.strip()}" if transcript.strip() else ""
+    th = (f"\n이 영상의 주제·맥락: {topic.strip()} — 이 주제에 맞춰, 화면에 보이는 진행"
+          f"·시연 순서를 설명하는 대본을 써라." if topic.strip() else "")
     prompt = VIDEO_ANALYZE_PROMPT.format(
-        with_tr="과 대사" if tr else "", transcript=tr)
+        with_tr="과 대사" if tr else "", topic_hint=th, transcript=tr)
     parts = [{"text": prompt}] + [
         {"inline_data": {"mime_type": "image/jpeg", "data": b64}} for b64 in frames_b64
     ]

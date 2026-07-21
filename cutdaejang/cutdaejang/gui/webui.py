@@ -515,8 +515,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         script_lines = (params.get("script") or "").splitlines()
         has_script = any(ln.strip() for ln in script_lines)
         narr_topic = "" if narr_file else (params.get("narr_topic") or "").strip()
+        narr_analyze = bool(params.get("narr_analyze")) and not narr_file  # 🧠 화면 분석 대본 (v0.69)
         stt = None
-        if auto_subtitle and not has_script and not narr_topic and not narr_file:
+        if auto_subtitle and not has_script and not narr_topic and not narr_file and not narr_analyze:
             # 대본/내레이션(AI·녹음) 있으면 원본 영상 STT 생략
             stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
             # Whisper 모델(정확도)을 이 작업에서 고른 값으로 덮어씀
@@ -608,17 +609,34 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 w = ("⚠ 녹음에서 자막을 만들지 못했어요 (음성 인식 실패/무음) — "
                      "「📝 대본 직접 넣기」에 읽은 글을 붙여넣으면 자막이 정확히 들어가요")
                 _set_job(job_id, tts_warn=w)
-        elif narr_topic:  # AI 내레이션: 대본 생성 → 컷 길이에 비례 배치 (검토에서 수정)
+        elif narr_topic or narr_analyze:  # AI 내레이션: 대본 생성 → 컷 길이 비례 배치
             _set_job(job_id, stage="script", note="AI 대본 작성 중…")
-            try:
-                provider = SCRIPT_PROVIDERS["gemini"]() if os.environ.get("GEMINI_API_KEY") \
-                    else SCRIPT_PROVIDERS["stub"]()
-                # 완전 자동 + 목표 초가 있으면 대본을 그 길이로 (영상은 뒤에서 맞춰 자름)
-                want = int(params.get("auto_target_sec") or 0) if params.get("auto_edit") else 0
-                target = max(15, min(90, want or int(analysis.cut_us / 1e6)))
-                script = provider.generate(narr_topic, target_sec=target)
-            except Exception:
-                script = SCRIPT_PROVIDERS["stub"]().generate(narr_topic)
+            want = int(params.get("auto_target_sec") or 0) if params.get("auto_edit") else 0
+            target = max(15, min(600, want or int(analysis.cut_us / 1e6)))
+            script = None
+            if narr_analyze and os.environ.get("GEMINI_API_KEY"):
+                # 🧠 무음 시연영상 등 — 화면을 직접 보고 대본을 쓴다 (v0.69)
+                try:
+                    from ..core import edit_mode as _em, script_generator as _sg  # noqa: PLC0415
+                    dur_s = max(1.0, analysis.cut_us / 1e6)
+                    nfr = max(6, min(16, round(dur_s / 20)))  # 길이 비례 6~16컷
+                    _set_job(job_id, note=f"화면 {nfr}컷 분석해 대본 쓰는 중…")
+                    frames = _em.extract_frames_b64(analysis.cut_video, n=nfr)
+                    out = _sg.suggest_from_video(frames, transcript="", topic=narr_topic)
+                    lines = [s for s in (out.get("script") or []) if s.strip()]
+                    if lines:
+                        script = Script(title="", sentences=lines)
+                except Exception:
+                    script = None  # 실패하면 아래 주제 기반 생성으로 폴백
+            if script is None:
+                topic_for_gen = narr_topic or "이 영상 내용 소개"
+                try:
+                    provider = SCRIPT_PROVIDERS["gemini"]() if os.environ.get("GEMINI_API_KEY") \
+                        else SCRIPT_PROVIDERS["stub"]()
+                    # 완전 자동 + 목표 초가 있으면 대본을 그 길이로 (영상은 뒤에서 맞춰 자름)
+                    script = provider.generate(topic_for_gen, target_sec=target)
+                except Exception:
+                    script = SCRIPT_PROVIDERS["stub"]().generate(topic_for_gen)
             review_subs = edit_mode.align_script_to_segments(
                 script.sentences, [(0, analysis.cut_us)], total_us=analysis.cut_us)
             for sub, hl in zip(review_subs, script.highlights):
@@ -630,14 +648,14 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "hook": (params.get("hook") or "").strip(),
                          # 자막만 모드면 대본은 쓰되 목소리(TTS)는 넣지 않음
                          "denoise": denoise,
-                         "narration": bool(narr_topic) and not narr_subs_only,
+                         "narration": (bool(narr_topic) or narr_analyze) and not narr_subs_only,
                          "narr_file": narr_file,  # 🎤 녹음 내레이션 (v0.58)
                          "narr_voice": (params.get("narr_voice") or "").strip(),
                          "narr_style": (params.get("narr_style") or "").strip(),
                          "narr_fit": params.get("narr_fit") or "freeze",
                          # 원본 소리: 목소리를 얹을 때만 기본 무음 (자막만이면 유지)
                          "orig_audio": params.get("orig_audio")
-                         or ("mute" if (narr_topic and not narr_subs_only) or narr_file
+                         or ("mute" if ((narr_topic or narr_analyze) and not narr_subs_only) or narr_file
                              else "keep"),
                          "bgm": (params.get("bgm") or "").strip(),
                          "bgm_db": params.get("bgm_db"),
@@ -2951,7 +2969,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.68)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.69)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3131,6 +3149,10 @@ _HTML = """<!doctype html>
       </div>
       <div id="narrAiBox">
       <input type="text" id="narrTopic" oninput="onNarrTopicInput()" placeholder="영상 주제/내용 입력 (예: 동네 라멘 맛집 소개) — 비우면 사용 안 함">
+      <div class="chk" style="margin-top:6px">
+        <input type="checkbox" id="narrAnalyzeChk" onchange="onNarrTopicInput()">
+        <span>🧠 <b>화면을 보고 대본 자동 작성</b> (무음·시연 영상용) — AI가 영상 장면을 분석해 위 주제에 맞춰 대본을 써요 <span class="hint">(제미나이 키 필요, 4분이면 화면 12컷 분석)</span></span>
+      </div>
       <div class="row" style="margin-top:8px">
         <div>
           <label>목소리(보이스)</label>
@@ -4565,8 +4587,10 @@ async function startEdit(){
   let editKey = $('editGeminiKey').value;
   // 내레이션 보이스는 제미나이 키가 있어야 적용 — 없으면 여기서 물어봐 저장
   const subsOnly = ($('narrSubsOnly')||{}).checked;
-  if(!narrFileMode && (($('narrTopic')||{}).value||'').trim() && !window._hasGeminiKey && !editKey){
-    editKey = ensureGeminiKey();   // 대본 품질(+목소리)에 필요
+  const wantAnalyze = !narrFileMode && !!(($('narrAnalyzeChk')||{}).checked);
+  if(!narrFileMode && ((($('narrTopic')||{}).value||'').trim() || wantAnalyze) && !window._hasGeminiKey && !editKey){
+    editKey = ensureGeminiKey();   // 대본 품질(+목소리)에 필요 — 화면 분석은 키 필수
+    if(wantAnalyze && !editKey){ alert('🧠 화면 보고 대본 자동은 제미나이 키가 꼭 필요해요 (무료 발급: aistudio.google.com/apikey)'); return; }
     if(!editKey && !subsOnly && nv && nv !== '__mine__' && nv !== '__sovits__'
        && !confirm('제미나이 키가 없으면 보이스 선택 없이 내장 음성으로 만들어져요.\\n그래도 진행할까요?')) return;
   }
@@ -4583,6 +4607,7 @@ async function startEdit(){
     tone: (($('editToneSel')||{}).value)||'기본',
     denoise: $('denoiseSel').value,
     narr_topic: narrFileMode ? '' : (($('narrTopic')||{}).value||''),
+    narr_analyze: !narrFileMode && !!(($('narrAnalyzeChk')||{}).checked),  // 🧠 화면 분석 대본 (v0.69)
     narr_file: narrFileVal,
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',

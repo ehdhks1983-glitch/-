@@ -1537,3 +1537,10 @@ def test_v068_font_route_and_length(server):
     html = _get(server, "/").read().decode("utf-8")
     assert 'id="genLenCustomMin"' in html and "직접 입력" in html
     assert 'id="genSubFontPrev"' in html and "injectFontFaces" in html
+
+
+def test_v069_narr_analyze_ui(server):
+    """v0.69: 🧠 화면 보고 대본 자동 체크박스 + 안내가 내레이션 박스에 있다."""
+    html = _get(server, "/").read().decode("utf-8")
+    assert html.count('id="narrAnalyzeChk"') == 1
+    assert "화면을 보고 대본 자동 작성" in html and "무음" in html
