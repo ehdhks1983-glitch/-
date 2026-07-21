@@ -1501,9 +1501,32 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    _MAX_BODY = 16 * 1024 * 1024  # 요청 본문 상한 16MB (v0.70 — 과대 요청 방어)
+
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
+        if length > self._MAX_BODY:
+            raise ValueError(f"요청 본문이 너무 큽니다 ({length} bytes > 16MB)")
         return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+
+    def _same_origin_ok(self) -> bool:
+        """CSRF·DNS 리바인딩 방어 (v0.70): Host는 로컬호스트:포트, Origin이 있으면 일치.
+
+        악성 웹사이트가 사용자의 127.0.0.1:포트로 POST(키 저장·삭제 등)하는 것을 차단.
+        우리 화면의 fetch는 동일 출처라 Host·Origin이 자동으로 맞으므로 영향 없음.
+        """
+        try:
+            port = self.server.server_address[1]  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return True
+        host = (self.headers.get("Host") or "").strip().lower()
+        ok_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+        if host not in ok_hosts:
+            return False
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        if origin and origin not in {f"http://{h}" for h in ok_hosts}:
+            return False
+        return True
 
     # ---------- 라우팅 ----------
 
@@ -1587,6 +1610,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802
+        # 🔒 동일 출처 검사 (v0.70) — 다른 웹사이트의 요청(CSRF) 차단
+        if not self._same_origin_ok():
+            self._send_json({"error": "허용되지 않은 출처의 요청입니다 (127.0.0.1 로컬만 허용)"}, 403)
+            return
         # 전역 가드 (v0.47) — 핸들러가 예외로 죽으면 브라우저엔 'Failed to fetch'만 남는다
         # → 항상 JSON 오류로 응답하고 전체 스택은 로그에 (진단 리포트로 확인 가능)
         try:

@@ -1544,3 +1544,27 @@ def test_v069_narr_analyze_ui(server):
     html = _get(server, "/").read().decode("utf-8")
     assert html.count('id="narrAnalyzeChk"') == 1
     assert "화면을 보고 대본 자동 작성" in html and "무음" in html
+
+
+def test_v070_csrf_origin_guard(server):
+    """v0.70: 다른 출처 Origin/Host의 POST는 403, 동일 출처는 통과."""
+    import urllib.request as _rq
+
+    base = server  # http://127.0.0.1:<port>
+    port = base.rsplit(":", 1)[1]
+
+    def post(path, headers):
+        req = _rq.Request(base + path, data=b"{}", method="POST", headers=headers)
+        try:
+            return _rq.urlopen(req).status
+        except _rq.HTTPError as e:
+            return e.code
+
+    # 악성 사이트 Origin → 403
+    assert post("/api/keys", {"Origin": "http://evil.com"}) == 403
+    # DNS 리바인딩(악성 Host) → 403
+    assert post("/api/keys", {"Host": "evil.com"}) == 403
+    # 동일 출처(정상 Origin) → 통과 (403 아님)
+    assert post("/api/keys", {"Origin": f"http://127.0.0.1:{port}"}) != 403
+    # Origin 없음(우리 화면 fetch가 헤더 안 붙이는 경우) → 통과
+    assert post("/api/keys", {}) != 403
