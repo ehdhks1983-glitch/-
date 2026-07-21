@@ -1336,3 +1336,51 @@ def test_html_wellformed_and_scene_review_v0572(server):
     assert "minmax(240px,1fr)" in html
     # 복사 형식: 「N번 장면」 블록을 만드는 JS가 실려 있어야 한다
     assert "'번 장면'" in html or '"번 장면"' in html
+
+
+def test_v0641_eleven_key_check_and_list_feedback(server, monkeypatch):
+    """v0.64.1: 키 저장 즉시 검증(eleven_check) + 목록 실패 사유 전달 + refresh."""
+    import json as _json
+    import os as _os
+
+    from cutdaejang.core import tts_engine as te
+
+    # ── 화면: 상태 표시줄 + 🔄 버튼이 실려 있어야 한다 ──
+    html = _get(server, "/").read().decode("utf-8")
+    assert html.count('id="elevenListState"') == 1
+    assert "다시 불러오기" in html
+
+    # ── 잘못된 키: 저장은 되지만 eleven_check.ok=False + 사유 ──
+    def _reject(api_key=None):
+        raise te.TTSError("ElevenLabs 보이스 목록 실패 401: invalid_api_key")
+
+    monkeypatch.setattr(te, "list_elevenlabs_voices", _reject)
+    d = _post(server, "/api/keys", {"action": "save", "elevenlabs_key": "sk_bad"})
+    assert d["ok"] and d["elevenlabs"] is True
+    assert d["eleven_check"]["ok"] is False and "401" in d["eleven_check"]["error"]
+
+    # 목록 조회도 조용히 비우지 않고 error를 담아 내려준다
+    r = _post(server, "/api/eleven_voices", {})
+    assert r["voices"] == [] and "401" in r["error"]
+
+    # ── 올바른 키: eleven_check.ok=True + 성우 수, 목록은 캐시로도 제공 ──
+    fake = [{"voice_id": "v1", "name": "Anna", "category": "premade"}]
+    monkeypatch.setattr(te, "list_elevenlabs_voices", lambda api_key=None: fake)
+    d = _post(server, "/api/keys", {"action": "save", "elevenlabs_key": "sk_good"})
+    assert d["eleven_check"] == {"ok": True, "count": 1}
+    r = _post(server, "/api/eleven_voices", {})
+    assert [v["voice_id"] for v in r["voices"]] == ["v1"]
+
+    # refresh=true면 캐시를 버리고 다시 가져온다
+    fake2 = fake + [{"voice_id": "v2", "name": "Hyunbin", "category": "premade"}]
+    monkeypatch.setattr(te, "list_elevenlabs_voices", lambda api_key=None: fake2)
+    r = _post(server, "/api/eleven_voices", {})          # 캐시 → 아직 1명
+    assert len(r["voices"]) == 1
+    r = _post(server, "/api/eleven_voices", {"refresh": True})
+    assert len(r["voices"]) == 2
+
+    # ── 정리: 키 삭제 + 캐시 무효화 확인(no_key) ──
+    _post(server, "/api/keys", {"action": "clear"})
+    assert not _os.environ.get("ELEVENLABS_API_KEY")
+    r = _post(server, "/api/eleven_voices", {})
+    assert r.get("no_key") is True and r["voices"] == []

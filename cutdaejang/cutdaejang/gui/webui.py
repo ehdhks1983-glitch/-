@@ -1961,7 +1961,7 @@ class _Handler(BaseHTTPRequestHandler):
 
             self._send_json({"lines": [pronounce_ko(l) for l in params.get("lines", [])]})
         elif path == "/api/eleven_voices":  # 🎙 일레븐랩스 계정 보이스 목록 (v0.46)
-            self._eleven_voices()
+            self._eleven_voices(params)
         elif path == "/api/scene_regen":  # 🖼 장면 검토 — 한 장면만 다시 (v0.50)
             job = _get_job(params.get("job_id", ""))
             if not job or job.get("status") != "review_scenes":
@@ -2141,9 +2141,19 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True})
             elif params.get("action") == "save":  # 🔑 API 연동 화면에서 저장 (v0.63)
                 _apply_keys({**params, "save_key": True})
-                self._send_json({"ok": True,
-                                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
-                                 "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY"))})
+                out = {"ok": True,
+                       "gemini": bool(os.environ.get("GEMINI_API_KEY")),
+                       "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY"))}
+                if (params.get("elevenlabs_key") or "").strip():
+                    # 저장 즉시 실제 목록 조회로 키 검증 — 결과를 그대로 알림 (v0.64.1)
+                    type(self.server)._eleven_cache = None
+                    try:
+                        voices = tts_engine.list_elevenlabs_voices()
+                        type(self.server)._eleven_cache = (time.time(), voices)
+                        out["eleven_check"] = {"ok": True, "count": len(voices)}
+                    except Exception as e:
+                        out["eleven_check"] = {"ok": False, "error": str(e)[:300]}
+                self._send_json(out)
             else:
                 self._send_json({"error": "지원하지 않는 동작"}, 400)
         elif path == "/api/products":  # 📇 내 제품 프로필 (v0.64)
@@ -2492,11 +2502,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ---------- 목소리 미리듣기 (지시서 PATCH 6) ----------
 
-    def _eleven_voices(self) -> None:
+    def _eleven_voices(self, params: Optional[dict] = None) -> None:
         """내 ElevenLabs 계정 보이스 목록 — 10분 캐시 (v0.46 성우 보이스 선택)."""
         if not os.environ.get("ELEVENLABS_API_KEY"):
             self._send_json({"voices": [], "no_key": True})
             return
+        if (params or {}).get("refresh"):  # 🔄 다시 불러오기 — 캐시 버리고 새로 (v0.64.1)
+            type(self.server)._eleven_cache = None
         now = time.time()
         cache = getattr(type(self.server), "_eleven_cache", None)
         if cache and now - cache[0] < 600:
@@ -2506,8 +2518,8 @@ class _Handler(BaseHTTPRequestHandler):
             voices = tts_engine.list_elevenlabs_voices()
             type(self.server)._eleven_cache = (now, voices)
             self._send_json({"voices": voices})
-        except tts_engine.TTSError as e:
-            self._send_json({"voices": [], "error": str(e)})
+        except Exception as e:  # 키 거부·네트워크 문제 — 사유를 화면까지 (v0.64.1)
+            self._send_json({"voices": [], "error": str(e)[:300]})
 
     def _preview(self, params: dict) -> None:
         _apply_keys(params)
@@ -3449,10 +3461,12 @@ _HTML = """<!doctype html>
           <label>일레븐랩스 보이스 <span class="hint">— 내 계정에 담긴 보이스 그대로</span></label>
           <select id="elevenVoiceSel"></select>
         </div>
-        <div style="display:flex;align-items:flex-end">
+        <div style="display:flex;align-items:flex-end;gap:6px">
           <button class="ghost" style="margin-bottom:1px" onclick="previewElevenVoice(event)">🔊 미리듣기</button>
+          <button class="ghost" style="margin-bottom:1px" onclick="loadElevenVoices(true);return false">🔄 다시 불러오기</button>
         </div>
       </div>
+      <div class="hint" id="elevenListState"></div>
       <div class="hint">elevenlabs.io의 <b>Voices</b>에서 마음에 드는 보이스를 내 계정에 담으면(Add)
         여기 목록에 나타나요 (10분 정도 뒤 반영, 클론 보이스 포함). 글자 수 과금 — 60초 쇼츠 1편 ≈ 300자.</div>
     </div>
@@ -4073,13 +4087,24 @@ document.querySelectorAll('input[name=prov]').forEach(r => r.onchange = () => {
 });
 
 // ── 🎙 일레븐랩스 성우 보이스 (v0.46) — 내 계정 보이스 자동 불러오기 ──
-async function loadElevenVoices(){
-  if(window._elevenLoaded) return;
+async function loadElevenVoices(force){
+  if(window._elevenLoaded && !force) return;
   window._elevenLoaded = true;
+  const st = $('elevenListState');
+  if(st) st.textContent = '⏳ 일레븐랩스에서 목록 불러오는 중...';
   try{
-    const data = await (await fetch('/api/eleven_voices', {method:'POST', body:'{}'})).json();
+    const body = force ? JSON.stringify({refresh:true}) : '{}';
+    const data = await (await fetch('/api/eleven_voices', {method:'POST', body})).json();
     const voices = data.voices || [];
-    if(!voices.length) return;
+    if(!voices.length){
+      // 왜 비었는지 이유를 그대로 보여준다 (v0.64.1) — 조용한 빈 칸 금지
+      if(st){
+        if(data.no_key) st.textContent = '⬜ 키 미등록 — 첫 화면 「🔑 API 연동」에서 ElevenLabs 키를 저장한 뒤 🔄 다시 불러오기를 누르세요';
+        else if(data.error) st.textContent = '⚠ 불러오기 실패: ' + data.error + ' → elevenlabs.io의 API Keys에서 권한 기본값 그대로 새 키를 만들어 다시 저장해 보세요';
+        else st.textContent = '⚠ 계정에 보이스가 하나도 없어요 — elevenlabs.io의 Voices에서 담아주세요';
+      }
+      return;
+    }
     const sel = $('elevenVoiceSel');
     sel.innerHTML = '';
     for(const v of voices){
@@ -4095,7 +4120,11 @@ async function loadElevenVoices(){
       $('narrVoiceSel').value = window._wantNarrVoice;
       window._wantNarrVoice = '';
     }
-  } catch(e){ window._elevenLoaded = false; }
+    if(st) st.textContent = '✅ 성우 ' + voices.length + '명 불러왔어요 — 위에서 골라 🔊 미리듣기로 확인하세요';
+  } catch(e){
+    window._elevenLoaded = false;
+    if(st) st.textContent = '⚠ 서버와 통신 실패 — 컷대장 콘솔 창이 켜져 있는지 확인하고 🔄 다시 불러오기를 눌러주세요';
+  }
 }
 
 async function previewElevenVoice(ev){
@@ -5467,7 +5496,16 @@ function toggleApiCard(){
 function refreshApiStates(){
   const g = $('apiGeminiState'), e = $('apiElevenState');
   if(g) g.textContent = window._hasGeminiKey ? '✅ 연결됨' : '⬜ 미등록';
-  if(e) e.textContent = window._hasElevenKey ? '✅ 연결됨' : '⬜ 미등록';
+  if(e) e.textContent = window._hasElevenKey ? '🔑 키 저장됨 · 확인 중...' : '⬜ 미등록';
+  // 일레븐랩스는 "저장됨"과 "실제로 됨"이 달라서, 열 때마다 진짜로 확인 (v0.64.1)
+  if(e && window._hasElevenKey){
+    fetch('/api/eleven_voices', {method:'POST', body:'{}'}).then(r => r.json()).then(d => {
+      const n = (d.voices || []).length;
+      if(n) e.textContent = '✅ 연결됨 · 성우 ' + n + '명';
+      else if(d.error) e.textContent = '⚠ 키가 동작하지 않아요 — 권한 기본값으로 새 키를 저장하세요';
+      else e.textContent = '🔑 키 저장됨 · 계정에 보이스 없음';
+    }).catch(() => { e.textContent = '🔑 키 저장됨'; });
+  }
 }
 async function saveApiKey(ev, which){
   ev.preventDefault();
@@ -5480,6 +5518,16 @@ async function saveApiKey(ev, which){
   window._hasGeminiKey = !!d.gemini; window._hasElevenKey = !!d.elevenlabs;
   if(which === 'gemini') $('apiGeminiKey').value = ''; else $('apiElevenKey').value = '';
   refreshApiStates();
+  if(which === 'elevenlabs' && d.eleven_check){
+    // 저장 즉시 서버가 실제 조회로 검사한 결과 (v0.64.1) — 되는 척 금지
+    if(d.eleven_check.ok){
+      alert('✅ 키 확인 완료! 계정에서 성우 ' + d.eleven_check.count + '명이 보여요. 영상 만들기의 「🎙 일레븐랩스 성우」 목록이 바로 채워집니다.');
+      loadElevenVoices(true);
+    } else {
+      alert('❌ 키는 저장했지만 일레븐랩스가 거부했어요: ' + d.eleven_check.error + ' — elevenlabs.io의 API Keys에서 권한을 제한하지 말고(기본값 그대로) 새 키를 만들어 다시 저장해 주세요.');
+    }
+    return;
+  }
   alert('저장했어요 — 이제 이 키가 필요한 기능이 모두 켜집니다');
 }
 async function clearAllKeys(ev){
