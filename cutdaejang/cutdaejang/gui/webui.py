@@ -1176,7 +1176,8 @@ def _kit_text(kit: dict, title: str) -> str:
     """업로드 키트를 붙여넣기 좋은 텍스트 파일로 (job 폴더에 저장)."""
     ttags = " ".join(f"#{t}" for t in kit.get("title_tags", []))
     lines = ["=" * 46, f"📦 업로드 키트 — {title or '완성 영상'}", "=" * 46, ""]
-    lines += ["【유튜브】", "── 제목 후보 (하나 골라 복사 — 제목 옆 태그 포함) ──"]
+    lines += ["【유튜브】 올리기 → https://studio.youtube.com",
+              "── 제목 후보 (하나 골라 복사 — 제목 옆 태그 포함) ──"]
     lines += [f"{i}. {t}" + (f" {ttags}" if ttags else "")
               for i, t in enumerate(kit.get("titles", []), 1)]
     lines += ["", "── 설명문 (설명란에 그대로 붙여넣기) ──", kit.get("description", "")]
@@ -1186,20 +1187,24 @@ def _kit_text(kit: dict, title: str) -> str:
               f"{kit.get('category', '')} — {kit.get('category_reason', '')}"]
     tk = kit.get("tiktok") or {}
     if tk.get("caption"):
-        lines += ["", "【틱톡】 (캡션 — 해시태그 3~5개, fyp류 금지)", tk["caption"],
+        lines += ["", "【틱톡】 올리기 → https://www.tiktok.com/tiktokstudio/upload",
+                  "(캡션 — 해시태그 3~5개, fyp류 금지)", tk["caption"],
                   " ".join(f"#{t}" for t in tk.get("hashtags", []))]
     ig = kit.get("instagram") or {}
     if ig.get("caption"):
-        lines += ["", "【인스타그램 릴스】 (첫 줄이 미리보기에 노출)", ig["caption"],
-                  " ".join(f"#{t}" for t in ig.get("hashtags", []))]
+        lines += ["", "【인스타그램 릴스】 올리기 → https://www.instagram.com",
+                  "(첫 줄이 미리보기에 노출 · 반드시 '릴스'로 올리기 — 피드 썸네일은 위아래가 잘려 보이는 게 정상)",
+                  ig["caption"], " ".join(f"#{t}" for t in ig.get("hashtags", []))]
     nc = kit.get("naver_clip") or {}
     if nc.get("title"):
-        lines += ["", "【네이버 클립】 (검색형 제목 + 태그 10~12개)",
+        lines += ["", "【네이버 클립】 올리기 → https://clipcreators.naver.com",
+                  "(검색형 제목 + 태그 10~12개)",
                   f"제목: {nc['title']}",
                   "태그: " + " ".join(f"#{t}" for t in nc.get("tags", []))]
     th = kit.get("threads") or {}
     if th.get("post"):
-        lines += ["", "【스레드】 (태그는 토픽 1개만 지원)", th["post"]]
+        lines += ["", "【스레드】 올리기 → https://www.threads.com",
+                  "(짧은 반말 · 태그는 토픽 1개만 지원)", th["post"]]
         if th.get("topic"):
             lines += [f"토픽 태그: {th['topic']}"]
     lines += ["", "── 업로드 체크리스트 ──"]
@@ -2481,6 +2486,8 @@ class _Handler(BaseHTTPRequestHandler):
         checks = []
         if is_shorts:
             checks.append(f"세로 {dur_s}초 영상 → 올리면 쇼츠로 자동 인식돼요 (#Shorts 표기 불필요)")
+            checks.append("인스타는 '릴스'로 올리기 — 9:16로 딱 맞아요. 프로필·피드 썸네일이 "
+                          "위아래 잘려 보이는 건 정상(4:5 미리보기)이고, 릴스로 재생하면 다 나와요")
         else:
             checks.append(f"가로/롱폼({dur_s}초) → 노출을 위해 썸네일을 꼭 넣으세요")
         checks.append("썸네일: " + ("만들어 둠 ✓" if job.get("thumbnail")
@@ -3005,7 +3012,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.71)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.72)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3950,7 +3957,10 @@ _HTML = """<!doctype html>
         <div style="font-weight:700;font-size:14px">📦 업로드 키트 <span class="hint">— 유튜브 · 틱톡 · 인스타 · 네이버 클립 · 스레드</span></div>
         <div class="hint" id="kitStatus" style="margin-top:4px"></div>
         <div id="kitBody" class="hidden">
-          <b style="font-size:13px">📌 제목 후보 <span class="hint">(클릭하면 제목+옆 태그까지 통째로 복사돼요)</span></b>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <b style="font-size:13px">📌 제목 후보 <span class="hint">(클릭하면 제목+옆 태그까지 통째로 복사돼요)</span></b>
+            <a href="https://studio.youtube.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:auto">↗ 유튜브 스튜디오 열기</a>
+          </div>
           <div id="kitTitles" class="hookcands"></div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
             <b style="font-size:13px">📝 설명문</b>
@@ -3969,22 +3979,28 @@ _HTML = """<!doctype html>
 
           <details class="opt" style="margin-top:10px">
             <summary>🎵 틱톡 <span class="hint">— 캡션+해시태그 (150자·태그 3~5개)</span>
-              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitTiktok')">📋 복사</button></summary>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitTiktok')">📋 복사</button>
+              <a href="https://www.tiktok.com/tiktokstudio/upload" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none" onclick="event.stopPropagation()">↗ 틱톡 열기</a></summary>
             <textarea id="kitTiktok" style="min-height:72px;margin-top:4px"></textarea>
           </details>
           <details class="opt">
             <summary>📸 인스타그램 릴스 <span class="hint">— 첫 줄이 미리보기에 노출</span>
-              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitInsta')">📋 복사</button></summary>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitInsta')">📋 복사</button>
+              <a href="https://www.instagram.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none" onclick="event.stopPropagation()">↗ 인스타 열기</a></summary>
             <textarea id="kitInsta" style="min-height:88px;margin-top:4px"></textarea>
+            <div class="hint" style="margin-top:4px">📐 반드시 <b>'릴스'</b>로 올리세요. 영상은 9:16(1080×1920)로 딱 맞아요 —
+              프로필·피드 <b>썸네일이 위아래로 잘려 보이는 건 정상</b>(인스타가 4:5로 미리보기 crop). 릴스로 재생하면 제목까지 다 나와요.</div>
           </details>
           <details class="opt">
             <summary>🟢 네이버 클립 <span class="hint">— 검색형 제목 + 태그 10~12개</span>
-              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitNaver')">📋 복사</button></summary>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitNaver')">📋 복사</button>
+              <a href="https://clipcreators.naver.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none" onclick="event.stopPropagation()">↗ 클립 열기</a></summary>
             <textarea id="kitNaver" style="min-height:72px;margin-top:4px"></textarea>
           </details>
           <details class="opt">
-            <summary>🧵 스레드 <span class="hint">— 대화체 + 토픽 태그 1개만</span>
-              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitThreads')">📋 복사</button></summary>
+            <summary>🧵 스레드 <span class="hint">— 짧은 반말 + 토픽 태그 1개만</span>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitThreads')">📋 복사</button>
+              <a href="https://www.threads.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none" onclick="event.stopPropagation()">↗ 스레드 열기</a></summary>
             <textarea id="kitThreads" style="min-height:64px;margin-top:4px"></textarea>
           </details>
 

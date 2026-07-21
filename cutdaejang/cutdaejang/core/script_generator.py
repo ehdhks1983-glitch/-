@@ -604,7 +604,8 @@ UPLOAD_KIT_PROMPT = """너는 한국 숏폼 SEO·업로드 전문가다. 아래 
   instagram.hashtags: 3~5개(＃ 없이)
 [네이버 클립] naver_clip.title: 검색형 제목 30자 이내(핵심 키워드를 맨 앞에).
   naver_clip.tags: 10~12개(대중 태그 + 틈새 태그 조합, ＃ 없이)
-[스레드] threads.post: 200자 이내 대화체(첫 문장이 승부, 마지막은 답글을 부르는 질문).
+[스레드] threads.post: 80~150자 짧은 반말·캐주얼체(존댓말·격식체 금지 — 스레드는 반말 짧은 글이 대세).
+  툭 던지는 첫 문장으로 시선을 끌고, 마지막은 반말 질문으로 답글 유도. 이모지 0~1개. 본문에 해시태그 금지(토픽으로 대신).
   threads.topic: 토픽 태그 딱 1개(스레드는 태그를 1개만 지원)
 JSON만 출력:
 {{"titles": ["..."], "title_tags": ["..."], "description": "...", "tags": ["..."],
@@ -715,10 +716,11 @@ def suggest_upload_kit_stub(transcript: str = "", hook: str = "",
                        "hashtags": ["꿀팁", "가이드", "정리"]},
             "instagram": {"caption": f"{base} 완벽 정리 🎯\n풀버전은 프로필 링크에서!",
                           "hashtags": ["꿀팁", "가이드", "정리", "자동화"]},
-            "naverclip": {"title": f"{base} 하는 법 총정리",
-                          "tags": ["꿀팁", "가이드", "정리", "하는법", "초보", "설명",
-                                   "추천", "자동화", "튜토리얼", "노하우"]},
-            "threads": {"post": f"{base} 정리해봤어요. 궁금한 점은 댓글로! #꿀팁"},
+            "naver_clip": {"title": f"{base} 하는 법 총정리",
+                           "tags": ["꿀팁", "가이드", "정리", "하는법", "초보", "설명",
+                                    "추천", "자동화", "튜토리얼", "노하우"]},
+            "threads": {"post": f"{base}, 이거 생각보다 별거 아니더라. 너넨 어떻게 함?",
+                        "topic": "꿀팁"},
         }
     return {
         "titles": [f"{base} — 핵심만 30초 정리", f"{base}, 몰라서 손해봤던 것",
@@ -742,7 +744,7 @@ def suggest_upload_kit_stub(transcript: str = "", hook: str = "",
         "naver_clip": {"title": f"{base} 핵심 정리",
                        "tags": ["꿀팁", "정리", "하는법", "노하우", "자기계발",
                                 "일상꿀팁", "생활정보", "초보가이드", "요약", "튜토리얼"]},
-        "threads": {"post": (f"{base}, 다들 어렵게 생각하는데 핵심은 하나예요. "
-                             "여러분은 어떤 방법 쓰세요?"),
+        "threads": {"post": (f"{base}, 다들 어렵게 생각하는데 핵심은 딱 하나임. "
+                             "너넨 어떻게 함?"),
                     "topic": "꿀팁"},
     }
