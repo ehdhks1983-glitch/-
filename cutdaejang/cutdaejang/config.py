@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULTS: dict = {
+    # 📇 내 제품 프로필 (v0.64) — [{name, desc, points, target, tone, link, avoid}]
+    "products": [],
     "tts": {
         "rpm_limit": 8,               # 분당 호출 한도 (무료 등급 10의 80%)
         "max_retries": 5,

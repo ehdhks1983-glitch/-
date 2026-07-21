@@ -23,6 +23,13 @@ class ScriptParseError(ScriptError):
     """모델 응답이 유효한 대본 JSON이 아님 (자동 모드: 1회 재생성 대상)."""
 
 
+CONTEXT_BLOCK = """
+[제품/참고 정보 — 사실 근거 (v0.64)]
+{context}
+- 위 정보에 있는 사실만 사용할 것. 여기 없는 기능·가격·수치·효능은 절대 지어내지 말 것
+- 정보를 그대로 낭독하지 말고, 시청자에게 말하듯 자연스럽게 풀어서 쓸 것
+"""
+
 PROMPT_TEMPLATE = """\
 역할: 유튜브 쇼츠 대본 작가
 입력: 주제="{topic}", 톤="{tone}", 목표길이={target_sec}초
@@ -117,24 +124,19 @@ class GeminiScript:
             raise ScriptError("GEMINI_API_KEY가 설정되어 있지 않습니다")
 
     def generate(
-        self, topic: str, tone: str = "정보형", target_sec: int = 60, max_chars: int = 22
+        self, topic: str, tone: str = "정보형", target_sec: int = 60, max_chars: int = 22,
+        context: str = "",
     ) -> Script:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.model}:generateContent"
         )
+        prompt = PROMPT_TEMPLATE.format(
+            topic=topic, tone=tone, target_sec=target_sec, max_chars=max_chars)
+        if (context or "").strip():  # 📇 제품 정보·참고 메모 주입 + 지어내기 가드 (v0.64)
+            prompt += CONTEXT_BLOCK.format(context=context.strip()[:1200])
         payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": PROMPT_TEMPLATE.format(
-                                topic=topic, tone=tone, target_sec=target_sec, max_chars=max_chars
-                            )
-                        }
-                    ]
-                }
-            ],
+            "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"},
         }
         data = _http_post_json(url, payload, {"x-goog-api-key": self.api_key})
@@ -143,6 +145,36 @@ class GeminiScript:
         except (KeyError, IndexError) as e:
             raise ScriptError(f"Gemini 응답 형식 예상 밖: {json.dumps(data)[:300]}") from e
         return Script.from_json_text(text)
+
+
+PRODUCT_SUMMARY_PROMPT = """\
+아래 제품 소개 글을 읽고, 영상 대본 작성에 쓸 제품 프로필로 요약해줘.
+출력(JSON만): {{"name":"제품명","desc":"한 줄 소개(40자)","points":"핵심 기능·차별점 3~5개(줄당 1개)",
+"target":"타깃 시청자","tone":"어울리는 말투 톤 한 단어","link":"본문 속 URL(없으면 빈칸)"}}
+과장 없이 본문에 있는 사실만. 본문:
+{text}
+"""
+
+
+def summarize_product(text: str, model: str = "gemini-2.5-flash", api_key=None) -> dict:
+    """붙여넣은 제품 소개 글 → 프로필 초안 (v0.64)."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 AI 정리를 쓸 수 없습니다")
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent")
+    payload = {"contents": [{"parts": [{"text": PRODUCT_SUMMARY_PROMPT.format(
+        text=text.strip()[:4000])}]}],
+        "generationConfig": {"responseMimeType": "application/json"}}
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        raise ScriptError(f"AI 정리 응답 예상 밖: {str(e)[:120]}") from e
+    return {k: str(out.get(k) or "")[:500]
+            for k in ("name", "desc", "points", "target", "tone", "link")}
 
 
 HOOK_PROMPT = """\
@@ -443,7 +475,8 @@ class StubScript:
     name = "stub"
 
     def generate(
-        self, topic: str, tone: str = "정보형", target_sec: int = 60, max_chars: int = 22
+        self, topic: str, tone: str = "정보형", target_sec: int = 60, max_chars: int = 22,
+        context: str = "",
     ) -> Script:
         return Script(
             title=f"{topic} — 컷대장 데모",

@@ -85,13 +85,16 @@ def safe_filename(title: str, fallback: str = "output") -> str:
     return name or fallback
 
 
-def generate_script(script_provider, topic: str, opts: JobOptions) -> Script:
-    """대본 생성 — JSON 파싱 실패 시 1회 재생성 (§5.6)."""
+def generate_script(script_provider, topic: str, opts: JobOptions,
+                    context: str = "") -> Script:
+    """대본 생성 — JSON 파싱 실패 시 1회 재생성 (§5.6). context=제품 정보·참고 메모."""
     try:
-        return script_provider.generate(topic, tone=opts.tone, target_sec=opts.target_sec)
+        return script_provider.generate(topic, tone=opts.tone,
+                                        target_sec=opts.target_sec, context=context)
     except ScriptParseError as e:
         log.warning("대본 파싱 실패 → 1회 재생성: %s", e)
-        return script_provider.generate(topic, tone=opts.tone, target_sec=opts.target_sec)
+        return script_provider.generate(topic, tone=opts.tone,
+                                        target_sec=opts.target_sec, context=context)
 
 
 def build_style(settings: dict) -> Style:

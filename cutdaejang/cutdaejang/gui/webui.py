@@ -224,6 +224,35 @@ def _parse_script_lines(text: str) -> tuple:
     return lines, last_end
 
 
+def _product_context(params: dict, settings: dict) -> str:
+    """📇 선택한 제품 프로필 + 이번 영상 참고 메모 → AI 주입용 텍스트 (v0.64)."""
+    parts = []
+    name = (params.get("product") or "").strip()
+    if name:
+        prod = next((x for x in (settings.get("products") or [])
+                     if (x.get("name") or "").strip() == name), None)
+        if prod:
+            lines = [f"제품명: {prod['name']}"]
+            if prod.get("desc"):
+                lines.append(f"한 줄 소개: {prod['desc']}")
+            if prod.get("points"):
+                lines.append("핵심 기능·차별점:\n" + "\n".join(
+                    f"- {ln}" for ln in str(prod["points"]).splitlines() if ln.strip()))
+            if prod.get("target"):
+                lines.append(f"타깃: {prod['target']}")
+            if prod.get("link"):
+                lines.append(f"링크: {prod['link']}")
+            if prod.get("tone"):
+                lines.append(f"말투 톤: {prod['tone']}")
+            if prod.get("avoid"):
+                lines.append(f"금지 표현: {prod['avoid']}")
+            parts.append("\n".join(lines))
+    memo = (params.get("context_memo") or "").strip()
+    if memo:
+        parts.append(f"[이번 영상 참고]\n{memo}")
+    return "\n\n".join(parts)[:1500]
+
+
 def _font_overrides(params: dict) -> dict:
     """폼의 글씨체·기울임 선택 → settings.subtitle에 기억할 값 (v0.63, 검증 포함)."""
     out = {}
@@ -356,6 +385,8 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
     over_ui = {}
     if params.get("orientation") in ("shorts", "wide"):  # 🖥 화면 형태 기억 (v0.61)
         over_ui["gen_orientation"] = params["orientation"]
+    if "product" in params:  # 📇 마지막 제품 기억 (v0.64)
+        over_ui["gen_product"] = str(params.get("product") or "")
     if params.get("target_sec"):  # ⏱ 영상 길이 기억 (v0.61)
         try:
             over_ui["gen_target_sec"] = max(10, min(600, int(params["target_sec"])))
@@ -1322,7 +1353,9 @@ def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
                     script = Script(title=topic, sentences=lines)
                 else:
                     provider = SCRIPT_PROVIDERS[provider_name]()
-                    script = orchestrator.generate_script(provider, topic, opts)
+                    script = orchestrator.generate_script(
+                        provider, topic, opts,
+                        context=_product_context(params, settings))
                 sub_id = orchestrator.new_job_id(topic)
                 sub_dir = Path(workdir) / sub_id
                 sub_dir.mkdir(parents=True, exist_ok=True)
@@ -1379,6 +1412,9 @@ def _run_generate(job_id: str, params: dict, workdir: str) -> None:
                 note_txt += f" · 타임코드 감지 → 약 {tc_end}초에 맞춤"
             elif params.get("target_sec"):
                 params = {**params, "pace_sec": int(params.get("target_sec") or 0)}
+            ctx = _product_context(params, config.load_settings())
+            if ctx:
+                _set_job(job_id, product_ctx=ctx)
             # 검토(confirm) 경로는 잡에 저장된 params로 파이프라인을 돌리므로 갱신 필수
             _set_job(job_id, note=note_txt, params=params)
             job_dir = Path(workdir) / job_id
@@ -1398,9 +1434,13 @@ def _run_generate(job_id: str, params: dict, workdir: str) -> None:
             provider_name = "stub"
             params = {**params, "script_provider": "stub"}
             _set_job(job_id, note="Gemini 키가 없어 템플릿 대본으로 만들어요 — 키를 넣으면 진짜 AI 대본")
+        ctx = _product_context(params, config.load_settings())  # 📇 제품 정보 주입 (v0.64)
+        if ctx:
+            _set_job(job_id, product_ctx=ctx,
+                     note=f"📇 제품 정보 반영: {(params.get('product') or '참고 메모')}")
         provider = SCRIPT_PROVIDERS[provider_name]()
         script = orchestrator.generate_script(
-            provider, params["topic"], _job_options(params)
+            provider, params["topic"], _job_options(params), context=ctx
         )
         job_dir = Path(workdir) / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -1487,6 +1527,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_preview(path.split("/", 2)[2])
         elif path.startswith("/bgm/"):
             self._serve_bgm(path.split("/", 2)[2])
+        elif path.startswith("/audio/"):  # 🔊 추출한 오디오 내려받기 (v0.64)
+            parts = path.split("/", 3)
+            job = _get_job(parts[2] if len(parts) > 2 else "")
+            name = Path(parts[3]).name if len(parts) > 3 else ""
+            mp4 = (job or {}).get("mp4")
+            fp = (Path(mp4).parent / name) if mp4 and name.endswith(".mp3") else None
+            if fp and fp.is_file():
+                self._serve_file(str(fp))
+            else:
+                self._send_json({"error": "not found"}, 404)
         elif path.startswith("/sfx/"):  # 🔔 효과음 들어보기 (v0.60)
             name = path.split("/", 2)[2]
             if name not in ("pop", "whoosh", "ding"):
@@ -1846,6 +1896,9 @@ class _Handler(BaseHTTPRequestHandler):
             if not ctx:
                 self._send_json({"error": "주제/내용을 먼저 입력하세요"}, 400)
                 return
+            pctx = _product_context(params, config.load_settings())
+            if pctx:  # 📇 제품 차별점 기반 후킹 (v0.64)
+                ctx = f"{ctx}\n{pctx}"
             try:
                 hooks = sg.suggest_hooks(ctx)
             except sg.ScriptError:
@@ -2093,6 +2146,78 @@ class _Handler(BaseHTTPRequestHandler):
                                  "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY"))})
             else:
                 self._send_json({"error": "지원하지 않는 동작"}, 400)
+        elif path == "/api/products":  # 📇 내 제품 프로필 (v0.64)
+            act = params.get("action") or "list"
+            prods = list(config.load_settings().get("products") or [])
+            if act == "save":
+                item = params.get("item") or {}
+                name = (item.get("name") or "").strip()[:40]
+                if not name:
+                    self._send_json({"error": "제품 이름을 입력하세요"}, 400)
+                    return
+                clean = {k: str(item.get(k) or "").strip()[:500]
+                         for k in ("name", "desc", "points", "target", "tone", "link", "avoid")}
+                clean["name"] = name
+                prods = [x for x in prods if (x.get("name") or "") != name] + [clean]
+                if len(prods) > 20:
+                    self._send_json({"error": "제품은 20개까지예요 — 안 쓰는 것을 지워주세요"}, 400)
+                    return
+                config.save_settings_replace("products", prods)
+            elif act == "delete":
+                name = (params.get("name") or "").strip()
+                prods = [x for x in prods if (x.get("name") or "") != name]
+                config.save_settings_replace("products", prods)
+            self._send_json({"ok": True, "products": prods})
+        elif path == "/api/product_summarize":  # 붙여넣은 소개글 → 프로필 초안 (v0.64)
+            _apply_keys(params)
+            raw = (params.get("text") or "").strip()
+            if not raw:
+                self._send_json({"error": "제품 소개 글을 붙여넣어 주세요"}, 400)
+                return
+            from ..core import script_generator as sg  # noqa: PLC0415
+            try:
+                if not os.environ.get("GEMINI_API_KEY"):
+                    raise sg.ScriptError("no key")
+                out = sg.summarize_product(raw)
+            except Exception:  # noqa: BLE001 — 키 없음/실패 → 앞부분 잘라 초안
+                lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+                out = {"name": (lines[0] if lines else "")[:40],
+                       "desc": (lines[1] if len(lines) > 1 else "")[:120],
+                       "points": "\n".join(lines[2:6]), "target": "", "tone": "", "link": ""}
+            self._send_json({"ok": True, "item": out})
+        elif path == "/api/extract_audio":  # 🔊 완성 영상에서 오디오 추출 (v0.64)
+            job = _get_job(params.get("job_id", ""))
+            mp4 = (job or {}).get("mp4")
+            if not mp4 or not Path(mp4).is_file():
+                self._send_json({"error": "완성된 영상이 없습니다"}, 400)
+                return
+            kind = params.get("kind") or "mix"
+            job_dir = Path(mp4).parent
+            from ..utils import ffmpeg as ff  # noqa: PLC0415
+            try:
+                if kind == "voice":  # 목소리만 — 렌더 중간 산출물(BGM·원본 소리 없음)
+                    # 생성 모드는 job_dir/render/, 편집 모드는 job_dir에 남는다
+                    cands = [job_dir / "render" / "voice_sfx.m4a",
+                             job_dir / "render" / "voice_full.m4a",
+                             job_dir / "voice_sfx.m4a", job_dir / "voice_full.m4a",
+                             job_dir / "narration.wav"]
+                    src = next((c for c in cands if c.is_file()), None)
+                    if src is None:
+                        self._send_json({"error": "목소리 트랙 파일을 찾을 수 없어요 — "
+                                                  "[전체 소리]로 저장해 주세요"}, 404)
+                        return
+                    dest = job_dir / "목소리만.mp3"
+                    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(src),
+                            "-codec:a", "libmp3lame", "-q:a", "2", str(dest)])
+                else:
+                    dest = job_dir / "소리(전체).mp3"
+                    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(mp4), "-vn",
+                            "-codec:a", "libmp3lame", "-q:a", "2", str(dest)])
+            except Exception as e:  # noqa: BLE001
+                self._send_json({"error": f"오디오 추출 실패: {str(e)[:200]}"}, 500)
+                return
+            self._send_json({"ok": True, "path": str(dest),
+                             "url": f"/audio/{(job or {}).get('id', '')}/{dest.name}"})
         elif path == "/api/fetch_fonts":  # ⬇ 무료 글씨체 받기 (v0.63 — BGM 받기 패턴)
             from ..tools import fetch_fonts as ffonts  # noqa: PLC0415
             try:
@@ -2769,7 +2894,8 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.63)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.64)</small></h1>
+    <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
@@ -3238,6 +3364,18 @@ _HTML = """<!doctype html>
     <textarea id="topicBatch" class="hidden" style="min-height:96px" placeholder="한 줄 = 영상 1개 (최대 20개)&#10;예)&#10;하루 10분 정리 습관&#10;아침 루틴 꿀팁 3가지&#10;퇴근 후 부업 시작하는 법"></textarea>
     <div class="hint hidden" id="batchHint">배치는 검토 없이 자동으로 연속 완성돼요. 고른 목소리·배경음악·설정이 전부 똑같이 적용됩니다.
       대본으로 만들려면 아래 「📝 대본 직접 넣기」에 대본 여러 벌을 <b>=== 줄로 구분</b>해 넣으세요 (한 벌 = 영상 1개).</div>
+    <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+      <span>📇 제품</span>
+      <select id="genProductSel" style="width:auto;min-width:150px">
+        <option value="">없음 (일반 주제)</option>
+      </select>
+      <button class="ghost" style="padding:4px 10px;font-size:12.5px" onclick="toggleProductCard()">📇 관리</button>
+      <span class="hint">제품을 고르면 등록한 사실만 근거로 대본·훅·키트를 써요</span>
+    </div>
+    <details class="opt" style="margin-top:6px">
+      <summary>📎 이번 영상 참고 메모 <span class="hint">— 이번 편에만 쓸 추가 정보 (선택)</span></summary>
+      <textarea id="genContext" style="min-height:72px" placeholder="예) 이번 편은 신기능 '자동 자막' 위주로. 이벤트: 7월 말까지 30% 할인"></textarea>
+    </details>
     <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:8px">
       <span>화면</span>
       <div class="toggle" style="margin:0">
@@ -3645,6 +3783,8 @@ _HTML = """<!doctype html>
       <video id="player" controls playsinline></video>
       <div class="stage" id="outPaths"></div>
       <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
+      <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'mix')" title="완성 영상의 소리(목소리+BGM+효과음)를 mp3로 저장">🔊 소리 저장(mp3)</button>
+      <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'voice')" title="BGM·원본 소리 없이 내레이션 목소리만 mp3로 저장 — 다른 편집기·팟캐스트에 재사용">🎙 목소리만(mp3)</button>
       <button class="ghost" style="margin-top:10px" onclick="toggleKit(event)">📦 업로드 키트 (제목·태그·설명 자동)</button>
       <button class="ghost" style="margin-top:10px" onclick="toggleThumb(event)">🖼️ 유튜브 썸네일 만들기 (16:9)</button>
       <div class="hint" style="margin-top:10px;padding:8px 12px;border:1px dashed #3a4157;border-radius:10px">🎯 <b>다음엔 이것도 해보세요</b> —
@@ -3747,6 +3887,37 @@ _HTML = """<!doctype html>
     <table id="histTable"><thead>
       <tr><th>시각</th><th>제목</th><th>목소리</th><th>상태</th><th></th></tr>
     </thead><tbody></tbody></table>
+  </div>
+
+  <div class="card hidden" id="productCard">
+    <div class="backrow"><b>📇 내 제품 정보</b> <span class="hint">— 등록해 두면 AI가 이 사실만 근거로 대본·훅·키트를 써요 (지어내기 방지)</span></div>
+    <div class="chk" style="gap:8px;margin-top:8px">
+      <span>제품 고르기</span>
+      <select id="prodSel" style="width:auto;min-width:180px" onchange="fillProductForm()"></select>
+      <button class="ghost" style="padding:5px 10px" onclick="newProduct(event)">➕ 새 제품</button>
+      <button class="ghost" style="padding:5px 10px;color:#ff9aa6" onclick="deleteProduct(event)">🗑 삭제</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div><label>제품명 *</label><input type="text" id="prodName" placeholder="예) 곰대리 GIF 움짤 제작기"></div>
+      <div><label>한 줄 소개</label><input type="text" id="prodDesc" placeholder="예) 클릭 3번으로 움짤을 만들어주는 프로그램"></div>
+    </div>
+    <label style="margin-top:8px">핵심 기능·차별점 <span class="hint">(줄당 1개, 3~5줄 — 대본의 근거가 돼요)</span></label>
+    <textarea id="prodPoints" style="min-height:84px" placeholder="영상에서 원하는 구간만 골라 움짤로&#10;글자·스티커 넣기 지원&#10;결과물 용량 자동 최적화"></textarea>
+    <div class="row" style="margin-top:8px">
+      <div><label>타깃</label><input type="text" id="prodTarget" placeholder="예) 블로그·카페 운영자"></div>
+      <div><label>말투 톤</label><input type="text" id="prodTone" placeholder="예) 친근한 / 전문적인"></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div><label>링크</label><input type="text" id="prodLink" placeholder="예) https://..."></div>
+      <div><label>금지 표현</label><input type="text" id="prodAvoid" placeholder="예) 무료라고 하지 말 것"></div>
+    </div>
+    <button style="margin-top:10px" onclick="saveProduct(event)">💾 저장</button>
+    <details class="opt" style="margin-top:10px">
+      <summary>✨ 붙여넣고 AI로 정리 <span class="hint">— 제품 소개 페이지 글을 통째로 붙여넣으면 위 칸을 자동으로 채워요 (Gemini 키)</span></summary>
+      <textarea id="prodRaw" style="min-height:110px" placeholder="제품 소개 글 붙여넣기…"></textarea>
+      <button class="ghost" style="margin-top:6px" onclick="summarizeProduct(event)">✨ AI로 정리해 채우기</button>
+    </details>
+    <button style="margin-top:12px" class="ghost" onclick="toggleProductCard()">닫기</button>
   </div>
 
   <div class="card hidden" id="apiCard">
@@ -4219,7 +4390,9 @@ async function suggestHooks(ev, topicId, targetId){
   try {
     const key = ensureGeminiKey();
     const data = await (await fetch('/api/suggest_hooks', {method:'POST',
-      body: JSON.stringify({context: ctx, gemini_key: key, save_key: true})})).json();
+      body: JSON.stringify({context: ctx, gemini_key: key, save_key: true,
+        product: (($('genProductSel')||{}).value)||'',
+        context_memo: (($('genContext')||{}).value)||''})})).json();
     if(data.error){ alert(data.error); return; }
     (data.hooks || []).forEach(h => {
       const b = document.createElement('button');
@@ -4760,6 +4933,8 @@ async function generate(){
     hook_font: (($('genHookFontSel')||{}).value)||'',              // v0.63 제목 글씨체
     hook_tilt: !!(($('genHookTiltChk')||{}).checked),              // v0.63 비스듬히
     sub_font: (($('genSubFontSel')||{}).value)||'',                // v0.63 자막 글씨체
+    product: (($('genProductSel')||{}).value)||'',                 // 📇 제품 프로필 (v0.64)
+    context_memo: (($('genContext')||{}).value)||'',               // 📎 이번 영상 참고 (v0.64)
     orientation: pick('genOrient') || 'shorts',                    // v0.61 화면 형태
     target_sec: +(($('genLenSel')||{}).value) || 60,               // v0.61 영상 길이
     script_text: (($('genScript')||{}).value)||'',                 // v0.61 내 대본
@@ -5202,6 +5377,87 @@ async function openDiagFolder(ev){
 }
 
 function toggleSettings(){ $('settingsCard').classList.toggle('hidden'); }
+
+// ── 📇 내 제품 프로필 (v0.64) ──
+function toggleProductCard(){
+  $('productCard').classList.toggle('hidden');
+  if(!$('productCard').classList.contains('hidden')) loadProducts();
+}
+async function loadProducts(keep){
+  const d = await (await fetch('/api/products', {method:'POST', body: JSON.stringify({action:'list'})})).json();
+  window._products = d.products || [];
+  const sel = $('prodSel'); if(sel){
+    sel.innerHTML = '';
+    window._products.forEach(x => sel.add(new Option(x.name, x.name)));
+    sel.add(new Option('➕ 새 제품…', ''));
+    if(keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+    fillProductForm();
+  }
+  const gsel = $('genProductSel'); if(gsel){
+    const cur = gsel.value;
+    gsel.innerHTML = '<option value="">없음 (일반 주제)</option>';
+    window._products.forEach(x => gsel.add(new Option('📇 ' + x.name, x.name)));
+    if([...gsel.options].some(o => o.value === cur)) gsel.value = cur;
+  }
+}
+function fillProductForm(){
+  const x = (window._products || []).find(v => v.name === (($('prodSel')||{}).value)) || {};
+  $('prodName').value = x.name || ''; $('prodDesc').value = x.desc || '';
+  $('prodPoints').value = x.points || ''; $('prodTarget').value = x.target || '';
+  $('prodTone').value = x.tone || ''; $('prodLink').value = x.link || '';
+  $('prodAvoid').value = x.avoid || '';
+}
+function newProduct(ev){ ev.preventDefault(); const s = $('prodSel'); if(s) s.value = ''; fillProductForm(); $('prodName').focus(); }
+async function saveProduct(ev){
+  ev.preventDefault();
+  const item = {name: $('prodName').value, desc: $('prodDesc').value,
+    points: $('prodPoints').value, target: $('prodTarget').value,
+    tone: $('prodTone').value, link: $('prodLink').value, avoid: $('prodAvoid').value};
+  const d = await (await fetch('/api/products', {method:'POST',
+    body: JSON.stringify({action:'save', item})})).json();
+  if(d.error){ alert(d.error); return; }
+  await loadProducts(item.name.trim());
+  alert('저장했어요 — 영상 만들 때 「📇 제품」에서 고르면 이 정보만 근거로 대본을 써요');
+}
+async function deleteProduct(ev){
+  ev.preventDefault();
+  const name = ($('prodSel')||{}).value;
+  if(!name){ alert('삭제할 제품을 먼저 골라주세요'); return; }
+  if(!confirm('「' + name + '」 프로필을 삭제할까요?')) return;
+  await fetch('/api/products', {method:'POST', body: JSON.stringify({action:'delete', name})});
+  await loadProducts();
+}
+async function summarizeProduct(ev){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent; btn.textContent = '정리 중…';
+  try {
+    const key = ensureGeminiKey();
+    const d = await (await fetch('/api/product_summarize', {method:'POST',
+      body: JSON.stringify({text: $('prodRaw').value, gemini_key: key, save_key: true})})).json();
+    if(d.error){ alert(d.error); return; }
+    const it = d.item || {};
+    $('prodName').value = it.name || $('prodName').value;
+    $('prodDesc').value = it.desc || ''; $('prodPoints').value = it.points || '';
+    $('prodTarget').value = it.target || ''; $('prodTone').value = it.tone || '';
+    $('prodLink').value = it.link || '';
+    alert('채웠어요 — 내용 확인하고 [💾 저장]을 눌러주세요');
+  } finally { btn.disabled = false; btn.textContent = old; }
+}
+
+// ── 🔊 오디오 추출 (v0.64) ──
+async function extractAudio(ev, kind){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent; btn.textContent = '추출 중…';
+  try {
+    const d = await (await fetch('/api/extract_audio', {method:'POST',
+      body: JSON.stringify({job_id: currentJob, kind})})).json();
+    if(d.error){ alert(d.error); return; }
+    const a = document.createElement('a');
+    a.href = d.url; a.download = '';
+    document.body.appendChild(a); a.click(); a.remove();
+    alert('저장했어요!' + String.fromCharCode(10) + '영상 폴더에도 있어요: ' + d.path);
+  } finally { btn.disabled = false; btn.textContent = old; }
+}
 
 // ── 🔑 API 연동 화면 (v0.63) ──
 function toggleApiCard(){
@@ -5721,6 +5977,15 @@ async function poll(){
     // v0.52: 상단 제목 글씨 스타일 복원 (생성 폼)
     const hks = ((state.settings || {}).subtitle || {}).hook_style || '기본';
     if($('genHookStyleSel')) $('genHookStyleSel').value = hks;
+    // v0.64: 제품 목록 채우기 + 마지막 선택 복원
+    window._products = (state.settings || {}).products || [];
+    const gsel = $('genProductSel');
+    if(gsel){
+      gsel.innerHTML = '<option value="">없음 (일반 주제)</option>';
+      window._products.forEach(x => gsel.add(new Option('📇 ' + x.name, x.name)));
+      const lastP = ((state.settings || {}).ui || {}).gen_product || '';
+      if(lastP && [...gsel.options].some(o => o.value === lastP)) gsel.value = lastP;
+    }
     // v0.63: 글씨체·기울임 복원 + 설치 목록 반영
     fillFontSels(state.fonts || []);
     const subF = ((state.settings || {}).subtitle || {}).font || '';

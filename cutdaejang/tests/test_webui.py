@@ -500,6 +500,54 @@ def test_template_save_apply_delete(server):
         assert e.code == 400
 
 
+def test_v064_products_and_audio_extract(server, tmp_path):
+    """v0.64: 📇 제품 CRUD·주입 기억 + 🔊 완성 영상 오디오 추출(mp3)·목소리만."""
+    import urllib.error
+
+    from cutdaejang import config
+    from cutdaejang.utils import ffmpeg as ff
+
+    # ── 제품 저장 → 목록/설정 반영 ──
+    d = _post(server, "/api/products", {"action": "save", "item": {
+        "name": "곰대리", "desc": "GIF 움짤 제작기", "points": "클릭 3번\n용량 최적화",
+        "target": "블로거", "tone": "친근", "link": "https://gom.example", "avoid": ""}})
+    assert d["ok"] and any(x["name"] == "곰대리" for x in d["products"])
+    assert any(x["name"] == "곰대리" for x in config.load_settings()["products"])
+
+    # ── 제품 선택 생성 → 노트에 반영 + 마지막 제품 기억 ──
+    res = _post(server, "/api/generate", {
+        "topic": "곰대리 소개", "auto": True, "tts_provider": "stub",
+        "script_provider": "stub", "product": "곰대리"})
+    job = _wait_status(server, res["job_id"], {"ok", "partial", "failed"}, timeout=300)
+    assert job["status"] == "ok", job.get("errors")
+    assert config.load_settings()["ui"].get("gen_product") == "곰대리"
+
+    # ── 오디오 추출: 전체 믹스 + 목소리만 ──
+    a1 = _post(server, "/api/extract_audio", {"job_id": res["job_id"], "kind": "mix"})
+    assert a1["ok"] and a1["path"].endswith(".mp3")
+    assert ff.probe_duration_us(a1["path"]) > 1_000_000
+    body = _get(server, a1["url"]).read()
+    assert len(body) > 10_000  # /audio/ 라우트로 실제 서빙
+
+    a2 = _post(server, "/api/extract_audio", {"job_id": res["job_id"], "kind": "voice"})
+    assert a2["ok"] and "목소리만" in a2["path"]
+    assert ff.probe_duration_us(a2["path"]) > 500_000
+
+    # 경로 탈출/이상 파일명 404
+    try:
+        _get(server, f"/audio/{res['job_id']}/../../etc/passwd")
+        ok404 = False
+    except urllib.error.HTTPError as e:
+        ok404 = e.code == 404
+    assert ok404
+
+    # ── AI 정리(키 없음 → 초안 폴백) + 삭제 ──
+    s = _post(server, "/api/product_summarize", {"text": "새제품\n좋은 도구입니다\n기능A\n기능B"})
+    assert s["ok"] and s["item"]["name"] == "새제품"
+    d2 = _post(server, "/api/products", {"action": "delete", "name": "곰대리"})
+    assert all(x["name"] != "곰대리" for x in d2["products"])
+
+
 def test_v063_keys_fonts_timecode(server):
     """v0.63: 🔑 키 저장/삭제 API + 글씨체 목록 + 타임코드 대본 정리·길이 맞춤."""
     import json as _json
