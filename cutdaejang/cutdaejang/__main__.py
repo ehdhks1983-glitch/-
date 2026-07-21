@@ -88,6 +88,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     settings = config.load_settings()
     outputs = tuple(o.strip() for o in args.outputs.split(",") if o.strip())
+    # mp4 전용 — draft 등 지원하지 않는 값은 조용히 성공하지 않고 즉시 오류 (v0.70)
+    invalid = [o for o in outputs if o != "mp4"]
+    if invalid or not outputs:
+        print(f"--outputs 는 'mp4'만 지원합니다 (받은 값: {args.outputs!r}). "
+              "CapCut draft 출력은 v0.41에서 제거되었습니다.", file=sys.stderr)
+        return 2
+    if not (0 <= args.crf <= 51):  # libx264/x265 유효 범위 (v0.70)
+        print(f"--crf 는 0~51 사이여야 합니다 (받은 값: {args.crf})", file=sys.stderr)
+        return 2
+    if args.target_sec is not None and not (5 <= args.target_sec <= 1800):
+        print(f"--target-sec 는 5~1800초 사이여야 합니다 (받은 값: {args.target_sec})", file=sys.stderr)
+        return 2
     chain = (
         list(settings["tts"]["fallback_chain"]) if args.tts == "gemini" else [args.tts]
     )
@@ -267,7 +279,7 @@ def main(argv=None) -> int:
     run_p.add_argument("--topic", help="쇼츠 주제")
     run_p.add_argument("--script-file", help="검토 완료된 대본 JSON")
     run_p.add_argument("--auto", action="store_true", help="자동 모드 (검토 게이트 스킵, 기본 OFF)")
-    run_p.add_argument("--outputs", default="mp4", help="mp4 (캡컷 draft 출력은 제거됨)")
+    run_p.add_argument("--outputs", default="mp4", help="mp4 (전용 — 다른 값은 오류)")
     run_p.add_argument("--script-provider", choices=tuple(SCRIPT_PROVIDERS), default="gemini")
     run_p.add_argument("--tts", choices=tuple(TTS_PROVIDERS), default="gemini",
                        help="gemini 선택 시 settings.json의 폴백 체인 적용")

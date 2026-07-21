@@ -379,7 +379,8 @@ def run_job(
                 result.errors.append(f"mp4 렌더 실패: {e}")
 
 
-        mp4_ok = ("mp4" not in opts.outputs) or (result.mp4 is not None and result.mp4.ok)
+        # 성공 판정: mp4가 실제로 만들어져야 ok (없는 출력 유형을 조용히 성공 처리하지 않음, v0.70)
+        mp4_ok = result.mp4 is not None and result.mp4.ok
         result.status = "ok" if (mp4_ok and not result.errors) else "partial"
     except Exception as e:
         log.exception("작업 실패: %s", job_id)

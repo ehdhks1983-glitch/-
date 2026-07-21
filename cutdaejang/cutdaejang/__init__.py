@@ -1,7 +1,7 @@
-"""컷대장 — CapCut 쇼츠·영상 조립 자동화 (개발기획안 v1.2 기반).
+"""컷대장 — 유튜브 쇼츠·영상 자동 제작 (주제→대본→TTS→배경→자막→mp4).
 
-이중 출력 구조:
-  - 출력 B: Timeline Spec → render_engine(FFmpeg) → mp4 (무인 대량생산용)
+Timeline Spec(IR) → render_engine(FFmpeg) → mp4 로 무인 대량생산한다.
+(CapCut draft 출력은 v0.41에서 제거 — mp4 전용)
 """
 
 __version__ = "0.69.0"
