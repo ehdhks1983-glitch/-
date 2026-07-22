@@ -3129,7 +3129,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.74.3)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.74.4)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4741,7 +4741,7 @@ function updateSttHint(){
     : '내 OpenAI 키 사용.';
 }
 
-const PASTE_TIP = '\n\n창이 안 보이면: 탐색기에서 영상 파일을 Shift+우클릭 → "경로로 복사" → 아래 칸에 붙여넣으세요.';
+const PASTE_TIP = '\\n\\n창이 안 보이면: 탐색기에서 영상 파일을 Shift+우클릭 → "경로로 복사" → 아래 칸에 붙여넣으세요.';
 async function pickFile(ev){
   ev.preventDefault();
   const btn = ev.target;

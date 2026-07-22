@@ -36,3 +36,39 @@ def test_pick_timeout_default_reduced():
 
     assert inspect.signature(webui.pick_path).parameters["timeout"].default == 300.0
     assert inspect.signature(webui.pick_video_file).parameters["timeout"].default == 300.0
+
+
+def test_evaluated_html_js_parses():
+    """파이썬이 실제로 만들어내는 _HTML(이스케이프 처리 후)의 JS가 문법상 유효해야 한다.
+
+    v0.74.3 회귀 방지: JS 문자열에 '\\n'(홑따옴표+n)을 쓰면 non-raw 파이썬 문자열이
+    실제 줄바꿈으로 바꿔 문자열 리터럴이 깨지고 페이지 전체 JS가 죽었다. 반드시
+    소스가 아니라 '평가된' _HTML 을 검사해야 이 부류를 잡는다. node 없으면 skip.
+    """
+    import os
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if not node:
+        import pytest
+
+        pytest.skip("node 미설치 — JS 파싱 검사 생략")
+    html = webui._HTML
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    assert scripts, "no <script> block found"
+    js = "\n;\n".join(scripts)
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".js", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(js)
+            path = f.name
+        r = subprocess.run([node, "--check", path], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr[-800:]
+    finally:
+        if path:
+            os.unlink(path)
