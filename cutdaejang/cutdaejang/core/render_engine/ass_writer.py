@@ -121,6 +121,8 @@ def colorize_markup(text: str, default_hex: str):
 
 # 💬 본문 자막 스타일 프리셋 (v0.54) — Default 스타일의 색·테두리·띠를 통째로.
 # "band" 키가 있으면 사용자의 subtitle.band 설정을 프리셋이 덮는다.
+# 🌈 다색 팝(v0.73): pop_rotate=True면 문장마다 아래 팔레트 색을 번갈아 칠한다.
+POP_PALETTE = ["#FF3B30", "#31E1C4", "#FFD400", "#FF7A00", "#5AC8FA", "#FF375F"]
 SUB_STYLES = {
     "기본": {},
     "예능 노랑": {"primary": "#FFE14D", "band": False, "outline": 6,
@@ -129,6 +131,12 @@ SUB_STYLES = {
                 "highlight": "#D62B00"},
     "네온": {"primary": "#9CFFF0", "band": False, "outline": 3,
             "outline_color": "#0FB5A0", "shadow": 0, "blur": 4},
+    # 🌈 다색 팝 — 문장마다 색이 바뀌는 굵은 흰 테두리 자막 (인스타 릴스 밈 느낌)
+    "다색 팝": {"primary": "#FFFFFF", "band": False, "outline": 6,
+              "outline_color": "#FFFFFF", "shadow": 3, "pop_rotate": True},
+    # ⬛ 블랙 박스 — 검은 띠 위 흰 글자 + 노랑 강조 (참고 릴스 상단 제목형)
+    "블랙 박스": {"primary": "#FFFFFF", "band": True, "band_color": "&H00121212",
+               "highlight": "#FFD400"},
 }
 
 # 🪧 상단 제목 스타일 프리셋 (v0.52) — 글자색·테두리·띠를 통째로 바꾼다.
@@ -141,19 +149,28 @@ HOOK_STYLES = {
                  "highlight": "#D62B00"},
     "네온": {"primary": "#9CFFF0", "band": False, "outline": 3,
             "outline_color": "#0FB5A0", "shadow": 0, "blur": 5},
+    # 🌈 다색 팝 — 제목도 굵은 흰 테두리에 팝 컬러 (다색 자막과 세트)
+    "다색 팝": {"primary": "#FFFFFF", "band": False, "outline": 7,
+              "outline_color": "#FFFFFF", "shadow": 3, "pop_rotate": True},
+    # ⬛ 블랙 박스 — 검은 띠 위 흰 제목 + 노랑 강조 (참고 릴스 스샷1)
+    "블랙 박스": {"primary": "#FFFFFF", "band": True, "band_color": "&H00121212",
+               "highlight": "#FFD400"},
 }
 
 
 def hook_dialogue_text(hook: str, style, primary: str = "#FFFFFF",
-                       highlight: str = "") -> str:
+                       highlight: str = "", pop_color: str = "") -> str:
     """상단 제목(훅) 본문 — ``제목 | 강조단어``면 그 단어를 강조색으로 팝 (썸네일 임팩트).
 
     강조 뒤에는 제목 기본색(프리셋별로 다름 — v0.52)으로 복원한다.
+    pop_color(v0.73 다색 팝)면 수동 마크업·강조가 없는 제목 전체를 그 색으로 칠한다.
     """
     hl_color = highlight or style.highlight_color
     marked = colorize_markup(hook, primary)  # 다색 마크업 우선
     if marked is not None:
         return marked
+    if pop_color and "|" not in hook:  # 🌈 다색 팝 제목 — 전체를 팝 컬러로
+        return "{\\1c" + _inline_color(pop_color) + "}" + escape_ass_text(hook)
     text, hl = hook, ""
     if "|" in hook:
         head, _, tail = hook.rpartition("|")
@@ -192,14 +209,18 @@ def wrap_text(text: str, max_chars: int) -> str:
     return t[:mid] + "\n" + t[mid:]
 
 
-def dialogue_text(sub, style) -> str:
+def dialogue_text(sub, style, pop_color: str = "") -> str:
     """자막 본문 조립 — 페이드 태그 + 강조 단어 인라인 컬러 (지시서 PATCH 5).
 
     강조색 적용 후 기본색을 명시적으로 복원한다.
+    pop_color(v0.73 다색 팝)가 있으면 수동 마크업이 없는 문장 전체를 그 색으로 칠한다.
     """
     marked = colorize_markup(sub.text, style.primary_color)  # 다색 마크업 우선
     if marked is not None:
         body = marked
+    elif pop_color:  # 🌈 다색 팝 — 문장 전체를 회전색으로 (수동 색·강조는 위에서 우선)
+        body = ("{\\1c" + _inline_color(pop_color) + "}"
+                + escape_ass_text(wrap_text(sub.text, getattr(style, "wrap_chars", 0))))
     elif sub.highlight and sub.highlight in sub.text:
         pre, _, post = sub.text.partition(sub.highlight)
         body = (
@@ -321,8 +342,10 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
     lines = []
     # 상단 제목(훅) — 영상 내내 고정 표시
     if spec.hook.strip():
-        hook_body = hook_dialogue_text(spec.hook.strip(), style, primary=hook_primary,
-                                       highlight=hs.get("highlight", ""))
+        hook_body = hook_dialogue_text(
+            spec.hook.strip(), style, primary=hook_primary,
+            highlight=hs.get("highlight", ""),
+            pop_color=POP_PALETTE[0] if hs.get("pop_rotate") else "")  # 🌈 다색 팝 (v0.73)
         if hs.get("blur"):  # 네온 — 외곽선을 번지게 (글로우)
             hook_body = "{\\blur" + str(max(2, sc(hs["blur"]))) + "}" + hook_body
         lines += band_event_lines(
@@ -339,8 +362,10 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             + "\\fscx55\\fscy55\\t(0,140,\\fscx100\\fscy100)\\fad(60,200)}"
             + escape_ass_text(ip.text))
 
-    for s in spec.subtitles:
-        body = dialogue_text(s, style)
+    pop_on = bool(ss.get("pop_rotate"))  # 🌈 다색 팝 — 문장마다 색 번갈아 (v0.73)
+    for i, s in enumerate(spec.subtitles):
+        pop = POP_PALETTE[i % len(POP_PALETTE)] if pop_on else ""
+        body = dialogue_text(s, style, pop_color=pop)
         if ss.get("blur"):  # 네온 자막 — 외곽선 글로우 (띠 없음 프리셋에서만)
             body = "{\\blur" + str(max(2, sc(ss["blur"]))) + "}" + body
         lines += band_event_lines(

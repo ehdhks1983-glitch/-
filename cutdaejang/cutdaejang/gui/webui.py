@@ -37,6 +37,7 @@ _EDIT_LAST_KEYS = (
     "bgm", "bgm_db", "hook_scale", "hook_style", "sub_style", "tone", "narr_voice", "narr_style", "narr_subs_only",
     "stt_provider", "whisper_model", "speed", "quality", "narr_fit", "transition",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
+    "tempo",  # ⚡ 빠른 템포 — 몽타주 컷 밀도 (v0.73)
 )
 
 
@@ -565,7 +566,11 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 and analysis.cut_us > (tgt_auto + 3) * 1_000_000):
             from ..core import video_editor as ve  # noqa: PLC0415
             _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {tgt_auto}초를 뽑는 중…")
-            ranges = edit_mode.spread_ranges(analysis.cut_us, tgt_auto * 1_000_000)
+            # ⚡ 빠른 템포(v0.73) — 조각을 더 짧게 잡아 컷을 촘촘하게 (몽타주 리듬 up)
+            _piece = {"빠르게": 2_400_000, "아주 빠르게": 1_700_000}.get(
+                str(params.get("tempo") or ""), 3_500_000)
+            ranges = edit_mode.spread_ranges(
+                analysis.cut_us, tgt_auto * 1_000_000, piece_us=_piece)
             try:  # 🎬 장면 전환에 맞춰 조각 시작점을 스냅 — 컷이 장면 중간에서 안 끊기게 (v0.44)
                 if analysis.cut_us < 20 * 60 * 1_000_000:  # 아주 긴 영상은 감지 생략(시간)
                     _set_job(job_id, note="장면 전환 지점을 찾는 중…")
@@ -3012,7 +3017,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.72)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.73)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3118,6 +3123,13 @@ _HTML = """<!doctype html>
           <option value="1.5">1.5배</option>
           <option value="2">2배</option>
         </select>
+        <span class="hint">· ⚡ 빠른 템포</span>
+        <select id="editTempoSel" style="width:auto;padding:6px 8px"
+                title="자막(발화) 없는 영상을 자동 몽타주할 때 컷을 얼마나 촘촘히 자를지 — 인스타 릴스처럼 빠른 편집 리듬">
+          <option value="">기본</option>
+          <option value="빠르게">빠르게 (컷 촘촘)</option>
+          <option value="아주 빠르게">아주 빠르게</option>
+        </select>
         <span class="hint">· 화질</span>
         <select id="autoQualitySel" style="width:auto;padding:6px 8px">
           <option value="draft">빠름 (초안)</option>
@@ -3156,6 +3168,8 @@ _HTML = """<!doctype html>
           <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
           <option value="화이트 박스">화이트 박스 (흰 띠+검정 글자)</option>
           <option value="네온">네온 (민트 글로우)</option>
+          <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
+          <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
         </select>
         <span style="margin-left:6px">글씨체</span>
         <select id="editHookFontSel" class="fontsel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
@@ -3340,6 +3354,8 @@ _HTML = """<!doctype html>
           <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
           <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
           <option value="네온">네온 (민트 글로우)</option>
+          <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
+          <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
         </select>
         <div class="stylechips" data-for="editSubStyleSel">
           <div class="stylechip sel" data-v="기본" onclick="pickStyleChip('editSubStyleSel','기본',event)"
@@ -3350,6 +3366,10 @@ _HTML = """<!doctype html>
                style="background:#f4f5f8;color:#15161c;border-radius:999px">말풍선 띠</div>
           <div class="stylechip" data-v="네온" onclick="pickStyleChip('editSubStyleSel','네온',event)"
                style="color:#7dffd4;text-shadow:0 0 8px rgba(125,255,212,.95),0 0 18px rgba(125,255,212,.55)">네온 글로우</div>
+          <div class="stylechip" data-v="다색 팝" onclick="pickStyleChip('editSubStyleSel','다색 팝',event)"
+               style="text-shadow:-1.5px -1.5px 0 #fff,1.5px -1.5px 0 #fff,-1.5px 1.5px 0 #fff,1.5px 1.5px 0 #fff,0 2px 4px #000"><span style="color:#FF3B30">다색</span> <span style="color:#31E1C4">팝</span></div>
+          <div class="stylechip" data-v="블랙 박스" onclick="pickStyleChip('editSubStyleSel','블랙 박스',event)"
+               style="background:#121212;color:#fff;border-radius:6px">블랙 박스 <span style="color:#FFD400">강조</span></div>
         </div>
       </div>
       <div class="chk" style="gap:8px;margin-top:6px">
@@ -3635,6 +3655,8 @@ _HTML = """<!doctype html>
           <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
           <option value="화이트 박스">화이트 박스 (흰 띠+검정 글자)</option>
           <option value="네온">네온 (민트 글로우)</option>
+          <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
+          <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
         </select>
       </div>
       <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:6px">
@@ -3663,6 +3685,8 @@ _HTML = """<!doctype html>
         <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
         <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
         <option value="네온">네온 (민트 글로우)</option>
+          <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
+          <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
       </select>
       <div class="stylechips" data-for="genSubStyleSel">
           <div class="stylechip sel" data-v="기본" onclick="pickStyleChip('genSubStyleSel','기본',event)"
@@ -3673,6 +3697,10 @@ _HTML = """<!doctype html>
                style="background:#f4f5f8;color:#15161c;border-radius:999px">말풍선 띠</div>
           <div class="stylechip" data-v="네온" onclick="pickStyleChip('genSubStyleSel','네온',event)"
                style="color:#7dffd4;text-shadow:0 0 8px rgba(125,255,212,.95),0 0 18px rgba(125,255,212,.55)">네온 글로우</div>
+          <div class="stylechip" data-v="다색 팝" onclick="pickStyleChip('genSubStyleSel','다색 팝',event)"
+               style="text-shadow:-1.5px -1.5px 0 #fff,1.5px -1.5px 0 #fff,-1.5px 1.5px 0 #fff,1.5px 1.5px 0 #fff,0 2px 4px #000"><span style="color:#FF3B30">다색</span> <span style="color:#31E1C4">팝</span></div>
+          <div class="stylechip" data-v="블랙 박스" onclick="pickStyleChip('genSubStyleSel','블랙 박스',event)"
+               style="background:#121212;color:#fff;border-radius:6px">블랙 박스 <span style="color:#FFD400">강조</span></div>
         </div>
       <div class="chk" style="gap:8px;margin-top:6px">
         <span>글씨체</span>
@@ -4537,7 +4565,7 @@ function applyEditLast(el){
   if(!el || !Object.keys(el).length) return;
   const set = (id, v) => { const e = $(id); if(e && v !== undefined && v !== null) e.value = String(v); };
   const chk = (id, v) => { const e = $(id); if(e && v !== undefined && v !== null) e.checked = !!v; };
-  set('editSpeedSel', el.speed); set('autoQualitySel', el.quality);
+  set('editSpeedSel', el.speed); set('editTempoSel', el.tempo||''); set('autoQualitySel', el.quality);
   set('denoiseSel', el.denoise); set('origAudioSel', el.orig_audio);
   if(el.orig_audio && el.orig_audio !== 'keep') window._origTouched = true;  // 복원값 보호
   set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
@@ -4692,6 +4720,7 @@ async function startEdit(){
     wm_path: ($('wmPath')||{}).value||'', wm_pos: ($('wmPos')||{}).value||'tr',
     wm_scale: +(($('wmScale')||{}).value)||0.14,
     speed: +$('editSpeedSel').value || 1,
+    tempo: (($('editTempoSel')||{}).value)||'',   // ⚡ 빠른 템포 — 몽타주 컷 밀도 (v0.73)
     quality: (($('autoQualitySel')||{}).value)||'standard',
     auto_edit: pick('editFinish') === 'auto', auto_target_sec: +$('autoTargetSec').value||0,
     auto_multi: (($('autoMultiSel')||{}).value) === 'multi',
@@ -5947,7 +5976,7 @@ function resetEditForm(ev){
   set('bgmEditSel',''); set('bgmVolSel','-14');
   set('wmPath',''); set('wmPos','tr'); set('wmScale','0.14');
   const rf = document.querySelector('input[name=editFinish][value=review]'); if(rf) rf.checked = true;
-  set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1');
+  set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1'); set('editTempoSel','');
   set('autoMultiSel','one'); set('autoQualitySel','standard');
   onFinishChange(); applyTargetPreset(); onAutoMultiChange();
   const st = $('sttSel'); if(st && st.options.length) st.selectedIndex = 0;
@@ -6053,7 +6082,8 @@ function collectTplParams(){
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
     transition: (($('transSel')||{}).value)||'none',
     stt_provider: $('sttSel').value||'', whisper_model: (($('whisperModelSel')||{}).value)||'small',
-    speed: +$('editSpeedSel').value||1, quality: (($('autoQualitySel')||{}).value)||'standard',
+    speed: +$('editSpeedSel').value||1, tempo: (($('editTempoSel')||{}).value)||'',
+    quality: (($('autoQualitySel')||{}).value)||'standard',
     auto_edit: pick('editFinish')==='auto', auto_multi: (($('autoMultiSel')||{}).value)==='multi',
     auto_target_sec: +$('autoTargetSec').value||0, photo_sec: +(($('photoSec')||{}).value)||15,
     wm_pos: (($('wmPos')||{}).value)||'tr', wm_scale: +(($('wmScale')||{}).value)||0.14,
