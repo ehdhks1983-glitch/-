@@ -52,7 +52,7 @@ def test_upload_kit_stub_longform_has_no_shorts():
     s = json.dumps(k, ensure_ascii=False)
     assert "Shorts" not in s and "쇼츠" not in s
     for key in ("titles", "tags", "keywords", "hashtags", "tiktok", "instagram",
-                "naverclip", "threads", "category"):
+                "naver_clip", "threads", "category"):  # v0.72: naverclip 오타 키 → naver_clip
         assert k.get(key), key
     k2 = sg.suggest_upload_kit_stub("정리 습관 영상", is_shorts=True)
     assert "Shorts" in json.dumps(k2, ensure_ascii=False)
