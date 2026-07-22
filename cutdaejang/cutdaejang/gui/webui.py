@@ -3018,7 +3018,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.73)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.74)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4951,7 +4951,33 @@ const HOOK_STYLE_CSS = {
   '예능 노랑':  'background:transparent;color:#FFD400;text-shadow:-2px -2px 0 #101010,2px -2px 0 #101010,-2px 2px 0 #101010,2px 2px 0 #101010,0 3px 0 #101010',
   '화이트 박스': 'background:#F2F2F2;color:#141414',
   '네온':      'background:transparent;color:#9CFFF0;text-shadow:0 0 8px #17E0C4,0 0 16px #0FB5A0',
+  // v0.73 프리셋도 미리보기 반영 (v0.74)
+  '다색 팝':    'background:transparent;color:#FF3B30;text-shadow:-2px -2px 0 #fff,2px -2px 0 #fff,-2px 2px 0 #fff,2px 2px 0 #fff,0 3px 4px rgba(0,0,0,.5)',
+  '블랙 박스':  'background:#121212;color:#fff',
 };
+// 💬 본문 자막 스타일 실물 미리보기 (v0.74) — 고르면 어떤 효과인지 바로 보이게
+const SUB_STYLE_CSS = {
+  '기본':      'color:#fff;text-shadow:-1.5px -1.5px 0 #000,1.5px -1.5px 0 #000,-1.5px 1.5px 0 #000,1.5px 1.5px 0 #000,0 2px 3px #000',
+  '예능 노랑':  'color:#FFE14D;text-shadow:-2px -2px 0 #101010,2px -2px 0 #101010,-2px 2px 0 #101010,2px 2px 0 #101010',
+  '말풍선 띠':  'background:#F5F5F5;color:#141414;padding:4px 12px;border-radius:8px',
+  '네온':      'color:#9CFFF0;text-shadow:0 0 8px #17E0C4,0 0 16px #0FB5A0',
+  '블랙 박스':  'background:#121212;color:#fff;padding:4px 12px;border-radius:6px',
+};
+const POP_PALETTE_CSS = ['#FF3B30','#31E1C4','#FFD400','#FF7A00','#5AC8FA','#FF375F'];
+function subStylePreviewInto(prevId, styleName, fontId){
+  const box = $(prevId); if(!box) return;
+  const fam = 'font-family:' + fontFamilyOf(fontId) + ';';
+  const sample = '이렇게 자막이 나와요';
+  if(styleName === '다색 팝'){  // 단어마다 색이 바뀌는 걸 그대로 보여줌
+    const outline = 'text-shadow:-2px -2px 0 #fff,2px -2px 0 #fff,-2px 2px 0 #fff,2px 2px 0 #fff,0 3px 4px rgba(0,0,0,.5)';
+    const inner = sample.split(' ').map((w,i) =>
+      '<span style="color:' + POP_PALETTE_CSS[i%POP_PALETTE_CSS.length] + ';' + outline + '">' + escHtml(w) + '</span>').join(' ');
+    box.innerHTML = '<span style="' + fam + 'font-weight:800;font-size:24px">' + inner + '</span>';
+  } else {
+    const css = SUB_STYLE_CSS[styleName] || SUB_STYLE_CSS['기본'];
+    box.innerHTML = '<span style="' + fam + 'font-weight:800;font-size:24px;' + css + '">' + escHtml(sample) + '</span>';
+  }
+}
 
 // ── 🔤 글씨체 실물 미리보기 (v0.68) — 받은 폰트를 브라우저에 등록해 화면에 그대로 ──
 const FONT_FAMILY_MAP = {
@@ -4975,8 +5001,12 @@ function fontFamilyOf(stem){
   return "'" + (FONT_FAMILY_MAP[stem] || 'Pretendard ExtraBold') + "', sans-serif";
 }
 function renderSubFontPrev(selId, prevId){
-  const sel = $(selId), box = $(prevId); if(!box) return;
-  box.style.fontFamily = fontFamilyOf(sel ? sel.value : '');
+  const sel = $(selId); if(!$(prevId)) return;
+  // v0.74: 글씨체 + 자막 스타일을 함께 반영 — 고르면 어떤 효과인지 실물로 보임
+  const styleSelId = prevId === 'editSubFontPrev' ? 'editSubStyleSel'
+                   : prevId === 'genSubFontPrev' ? 'genSubStyleSel' : '';
+  const styleName = styleSelId ? ((($(styleSelId)||{}).value) || '기본') : '기본';
+  subStylePreviewInto(prevId, styleName, sel ? sel.value : '');
 }
 
 function hookPreviewInto(taId, boxId, scale, styleName, fontId){
@@ -5000,6 +5030,9 @@ function pickStyleChip(selId, val, ev){
   const sel = $(selId); if(!sel) return;
   sel.value = val;
   syncStyleChips(selId);
+  // v0.74: 스타일 바꾸면 실물 미리보기도 즉시 갱신
+  if(selId === 'editSubStyleSel') renderSubFontPrev('editSubFontSel','editSubFontPrev');
+  else if(selId === 'genSubStyleSel') renderSubFontPrev('genSubFontSel','genSubFontPrev');
 }
 function syncStyleChips(selId){
   const sel = $(selId); if(!sel) return;
