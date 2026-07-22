@@ -102,8 +102,30 @@ _PS_PICK_TEMPLATE = r"""
 Add-Type -AssemblyName System.Windows.Forms
 $kind = '@KIND@'
 $owner = New-Object System.Windows.Forms.Form
-$owner.TopMost = $true; $owner.ShowInTaskbar = $false; $owner.Opacity = 0
-$owner.Show(); $owner.Activate()
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.Opacity = 0
+$owner.StartPosition = 'CenterScreen'
+$owner.Show()
+try {
+Add-Type -Namespace CDJ -Name Fg -MemberDefinition @'
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+[DllImport("user32.dll")] public static extern uint GetCurrentThreadId();
+[DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+'@ -ErrorAction Stop
+$fg = [CDJ.Fg]::GetForegroundWindow()
+$procId = 0
+$fgThread = [CDJ.Fg]::GetWindowThreadProcessId($fg, [ref]$procId)
+$myThread = [CDJ.Fg]::GetCurrentThreadId()
+[void][CDJ.Fg]::AttachThreadInput($myThread, $fgThread, $true)
+[void][CDJ.Fg]::SetForegroundWindow($owner.Handle)
+[void][CDJ.Fg]::BringWindowToTop($owner.Handle)
+[void][CDJ.Fg]::AttachThreadInput($myThread, $fgThread, $false)
+} catch {}
+$owner.Activate()
 $r = ''
 if ($kind -eq 'folder') {
     $d = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -214,10 +236,11 @@ def _pick_tkinter(kind: str, timeout: float) -> Optional[str]:
     return proc.stdout.strip() or None
 
 
-def pick_path(kind: str = "video", timeout: float = 600.0) -> Optional[str]:
+def pick_path(kind: str = "video", timeout: float = 300.0) -> Optional[str]:
     """네이티브 선택 창을 띄우고 선택된 경로 반환. 취소=None, 사용불가=예외.
 
     Windows는 PowerShell(WinForms)로 — 별도 파이썬 실행이 없어 안정적.
+    창이 브라우저 뒤에 열리지 않도록 SetForegroundWindow로 앞으로 끌어온다.
     그 외 OS는 tkinter를 별도 프로세스로.
     """
     if kind not in _PICK_KINDS:
@@ -227,7 +250,7 @@ def pick_path(kind: str = "video", timeout: float = 600.0) -> Optional[str]:
     return _pick_tkinter(kind, timeout)
 
 
-def pick_video_file(timeout: float = 600.0) -> Optional[str]:
+def pick_video_file(timeout: float = 300.0) -> Optional[str]:
     """(호환용) 영상 파일 선택 — 기존 테스트·호출 유지."""
     return pick_path("video", timeout)
 
@@ -3106,7 +3129,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.74.2)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.74.3)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4718,30 +4741,35 @@ function updateSttHint(){
     : '내 OpenAI 키 사용.';
 }
 
+const PASTE_TIP = '\n\n창이 안 보이면: 탐색기에서 영상 파일을 Shift+우클릭 → "경로로 복사" → 아래 칸에 붙여넣으세요.';
 async function pickFile(ev){
   ev.preventDefault();
   const btn = ev.target;
   btn.disabled = true; btn.textContent = '창 여는 중…';
+  // 창이 브라우저 뒤에 떠서 안 보일 때 대비 안내
+  const hint = setTimeout(()=>{ btn.textContent = '작업표시줄 확인 ↓'; }, 2500);
   try{
     const data = await (await fetch('/api/pick_file', {method:'POST', body:'{}'})).json();
-    if(data.error){ alert(data.error); }
+    if(data.error){ alert(data.error + PASTE_TIP); }
     else if(data.path){ $('editVideo').value = data.path; }
     // 취소면 그대로 둠
-  } catch(e){ alert('파일 선택 창을 열 수 없습니다: ' + e); }
-  finally { btn.disabled = false; btn.textContent = '📁 영상 선택'; }
+  } catch(e){ alert('파일 선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
+  finally { clearTimeout(hint); btn.disabled = false; btn.textContent = '📁 영상 선택'; }
 }
 
 // 종류별 선택 창을 열어 입력칸에 채움 (v0.51 — 폴더/그림/소리)
 async function pickInto(ev, targetId, kind){
   ev.preventDefault();
   const btn = ev.target; btn.disabled = true;
+  const label = btn.textContent;
+  const hint = setTimeout(()=>{ btn.textContent = '작업표시줄 확인 ↓'; }, 2500);
   try{
     const data = await (await fetch('/api/pick_file', {method:'POST',
       body: JSON.stringify({kind: kind || 'video'})})).json();
-    if(data.error){ alert(data.error); }
+    if(data.error){ alert(data.error + PASTE_TIP); }
     else if(data.path){ $(targetId).value = data.path; }
-  } catch(e){ alert('선택 창을 열 수 없습니다: ' + e); }
-  finally { btn.disabled = false; }
+  } catch(e){ alert('선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
+  finally { clearTimeout(hint); btn.disabled = false; btn.textContent = label; }
 }
 
 function toggleAutoSub(){
