@@ -40,7 +40,8 @@ rem xcopy는 원본에 없는 기존 파일(받은 글씨체·ffmpeg 등)은 지
 xcopy "!SRC!\cutdaejang" ".\cutdaejang" /E /Y /I >nul
 if exist "!SRC!\windows" xcopy "!SRC!\windows" ".\windows" /E /Y /I >nul
 if exist "!SRC!\docs" xcopy "!SRC!\docs" ".\docs" /E /Y /I >nul
-for %%F in (README.md 실행가이드.md pyproject.toml 업데이트.bat .gitignore .gitattributes) do (
+rem [주의] 업데이트.bat(이 파일)는 지금 실행 중이라 덮어쓰면 실행이 깨질 수 있어 제외합니다.
+for %%F in (README.md 실행가이드.md pyproject.toml .gitignore .gitattributes) do (
     if exist "!SRC!\%%F" copy /Y "!SRC!\%%F" ".\%%F" >nul 2>nul
 )
 rmdir /s /q "!TMP!" >nul 2>nul
