@@ -13,6 +13,8 @@ logs/
 settings.json
 cutdaejang/resources/bgm/
 cutdaejang/resources/sfx/
+# 체크아웃에서 실행하면 효과음 합성·폰트 다운로드가 프로젝트 루트 resources/로 생성됨 (런타임 산출물 — 커밋 금지)
+/resources/
 # v0.63 무료 글씨체 (사용자가 [⬇ 받기]로 내려받음 — 리포·zip엔 미포함)
 cutdaejang/resources/fonts/BlackHanSans-Regular.ttf
 cutdaejang/resources/fonts/Jua-Regular.ttf
