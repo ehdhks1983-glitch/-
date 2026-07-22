@@ -287,7 +287,8 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
         bgm=params.get("bgm", ""),
         hook=(params.get("hook") or "").strip(),
         target_sec=int(params.get("target_sec") or 60),
-        orientation="wide" if params.get("orientation") == "wide" else "shorts",  # v0.61
+        orientation=(params.get("orientation")
+                     if params.get("orientation") in ("wide", "reels") else "shorts"),  # v0.61·v0.74
         pace_sec=max(0, int(params.get("pace_sec") or 0)),  # ⏱ 내 대본 길이 맞춤 (v0.63)
         render=RenderOptions(use_gpu=params.get("gpu", "auto")),
     )
@@ -384,7 +385,7 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
     if "sfx_auto" in params:  # 🔔 효과음 켬/끔 기억 (v0.53)
         over_sfx["enabled"] = bool(params.get("sfx_auto"))
     over_ui = {}
-    if params.get("orientation") in ("shorts", "wide"):  # 🖥 화면 형태 기억 (v0.61)
+    if params.get("orientation") in ("shorts", "wide", "reels"):  # 🖥 화면 형태 기억 (v0.61·v0.74)
         over_ui["gen_orientation"] = params["orientation"]
     if "product" in params:  # 📇 마지막 제품 기억 (v0.64)
         over_ui["gen_product"] = str(params.get("product") or "")
@@ -3548,8 +3549,10 @@ _HTML = """<!doctype html>
       <span>화면</span>
       <div class="toggle" style="margin:0">
         <label><input type="radio" name="genOrient" value="shorts" checked><span>📱 세로 쇼츠 (9:16)</span></label>
+        <label><input type="radio" name="genOrient" value="reels"><span>📲 인스타·틱톡 (9:16 특화)</span></label>
         <label><input type="radio" name="genOrient" value="wide"><span>🖥 가로 롱폼 (16:9)</span></label>
       </div>
+      <div class="hint" style="margin-top:2px">📲 <b>인스타·틱톡</b>을 고르면 자막이 <b>화면 중앙 + 타이핑</b>으로 등장하고 <b>다색 팝</b> 스타일이 자동 적용돼요 (릴스·틱톡 감성). 자막 스타일을 직접 고르면 그게 우선.</div>
       <span style="margin-left:6px">길이</span>
       <select id="genLenSel" style="width:auto;padding:6px 8px" onchange="onGenLenChange()">
         <option value="30">약 30초</option>
@@ -3777,6 +3780,12 @@ _HTML = """<!doctype html>
           <option value="수채화">수채화</option>
           <option value="네온">네온</option>
           <option value="미니멀">미니멀</option>
+          <option value="웹툰">웹툰</option>
+          <option value="지브리풍">지브리풍</option>
+          <option value="유화">유화</option>
+          <option value="동화">동화</option>
+          <option value="흑백">흑백</option>
+          <option value="픽셀아트">픽셀아트</option>
         </select>
         <span class="hint">전 장면에 같은 그림체로 통일돼요</span>
       </div>
@@ -4172,6 +4181,7 @@ _HTML = """<!doctype html>
         <select id="setSubAnim" style="width:auto;padding:6px 8px">
           <option value="none">없음</option>
           <option value="pop">팝 — 살짝 커지며 등장 (쇼츠 감성)</option>
+          <option value="type">타이핑 — 글자가 하나씩 (인스타·틱톡 감성)</option>
         </select></div>
       <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
       <div class="chk"><input type="checkbox" id="setBand"><span>자막에도 배경 띠 (하단 자막 뒤에도 어두운 띠)</span></div>

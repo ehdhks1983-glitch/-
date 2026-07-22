@@ -97,9 +97,19 @@ def generate_script(script_provider, topic: str, opts: JobOptions,
                                         target_sec=opts.target_sec, context=context)
 
 
-def build_style(settings: dict) -> Style:
-    """settings.subtitle → 공통 Style (A/B 출력 동일 기준)."""
+def build_style(settings: dict, orientation: str = "shorts") -> Style:
+    """settings.subtitle → 공통 Style (A/B 출력 동일 기준).
+
+    orientation=="reels"(v0.74 인스타·틱톡 특화)면 자막을 화면 중앙 + 타이핑 등장 +
+    다색 팝으로 강제한다 (사용자가 다른 프리셋을 고르지 않았을 때).
+    """
     sub = settings["subtitle"]
+    reels = orientation == "reels"
+    position = "center" if reels else "bottom"
+    anim = "type" if reels else sub.get("anim", "none")
+    sub_style = sub.get("sub_style", "기본")
+    if reels and sub_style == "기본":
+        sub_style = "다색 팝"        # 인스타·틱톡 기본 자막 (사용자가 고르면 그대로)
     return Style(
         font=sub.get("font") or "Pretendard-ExtraBold",
         hook_font=sub.get("hook_font") or "",
@@ -107,7 +117,7 @@ def build_style(settings: dict) -> Style:
         size=sub["font_size"],
         outline=sub["outline"],
         shadow=sub.get("shadow", 1),
-        position="bottom",
+        position=position,
         gradient_overlay=True,
         margin_v=sub.get("margin_v"),
         fade=sub.get("fade", True),
@@ -115,9 +125,9 @@ def build_style(settings: dict) -> Style:
         band=sub.get("band", False),
         hook_band=sub.get("hook_band", True),
         wrap_chars=sub.get("wrap_chars", 16),
-        anim=sub.get("anim", "none"),
+        anim=anim,
         hook_style=sub.get("hook_style", "기본"),
-        sub_style=sub.get("sub_style", "기본"),
+        sub_style=sub_style,
         tone=settings["bg"].get("tone", "기본"),
     )
 
@@ -226,7 +236,7 @@ def run_job(
             sentences=script.sentences,
             audio_paths=[str(p) for p in audio_paths],
             background=background,
-            style=build_style(settings),
+            style=build_style(settings, opts.orientation),  # v0.74 인스타·틱톡(reels) 특화
             canvas=canvas,
             main_video=(
                 MainVideo(path=opts.main_video_path) if opts.main_video_path else None

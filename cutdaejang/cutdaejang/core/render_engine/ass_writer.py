@@ -209,13 +209,40 @@ def wrap_text(text: str, max_chars: int) -> str:
     return t[:mid] + "\n" + t[mid:]
 
 
+TYPING_CPS = 20  # ⌨ 타이핑 자막(v0.74) 속도 — 초당 글자수 (인스타·틱톡 감성)
+
+
+def _typing_body(text: str, line_color: str, cps: int = TYPING_CPS) -> str:
+    """⌨ 타이핑 등장(v0.74) — 글자를 하나씩 찍어 보여준다 (화면 중앙 인스타·틱톡용).
+
+    글자마다 처음엔 투명(\\alpha&HFF&)이었다가 제 차례(t_i)에 \\t로 나타난다.
+    줄바꿈(\\N)은 글자수에 안 세고 그대로 둔다. 색은 줄 전체에 한 번만 건다.
+    """
+    out = ["{\\1c" + _inline_color(line_color) + "}"] if line_color else []
+    i = 0
+    for ch in text:
+        if ch == "\n":
+            out.append("\\N")
+            continue
+        t = round(i * 1000.0 / max(1, cps))
+        out.append("{\\alpha&HFF&\\t(%d,%d,\\alpha&H00&)}" % (t, t + 30))
+        out.append(escape_ass_text(ch))
+        i += 1
+    return "".join(out)
+
+
 def dialogue_text(sub, style, pop_color: str = "") -> str:
     """자막 본문 조립 — 페이드 태그 + 강조 단어 인라인 컬러 (지시서 PATCH 5).
 
     강조색 적용 후 기본색을 명시적으로 복원한다.
     pop_color(v0.73 다색 팝)가 있으면 수동 마크업이 없는 문장 전체를 그 색으로 칠한다.
+    anim=="type"(v0.74)면 글자를 하나씩 찍는 타이핑으로 등장한다.
     """
     marked = colorize_markup(sub.text, style.primary_color)  # 다색 마크업 우선
+    if marked is None and getattr(style, "anim", "none") == "type":
+        # ⌨ 타이핑 — 마크업 없을 때만 (수동 색은 위에서 존중). 타이핑이 등장연출이라 fade/pop 미적용.
+        line_color = pop_color or style.primary_color
+        return _typing_body(wrap_text(sub.text, getattr(style, "wrap_chars", 0)), line_color)
     if marked is not None:
         body = marked
     elif pop_color:  # 🌈 다색 팝 — 문장 전체를 회전색으로 (수동 색·강조는 위에서 우선)
