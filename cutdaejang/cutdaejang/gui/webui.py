@@ -88,9 +88,51 @@ def _dt_stamp() -> str:
     return datetime.datetime.now().strftime("%H%M%S")
 
 
-# 네이티브 파일 선택 창 — 서버(사용자 PC)에서 tkinter 대화상자를 별도 프로세스로 띄워
-# 전체 경로를 돌려받는다. 서버 스레드와 GUI 스레드 충돌을 피하려 subprocess로 분리.
+# 네이티브 파일 선택 창 — 사용자 PC에서 대화상자를 띄워 전체 경로를 돌려받는다.
+# Windows: PowerShell(WinForms) 대화상자 — 별도 파이썬 실행이 필요 없어
+#   'embedded python interpreter' 류 시작 오류 없이 안정적 (v0.74.2).
+# 그 외 OS: tkinter 대화상자를 별도 프로세스로 (서버/GUI 스레드 충돌 방지).
 # v0.51: 종류별(영상/그림/소리/폴더) 일반화 — 폼마다 [📁] 버튼에서 재사용.
+_PICK_KINDS = ("video", "image", "images", "audio", "folder")
+
+# Windows: PowerShell + System.Windows.Forms. @KIND@ 은 _PICK_KINDS 화이트리스트에서만
+# 치환하므로 스크립트 인젝션 위험 없음. 경로는 UTF-8→base64 로 돌려받아 콘솔
+# 인코딩(cp949 등)과 무관하게 한글 경로도 안전하게 복원한다.
+_PS_PICK_TEMPLATE = r"""
+Add-Type -AssemblyName System.Windows.Forms
+$kind = '@KIND@'
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true; $owner.ShowInTaskbar = $false; $owner.Opacity = 0
+$owner.Show(); $owner.Activate()
+$r = ''
+if ($kind -eq 'folder') {
+    $d = New-Object System.Windows.Forms.FolderBrowserDialog
+    $d.Description = '폴더 선택'
+    if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $r = $d.SelectedPath }
+} else {
+    $d = New-Object System.Windows.Forms.OpenFileDialog
+    if ($kind -eq 'images') {
+        $d.Title = '사진 여러 장 선택 (Ctrl/Shift로 여러 개)'; $d.Multiselect = $true
+        $d.Filter = '사진 파일|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|모든 파일|*.*'
+    } elseif ($kind -eq 'image') {
+        $d.Title = '그림 파일 선택'
+        $d.Filter = '그림 파일|*.png;*.jpg;*.jpeg;*.webp;*.bmp|모든 파일|*.*'
+    } elseif ($kind -eq 'audio') {
+        $d.Title = '소리 파일 선택'
+        $d.Filter = '소리 파일|*.mp3;*.wav;*.m4a;*.ogg;*.flac|모든 파일|*.*'
+    } else {
+        $d.Title = '편집할 영상 선택'
+        $d.Filter = '영상 파일|*.mp4;*.mov;*.avi;*.mkv;*.webm;*.m4v;*.wmv;*.flv|모든 파일|*.*'
+    }
+    if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+        if ($kind -eq 'images') { $r = ($d.FileNames -join ';') } else { $r = $d.FileName }
+    }
+}
+$owner.Dispose()
+[Console]::Out.Write([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($r)))
+"""
+
+# 그 외 OS: tkinter 대화상자 (별도 파이썬 프로세스)
 _PICK_FILE_CODE = r"""
 import sys
 import tkinter as tk
@@ -122,21 +164,67 @@ sys.stdout.write(p or "")
 """
 
 
-def pick_path(kind: str = "video", timeout: float = 600.0) -> Optional[str]:
-    """네이티브 선택 창을 띄우고 선택된 경로 반환. 취소=None, 사용불가=예외."""
+def _pick_cannot_open(detail: str) -> RuntimeError:
+    return RuntimeError(
+        "선택 창을 열 수 없습니다. 경로를 직접 붙여넣어 주세요. "
+        f"({detail})"
+    )
+
+
+def _pick_windows(kind: str, timeout: float) -> Optional[str]:
+    """PowerShell(WinForms) 파일 대화상자. 취소=None, 실패=예외."""
+    import base64  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
 
-    proc = subprocess.run(
-        [sys.executable, "-c", _PICK_FILE_CODE, kind],
-        capture_output=True, text=True, timeout=timeout,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            "선택 창을 열 수 없습니다. 경로를 직접 붙여넣어 주세요. "
-            f"({proc.stderr.strip()[-200:]})"
+    script = _PS_PICK_TEMPLATE.replace("@KIND@", kind)
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-EncodedCommand", enc],
+            capture_output=True, timeout=timeout,
         )
-    path = proc.stdout.strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        raise _pick_cannot_open(str(e))
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", "replace").strip()[-200:]
+        raise _pick_cannot_open(err or f"exit {proc.returncode}")
+    out = (proc.stdout or b"").strip()
+    if not out:
+        return None  # 사용자가 취소
+    try:
+        path = base64.b64decode(out).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
     return path or None
+
+
+def _pick_tkinter(kind: str, timeout: float) -> Optional[str]:
+    """tkinter 대화상자를 별도 파이썬 프로세스로 띄운다 (비 Windows)."""
+    import subprocess  # noqa: PLC0415
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _PICK_FILE_CODE, kind],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise _pick_cannot_open(str(e))
+    if proc.returncode != 0:
+        raise _pick_cannot_open(proc.stderr.strip()[-200:])
+    return proc.stdout.strip() or None
+
+
+def pick_path(kind: str = "video", timeout: float = 600.0) -> Optional[str]:
+    """네이티브 선택 창을 띄우고 선택된 경로 반환. 취소=None, 사용불가=예외.
+
+    Windows는 PowerShell(WinForms)로 — 별도 파이썬 실행이 없어 안정적.
+    그 외 OS는 tkinter를 별도 프로세스로.
+    """
+    if kind not in _PICK_KINDS:
+        kind = "video"
+    if sys.platform == "win32":
+        return _pick_windows(kind, timeout)
+    return _pick_tkinter(kind, timeout)
 
 
 def pick_video_file(timeout: float = 600.0) -> Optional[str]:
@@ -3018,7 +3106,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.74.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.74.2)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
