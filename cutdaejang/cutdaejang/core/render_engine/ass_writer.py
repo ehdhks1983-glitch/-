@@ -231,14 +231,54 @@ def _typing_body(text: str, line_color: str, cps: int = TYPING_CPS) -> str:
     return "".join(out)
 
 
+def _karaoke_body(sub, style, pop_color: str = "") -> str:
+    """🎤 단어 카라오케 (v0.76) — 말하는 단어가 강조색으로 차오른다 (\\k 태그).
+
+    단어 시각은 자막 시작 기준 상대 μs(sub.words). 부르기 전 색은 프리셋 기본색
+    (다색 팝이면 그 줄 색), 부른 뒤 색은 강조색. 자동 줄바꿈은 단어 경계로.
+    """
+    base = pop_color or style.primary_color
+    parts = ["{\\1c" + _inline_color(style.highlight_color)
+             + "\\2c" + _inline_color(base) + "}"]
+    wrap = getattr(style, "wrap_chars", 0) or 0
+    line_len, cursor = 0, 0
+    for w in (getattr(sub, "words", None) or []):
+        tok = str(w[2]).strip()
+        if not tok:
+            continue
+        wa, wb = int(w[0]), int(w[1])
+        gap_cs = max(0, (wa - cursor) // 10_000)   # 단어 사이 공백 시간도 싱크에 반영
+        dur_cs = max(1, (wb - wa) // 10_000)
+        cursor = max(cursor, wb)
+        sep = ""
+        if line_len > 0:
+            if wrap and line_len + 1 + len(tok) > wrap:
+                parts.append("\\N")
+                line_len = 0
+            else:
+                sep = " "
+        if gap_cs or sep:
+            parts.append("{\\k%d}%s" % (gap_cs, sep))
+        parts.append("{\\k%d}%s" % (dur_cs, escape_ass_text(tok)))
+        line_len += len(tok) + (1 if sep else 0)
+    return "".join(parts)
+
+
 def dialogue_text(sub, style, pop_color: str = "") -> str:
     """자막 본문 조립 — 페이드 태그 + 강조 단어 인라인 컬러 (지시서 PATCH 5).
 
     강조색 적용 후 기본색을 명시적으로 복원한다.
     pop_color(v0.73 다색 팝)가 있으면 수동 마크업이 없는 문장 전체를 그 색으로 칠한다.
     anim=="type"(v0.74)면 글자를 하나씩 찍는 타이핑으로 등장한다.
+    anim=="karaoke"(v0.76)면 단어 시각이 있을 때 말하는 단어가 차오른다 (없으면 기존 폴백).
     """
     marked = colorize_markup(sub.text, style.primary_color)  # 다색 마크업 우선
+    if (marked is None and getattr(style, "anim", "none") == "karaoke"
+            and (getattr(sub, "words", None) or [])):
+        body = _karaoke_body(sub, style, pop_color)
+        if style.fade:
+            body = "{\\fad(100,60)}" + body
+        return body
     if marked is None and getattr(style, "anim", "none") == "type":
         # ⌨ 타이핑 — 마크업 없을 때만 (수동 색은 위에서 존중). 타이핑이 등장연출이라 fade/pop 미적용.
         line_color = pop_color or style.primary_color

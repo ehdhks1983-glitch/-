@@ -60,6 +60,9 @@ class Subtitle:
     start_us: int
     end_us: int
     highlight: str = ""  # 문장 내 강조 단어 (없으면 빈 문자열)
+    # v0.76 말 다듬기 — 단어 타임스탬프(카라오케)·인식 신뢰도. 없으면 기존 동작.
+    words: list = field(default_factory=list)  # [[자막 내 상대 시작μs, 끝μs, "단어"], ...]
+    conf: float = 1.0                          # STT 신뢰도 0~1 (whisper avg_logprob 기반)
 
 
 @dataclass

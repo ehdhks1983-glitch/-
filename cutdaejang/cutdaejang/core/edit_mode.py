@@ -122,12 +122,22 @@ def build_subtitles_timed(
     subs: List[Subtitle] = []
     for (s, e), pieces in zip(cut_segments, pieces_per_segment):
         seg_len = e - s
-        for rel_start, rel_end, text in sorted(pieces or []):
+        for piece in sorted(pieces or []):
+            rel_start, rel_end, text = piece[0], piece[1], piece[2]
+            p_words = piece[3] if len(piece) > 3 else []   # 단어 시각 (v0.76)
+            conf = float(piece[4]) if len(piece) > 4 else 1.0
             a = max(0, min(int(rel_start), seg_len))
             b = max(0, min(int(rel_end), seg_len))
             if not str(text).strip() or (b - a) < min_piece_us:
                 continue
-            subs.append(Subtitle(text=str(text).strip(), start_us=s + a, end_us=s + b))
+            # 단어 시각을 '자막 시작 기준 상대값'으로 — 이후 재컷·시프트에도 그대로 유효
+            words = []
+            for wa, wb, wt in p_words:
+                ra, rb = int(wa) - a, int(wb) - a
+                if rb > max(ra, 0) and ra < (b - a):
+                    words.append([max(0, ra), min(rb, b - a), str(wt)])
+            subs.append(Subtitle(text=str(text).strip(), start_us=s + a, end_us=s + b,
+                                 words=words, conf=round(conf, 3)))
     return subs
 
 
@@ -414,10 +424,16 @@ class EditAnalysis:
 
 
 def subtitles_to_dicts(subs: List[Subtitle]) -> List[dict]:
-    return [
-        {"text": s.text, "start_us": s.start_us, "end_us": s.end_us, "highlight": s.highlight}
-        for s in subs
-    ]
+    out = []
+    for s in subs:
+        d = {"text": s.text, "start_us": s.start_us, "end_us": s.end_us,
+             "highlight": s.highlight}
+        if getattr(s, "words", None):   # 단어 시각·신뢰도 (v0.76) — 있을 때만 실어 가볍게
+            d["words"] = [list(w) for w in s.words]
+        if getattr(s, "conf", 1.0) < 0.999:
+            d["conf"] = round(float(s.conf), 3)
+        out.append(d)
+    return out
 
 
 def split_highlight(text: str) -> tuple:
@@ -434,11 +450,19 @@ def split_highlight(text: str) -> tuple:
 def dicts_to_subtitles(dicts: List[dict]) -> List[Subtitle]:
     out = []
     for d in dicts:
-        text, hl = split_highlight((d.get("text") or "").strip())
+        raw = (d.get("text") or "").strip()
+        text, hl = split_highlight(raw)
         hl = (d.get("highlight") or hl or "").strip()
         if text:  # 빈 자막은 제외
+            # 검토에서 글이 수정됐으면 단어 시각은 더 이상 안 맞음 → 버림 (카라오케는 폴백)
+            words = d.get("words") or []
+            joined = "".join(str(w[2]) for w in words if len(w) > 2)
+            if words and _normalize_ko(joined) != _normalize_ko(text):
+                words = []
             out.append(Subtitle(
-                text=text, start_us=int(d["start_us"]), end_us=int(d["end_us"]), highlight=hl,
+                text=text, start_us=int(d["start_us"]), end_us=int(d["end_us"]),
+                highlight=hl, words=[list(w) for w in words],
+                conf=float(d.get("conf", 1.0)),
             ))
     return out
 
@@ -601,9 +625,138 @@ def _remap_subs_to_ranges(kept: List[Subtitle], ranges: List[tuple]) -> List[Sub
                     text=s.text, highlight=s.highlight,
                     start_us=ns + (s.start_us - a),
                     end_us=ns + (min(s.end_us, b) - a),
+                    # 단어 시각은 자막 시작 기준 상대값 → 시프트에도 그대로 유효 (v0.76)
+                    words=[list(w) for w in getattr(s, "words", [])],
+                    conf=getattr(s, "conf", 1.0),
                 ))
                 break
     return out
+
+
+# ── 🧹 말 다듬기 (v0.76) — 필러(추임새) 컷 + 반복(NG) 테이크 감지 ────────
+
+# 한국어 추임새·군말 사전 — "독립적으로" 나온 것만 컷 (문장 속 조사·부사는 보호)
+FILLER_WORDS = {
+    "어", "어어", "음", "음음", "엄", "그", "저", "인제", "이제", "자",
+    "그니까", "그러니까", "뭐지", "뭐랄까", "약간", "막",
+}
+
+
+def _normalize_ko(text: str) -> str:
+    """비교용 정규화 — 공백·문장부호 제거."""
+    import re as _re  # noqa: PLC0415
+
+    return _re.sub(r"[\s.,!?~…·\-\"'()\[\]]+", "", str(text or ""))
+
+
+def detect_filler_spans(subs: List[Subtitle], gap_us: int = 160_000,
+                        min_dur_us: int = 120_000, pad_us: int = 40_000) -> List[tuple]:
+    """단어 시각으로 '독립 추임새' 구간 찾기 → [(절대 시작μs, 끝μs, 단어), ...].
+
+    안전 규칙: 사전에 있는 단어이면서 앞뒤로 gap_us 이상 떨어져 홀로 나온 것만.
+    (문장 속에 붙어 나온 "그 사람"의 "그" 같은 건 건드리지 않는다 — 오버컷 방지)
+    """
+    spans: List[tuple] = []
+    for s in subs:
+        words = getattr(s, "words", None) or []
+        for i, w in enumerate(words):
+            wa, wb, wt = int(w[0]), int(w[1]), _normalize_ko(w[2])
+            if wt not in FILLER_WORDS or (wb - wa) < min_dur_us:
+                continue
+            prev_end = int(words[i - 1][1]) if i > 0 else -10**12
+            next_start = int(words[i + 1][0]) if i + 1 < len(words) else 10**12
+            alone = (wa - prev_end >= gap_us or i == 0) and \
+                    (next_start - wb >= gap_us or i + 1 == len(words))
+            if alone:
+                spans.append((s.start_us + max(0, wa - pad_us),
+                              s.start_us + wb + pad_us, str(w[2])))
+    spans.sort()
+    merged: List[list] = []
+    for a, b, t in spans:  # 겹침 병합
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b, t])
+    return [tuple(m) for m in merged]
+
+
+def apply_filler_cut(cut_video: str, subs: List[Subtitle], spans: List[tuple],
+                     out_path: str) -> tuple:
+    """필러 구간을 영상에서 잘라내고 자막(단어 시각 포함)을 새 타임라인으로 재매핑.
+
+    반환: (새 영상 경로, 새 자막 목록). spans가 비면 원본 그대로.
+    """
+    if not spans:
+        return cut_video, subs
+    dur = ff.probe_duration_us(cut_video)
+    cut = [(max(0, int(a)), min(dur, int(b))) for a, b, *_ in spans
+           if int(b) > 0 and int(a) < dur]
+    keep: List[tuple] = []
+    cursor = 0
+    for a, b in cut:
+        if a > cursor:
+            keep.append((cursor, a))
+        cursor = max(cursor, b)
+    if cursor < dur:
+        keep.append((cursor, dur))
+    keep = [(a, b) for a, b in keep if b - a > 80_000]
+    if not keep:
+        return cut_video, subs
+    video = video_editor.cut_and_concat(cut_video, keep, out_path)
+
+    def removed_before(t: int) -> int:
+        return sum(min(b, t) - a for a, b in cut if a < t)
+
+    out_subs: List[Subtitle] = []
+    for s in subs:
+        words = []
+        for w in (getattr(s, "words", None) or []):
+            wa_abs, wb_abs = s.start_us + int(w[0]), s.start_us + int(w[1])
+            mid = (wa_abs + wb_abs) // 2
+            if any(a <= mid < b for a, b in cut):
+                continue  # 잘려나간 단어(추임새)는 자막 텍스트에서도 제외
+            words.append([wa_abs, wb_abs, str(w[2])])
+        ns = s.start_us - removed_before(s.start_us)
+        ne = s.end_us - removed_before(s.end_us)
+        if ne - ns < 150_000:
+            continue
+        rel_words = [[max(0, wa - removed_before(wa) - ns),
+                      max(0, wb - removed_before(wb) - ns), wt]
+                     for wa, wb, wt in words]
+        had_words = bool(getattr(s, "words", None))
+        text = "".join(w[2] for w in rel_words).strip() if had_words else s.text
+        # 공백 복원: whisper 단어는 보통 앞공백 포함이라 join으로 자연 복원되나,
+        # 전부 사라졌으면 자막도 버린다
+        if had_words and not text:
+            continue
+        out_subs.append(Subtitle(text=text or s.text, start_us=ns, end_us=ne,
+                                 highlight=s.highlight if s.highlight in (text or s.text) else "",
+                                 words=rel_words, conf=getattr(s, "conf", 1.0)))
+    return video, out_subs
+
+
+def detect_repeat_takes(texts: List[str], min_ratio: float = 0.8,
+                        min_chars: int = 6) -> List[int]:
+    """연속으로 거의 같은 말을 반복(NG 후 다시 말하기)한 앞 테이크들의 번호.
+
+    인접(또는 한 칸 건너) 자막의 정규화 텍스트 유사도가 min_ratio 이상이면
+    '같은 말 다시 하기'로 보고 앞쪽을 지우기 후보로 반환 (마지막 테이크 유지).
+    """
+    import difflib  # noqa: PLC0415
+
+    norm = [_normalize_ko(t) for t in texts]
+    drop: set = set()
+    for i in range(len(norm) - 1):
+        if len(norm[i]) < min_chars:
+            continue
+        for j in (i + 1, i + 2):
+            if j >= len(norm) or len(norm[j]) < min_chars:
+                continue
+            ratio = difflib.SequenceMatcher(None, norm[i], norm[j]).ratio()
+            if ratio >= min_ratio:
+                drop.add(i)          # 뒤 테이크(다시 말한 쪽)를 남긴다
+                break
+    return sorted(drop)
 
 
 def rebuild_from_keep(
@@ -680,11 +833,15 @@ def rebuild_cold_open(
                                         transition=transition)
     body = _remap_subs_to_ranges(kept_sorted, ranges)
     subs_out = [Subtitle(text=climax.text, highlight=climax.highlight,
-                         start_us=0, end_us=teaser_len)]
+                         start_us=0, end_us=teaser_len,
+                         words=[list(w) for w in getattr(climax, "words", [])],
+                         conf=getattr(climax, "conf", 1.0))]
     for s in body:
         subs_out.append(Subtitle(text=s.text, highlight=s.highlight,
                                  start_us=s.start_us + teaser_len,
-                                 end_us=s.end_us + teaser_len))
+                                 end_us=s.end_us + teaser_len,
+                                 words=[list(w) for w in getattr(s, "words", [])],
+                                 conf=getattr(s, "conf", 1.0)))
     return video, subs_out, teaser_len / 1e6
 
 

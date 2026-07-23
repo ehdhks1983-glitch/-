@@ -39,6 +39,7 @@ _EDIT_LAST_KEYS = (
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
     "tempo",  # ⚡ 빠른 템포 — 몽타주 컷 밀도 (v0.73)
     "cold_open", "hook_voice",  # 🪝 훅 팩 (v0.75)
+    "filler_cut", "take_clean",  # 🧹 말 다듬기 팩 (v0.76)
 )
 
 
@@ -770,6 +771,35 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 script.sentences, [(0, analysis.cut_us)], total_us=analysis.cut_us)
             for sub, hl in zip(review_subs, script.highlights):
                 sub.highlight = hl or ""
+        # 🧹 필러(추임새) 컷 (v0.76) — STT 자막 흐름 + Whisper 단어 시각이 있을 때만
+        if (params.get("filler_cut") and review_subs is analysis.subtitles
+                and analysis.subtitles):
+            if any(getattr(s, "words", None) for s in analysis.subtitles):
+                try:
+                    spans = edit_mode.detect_filler_spans(analysis.subtitles)
+                    if spans:
+                        _set_job(job_id, stage="cut",
+                                 note=f"🧹 추임새 {len(spans)}곳 잘라내는 중…")
+                        cut_s = sum(b - a for a, b, *_ in spans) / 1e6
+                        nv, ns = edit_mode.apply_filler_cut(
+                            analysis.cut_video, analysis.subtitles, spans,
+                            str(Path(workdir) / job_id / "defiller.mp4"))
+                        if nv != analysis.cut_video:
+                            from ..utils import ffmpeg as _ff76  # noqa: PLC0415
+                            analysis.cut_video, analysis.subtitles = nv, ns
+                            analysis.cut_us = _ff76.probe_duration_us(nv)
+                            review_subs = analysis.subtitles
+                            w = f"🧹 추임새 {len(spans)}곳({cut_s:.1f}초)을 잘라냈어요"
+                            prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                            _set_job(job_id, tts_warn=f"{prev} · {w}" if prev else w)
+                except Exception as fe:  # noqa: BLE001 — 실패해도 원본으로 계속
+                    logging.getLogger("cutdaejang").warning("추임새 컷 실패(무시): %s", fe)
+            else:
+                w = ("ℹ 추임새 컷은 Whisper 자막(단어 시각)에서만 돼요 — "
+                     "음성 인식을 [내장 Whisper]로 바꾸면 사용돼요")
+                prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                if w not in prev:
+                    _set_job(job_id, tts_warn=f"{prev} · {w}" if prev else w)
         # 분석 결과를 job에 저장 (2단계 렌더에서 사용)
         _set_job(
             job_id, cut_video=analysis.cut_video,
@@ -822,6 +852,19 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                             d["text"] = t
                 except Exception:
                     pass
+            # ↻ 반복(NG) 테이크 정리 (v0.76) — 같은 말 다시 하기의 앞 테이크 제거
+            if (params.get("take_clean") and subs_d
+                    and not narr_topic and not has_script and not narr_file):
+                try:
+                    drops = set(edit_mode.detect_repeat_takes(
+                        [d["text"] for d in subs_d]))
+                    if drops:
+                        subs_d = [d for i, d in enumerate(subs_d) if i not in drops]
+                        w = f"↻ 반복 말하기 {len(drops)}곳 정리 (마지막 테이크 유지)"
+                        prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                        _set_job(job_id, tts_warn=f"{prev} · {w}" if prev else w)
+                except Exception:  # noqa: BLE001
+                    pass
             keep = None
             tgt = int(params.get("auto_target_sec") or 0)
             try:
@@ -870,9 +913,15 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                             climax=climax)
             return
         if analysis.subtitles:  # STT/입력 대본/내레이션 대본이 있으면 검토 화면으로
+            subs_d0 = edit_mode.subtitles_to_dicts(analysis.subtitles)
+            try:  # ↻ 반복 테이크 후보 표시 (v0.76) — 검토 화면 배지·원클릭 정리용
+                for ri in edit_mode.detect_repeat_takes([d["text"] for d in subs_d0]):
+                    subs_d0[ri]["repeat"] = True
+            except Exception:  # noqa: BLE001
+                pass
             _set_job(
                 job_id, status="review_subtitle", stage="review", note="",
-                subtitles=edit_mode.subtitles_to_dicts(analysis.subtitles),
+                subtitles=subs_d0,
                 cut_seconds=round(analysis.cut_us / 1e6, 1),
             )
         else:
@@ -3206,7 +3255,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.75.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.76.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3331,6 +3380,13 @@ _HTML = """<!doctype html>
         <label class="chk" style="cursor:pointer" title="가장 궁금한 순간 2~3초를 맨 앞에 잠깐 보여주고 본편 시작 — 첫 3초 이탈을 막는 편집 공식">
           <input type="checkbox" id="editColdOpen"> ⚡ 첫 3초 티저 (콜드오픈)</label>
         <span class="hint">— 하이라이트를 맨 앞에 슬쩍 보여주고 시작해요 (내레이션과는 함께 안 돼요)</span>
+      </div>
+      <div class="chk" style="gap:8px;margin-top:6px">
+        <label class="chk" style="cursor:pointer" title='말 사이에 홀로 나온 "어", "음", "그니까" 같은 추임새를 영상에서 자동으로 잘라냅니다 (내장 Whisper 자막일 때)'>
+          <input type="checkbox" id="editFillerCut"> 🧹 추임새("어·음") 자동 컷</label>
+        <label class="chk" style="cursor:pointer" title="같은 말을 연달아 다시 말한 NG 테이크를 감지해 마지막 테이크만 남깁니다 (검토 화면에서는 ↻ 배지로 표시)">
+          <input type="checkbox" id="editTakeClean"> ↻ 반복 말하기(NG) 정리</label>
+        <span class="hint">— 촬영 후 가편집을 자동으로 (Whisper 자막 추천)</span>
       </div>
       <div class="hint" style="margin-top:4px">💾 여기서 정한 세팅은 자동으로 기억돼요 — 다음부터는 영상만 바꿔 넣고 [만들기 시작]만 누르면 같은 방식으로 만들어집니다.</div>
     </div>
@@ -4116,6 +4172,7 @@ _HTML = """<!doctype html>
         <span class="hint">초</span>
         <button class="ghost" onclick="aiHighlights(event)" title="AI가 핵심 구간을 골라 체크해줍니다">✨ AI 핵심 추천</button>
         <button class="ghost" onclick="renderSplit(event)" title="전체를 목표 길이 단위로 잘라 쇼츠 여러 개로 저장">🎬 여러 쇼츠로 나누기</button>
+        <button class="ghost" id="cleanRepeatsBtn" style="display:none;color:#f0a020" onclick="cleanRepeats(event)" title="↻ 표시된 반복(NG) 테이크를 지우고 마지막 테이크만 남깁니다 (영상도 함께 컷)">↻ 반복 정리</button>
       </div>
       <div class="hint" id="hlReason" style="margin-top:4px"></div>
       <div id="subList" class="subList-scroll" style="margin-top:10px"></div>
@@ -4379,6 +4436,7 @@ _HTML = """<!doctype html>
           <option value="none">없음</option>
           <option value="pop">팝 — 살짝 커지며 등장 (쇼츠 감성)</option>
           <option value="type">타이핑 — 글자가 하나씩 (인스타·틱톡 감성)</option>
+          <option value="karaoke">카라오케 — 말하는 단어가 차오름 (편집·Whisper 자막)</option>
         </select></div>
       <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
       <div class="chk"><input type="checkbox" id="setBand"><span>자막에도 배경 띠 (하단 자막 뒤에도 어두운 띠)</span></div>
@@ -4786,6 +4844,7 @@ function applyEditLast(el){
     window._wantNarrVoice = el.narr_voice;   // 일레븐랩스 목록은 늦게 채워짐 → 로드 후 복원
   chk('autoSubChk', el.auto_subtitle); chk('cutSilenceChk', el.cut_silence);
   chk('editColdOpen', el.cold_open); chk('editHookVoice', el.hook_voice);  // 🪝 훅 팩 (v0.75)
+  chk('editFillerCut', el.filler_cut); chk('editTakeClean', el.take_clean);  // 🧹 말 다듬기 (v0.76)
   set('whisperModelSel', el.whisper_model);
   window._wantStt = el.stt_provider || '';   // STT 목록은 늦게 채워짐 → loadStt에서 적용
   const lay = document.querySelector('input[name=editLayout][value="' + (el.layout || 'shorts') + '"]');
@@ -4937,6 +4996,8 @@ async function startEdit(){
     quality: (($('autoQualitySel')||{}).value)||'standard',
     cold_open: !!(($('editColdOpen')||{}).checked),   // ⚡ 첫 3초 티저 (v0.75)
     hook_voice: !!(($('editHookVoice')||{}).checked), // 🎙 후킹 보이스 (v0.75)
+    filler_cut: !!(($('editFillerCut')||{}).checked), // 🧹 추임새 컷 (v0.76)
+    take_clean: !!(($('editTakeClean')||{}).checked), // ↻ 반복 정리 (v0.76)
     auto_edit: pick('editFinish') === 'auto', auto_target_sec: +$('autoTargetSec').value||0,
     auto_multi: (($('autoMultiSel')||{}).value) === 'multi',
     script: $('editScript').value,
@@ -4996,11 +5057,18 @@ function renderSubRows(){
     const dropped = sub.keep===false;
     row.className='subrow subrowbtns'+(dropped?' dropped':''); row.id='subrow'+i;
     row.style.cssText='display:flex;gap:5px;align-items:flex-start;margin-bottom:6px;padding:3px;border-radius:8px';
+    // 🔎 인식 신뢰도 낮은 줄 = 붉은 점선 밑줄 / ↻ 반복 테이크 후보 = 배지 (v0.76)
+    const lowConf = (sub.conf !== undefined && sub.conf < 0.45);
+    const confStyle = lowConf ? 'border-bottom:2px dashed #e5484d;' : '';
+    const repBadge = sub.repeat
+      ? `<span title="앞뒤로 거의 같은 말이 또 있어요 — 반복(NG) 테이크로 보여요. [↻ 반복 정리]를 누르면 마지막 테이크만 남아요" style="padding-top:8px;color:#f0a020;font-weight:700">↻</span>`
+      : '';
     row.innerHTML =
       `<input type="checkbox" class="keepchk" ${dropped?'':'checked'} title="이 구간을 쇼츠에 넣기" onchange="window._subs[${i}].keep=this.checked; renderSubRows(); updateKeepInfo()">`+
+      repBadge+
       `<button class="ghost" title="이 줄부터 재생" onclick="seekCut(${sub.start_us})">▶</button>`+
       `<span class="hint" style="min-width:50px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
-      `<input type="text" style="flex:1" value="${escHtml(sub.text||'')}" onfocus="pauseCut()" oninput="window._subs[${i}].text=this.value">`+
+      `<input type="text" style="flex:1;${confStyle}" ${lowConf?'title="음성 인식이 불확실한 줄이에요 — 한번 확인해 주세요"':''} value="${escHtml(sub.text||'')}" onfocus="pauseCut()" oninput="window._subs[${i}].text=this.value">`+
       `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆</button>`+
       `<button class="ghost" title="이 줄을 둘로 나누기" onclick="splitSub(${i})">✂</button>`+
       `<button class="ghost" title="자막+영상 구간 통째 삭제 (브루식 — 체크박스로 복구)" onclick="dropSeg(${i})">🗑</button>`+
@@ -5026,6 +5094,14 @@ function updateKeepInfo(){
   }
 }
 function selectAll(on, ev){ if(ev)ev.preventDefault(); (window._subs||[]).forEach(s=>s.keep=on); renderSubRows(); }
+function cleanRepeats(ev){  // ↻ 반복(NG) 테이크 원클릭 정리 (v0.76) — 마지막 테이크만 유지
+  if(ev)ev.preventDefault();
+  let n=0;
+  (window._subs||[]).forEach(s=>{ if(s.repeat && s.keep!==false){ s.keep=false; n++; } });
+  renderSubRows();
+  const b=$('cleanRepeatsBtn'); if(b) b.style.display='none';
+  if(n) alert('반복(NG) 테이크 '+n+'곳을 뺐어요 — 마지막 테이크만 남습니다.\\n잘못 골랐으면 그 줄 체크박스를 다시 켜면 복구돼요.');
+}
 async function aiHighlights(ev){
   if(ev)ev.preventDefault();
   const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
@@ -6228,6 +6304,7 @@ function resetEditForm(ev){
   set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1'); set('editTempoSel','');
   set('autoMultiSel','one'); set('autoQualitySel','standard');
   chk('editColdOpen',false); chk('editHookVoice',false);  // 🪝 훅 팩 (v0.75)
+  chk('editFillerCut',false); chk('editTakeClean',false);  // 🧹 말 다듬기 (v0.76)
   onFinishChange(); applyTargetPreset(); onAutoMultiChange();
   const st = $('sttSel'); if(st && st.options.length) st.selectedIndex = 0;
   set('whisperModelSel','small'); window._wantStt = '';
@@ -6239,7 +6316,7 @@ function resetEditForm(ev){
     bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', sub_style:'기본', tone:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
     stt_provider:'', whisper_model:'small', speed:1, quality:'standard', transition:'none',
     auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
-    cold_open:false, hook_voice:false,
+    cold_open:false, hook_voice:false, filler_cut:false, take_clean:false,
     wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
 }
 
@@ -6337,6 +6414,7 @@ function collectTplParams(){
     quality: (($('autoQualitySel')||{}).value)||'standard',
     cold_open: !!(($('editColdOpen')||{}).checked),   // ⚡ 콜드오픈 (v0.75)
     hook_voice: !!(($('editHookVoice')||{}).checked), // 🎙 후킹 보이스 (v0.75)
+    filler_cut: !!(($('editFillerCut')||{}).checked), take_clean: !!(($('editTakeClean')||{}).checked),  // 🧹 (v0.76)
     auto_edit: pick('editFinish')==='auto', auto_multi: (($('autoMultiSel')||{}).value)==='multi',
     auto_target_sec: +$('autoTargetSec').value||0, photo_sec: +(($('photoSec')||{}).value)||15,
     wm_pos: (($('wmPos')||{}).value)||'tr', wm_scale: +(($('wmScale')||{}).value)||0.14,
@@ -6784,7 +6862,14 @@ async function poll(){
     window._subs = (job.subtitles || []).map(s => ({
       text: s.highlight ? (s.text + ' | ' + s.highlight) : s.text,
       start_us: s.start_us, end_us: s.end_us,
+      words: s.words || [], conf: (s.conf === undefined ? 1 : s.conf),
+      repeat: !!s.repeat,   // ↻ 반복 테이크 후보 (v0.76)
     }));
+    // ↻ 반복 감지 안내 + [반복 정리] 버튼 표시
+    const repN = window._subs.filter(s => s.repeat).length;
+    const repBtn = $('cleanRepeatsBtn');
+    if(repBtn) repBtn.style.display = repN ? '' : 'none';
+    if(repBtn) repBtn.textContent = '↻ 반복 정리 (' + repN + '곳)';
     $('subEditBox').classList.remove('hidden');
     $('bulkBox').classList.add('hidden'); $('bulkText').value='';
     const cp=$('cutPlayer');

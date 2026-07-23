@@ -70,16 +70,22 @@ class FasterWhisperSTT:
         return " ".join(t for _, _, t in self.transcribe_timed(audio_path, language)).strip()
 
     def transcribe_timed(self, audio_path: str, language: str = "ko") -> list:
-        """문장(구) 단위 타임스탬프 전사 — [(시작초, 끝초, 텍스트), ...] (v0.41).
+        """문장(구) 단위 타임스탬프 전사 (v0.41, v0.76 확장).
 
+        반환: [(시작초, 끝초, 텍스트, 단어들, 신뢰도), ...]
+          단어들 = [(단어 시작초, 끝초, "단어"), ...] — 카라오케 자막·필러 컷용 (v0.76)
+          신뢰도 = exp(avg_logprob) 0~1 — 검토 화면 "확인 필요" 표시용
         긴 발화 구간이 자막 한 줄로 오래 떠 있던 문제를 whisper 자체 세그먼트
         타임스탬프로 해결한다. VAD·no_speech 필터는 기존과 동일.
         """
+        import math  # noqa: PLC0415
+
         model = self._get_model()
         # VAD로 비발화(음악·잡음) 구간을 먼저 걸러 환각 방지. no_speech_prob 높은 세그먼트도 제외.
         # beam_size=1(그리디): 기본값 5 대비 3~5배 빠름, 한국어 정확도 손실 미미.
         segments, _ = model.transcribe(
             str(audio_path), language=language, beam_size=1,
+            word_timestamps=True,  # 🧹 단어 시각 — 필러 컷·카라오케 자막 (v0.76)
             vad_filter=True, vad_parameters={"min_silence_duration_ms": 400},
             no_speech_threshold=0.6, condition_on_previous_text=False,
         )
@@ -88,8 +94,15 @@ class FasterWhisperSTT:
             if getattr(s, "no_speech_prob", 0.0) >= 0.6:
                 continue
             t = s.text.strip()
-            if t:
-                out.append((float(s.start), float(s.end), t))
+            if not t:
+                continue
+            words = []
+            for w in (getattr(s, "words", None) or []):
+                token = str(getattr(w, "word", "") or "").strip()
+                if token:
+                    words.append((float(w.start), float(w.end), token))
+            conf = math.exp(min(0.0, float(getattr(s, "avg_logprob", 0.0) or 0.0)))
+            out.append((float(s.start), float(s.end), t, words, round(conf, 3)))
         return out
 
 
@@ -279,29 +292,38 @@ class STTEngine:
         return text
 
     def transcribe_timed(self, audio_path: str):
-        """문장 단위 타임스탬프 전사 — [(시작μs, 끝μs, 텍스트), ...] (v0.41).
+        """문장 단위 타임스탬프 전사 (v0.41, v0.76 확장).
 
+        반환: [(시작μs, 끝μs, 텍스트, 단어들, 신뢰도), ...]
+          단어들 = [(단어 시작μs, 끝μs, "단어"), ...] (조각 시작 기준 아님 — 오디오 절대)
         제공자가 지원하지 않으면(whisper 외) None을 반환해 호출자가 기존
         "구간=자막 한 줄" 방식으로 폴백한다. 환각 문구는 조각 단위로 제외.
+        캐시는 .seg2.json — 단어 시각이 없는 옛 캐시(.seg.json)와 분리 (v0.76).
         """
         fn = getattr(self.provider, "transcribe_timed", None)
         if fn is None:
             return None
-        cache = self._cache_path(audio_path).with_suffix(".seg.json")
+        cache = self._cache_path(audio_path).with_suffix(".seg2.json")
         if cache.exists():
             self.stats["cache_hits"] += 1
-            return [tuple(x) for x in json.loads(cache.read_text(encoding="utf-8"))]
+            return [tuple(x[:3]) + (list(map(tuple, x[3])) if len(x) > 3 else [],
+                                    float(x[4]) if len(x) > 4 else 1.0,)
+                    for x in json.loads(cache.read_text(encoding="utf-8"))]
         self.stats["calls"] += 1
         pieces = fn(str(audio_path), language=self.language)
         out = []
-        for start_s, end_s, text in pieces:
+        for piece in pieces:
+            start_s, end_s, text = piece[0], piece[1], piece[2]
+            words = piece[3] if len(piece) > 3 else []
+            conf = float(piece[4]) if len(piece) > 4 else 1.0
             text = (text or "").strip()
             if not text or is_hallucination(text):
                 if text:
                     self.stats["hallucinations"] = self.stats.get("hallucinations", 0) + 1
                 continue
             if end_s > start_s:
-                out.append((int(start_s * 1e6), int(end_s * 1e6), text))
+                w_us = [(int(a * 1e6), int(b * 1e6), t) for a, b, t in words if b > a]
+                out.append((int(start_s * 1e6), int(end_s * 1e6), text, w_us, conf))
         if out:  # 빈 결과는 캐시하지 않음 (transcribe와 동일 정책)
             cache.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
         return out
