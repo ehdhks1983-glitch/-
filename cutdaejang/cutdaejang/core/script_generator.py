@@ -34,13 +34,16 @@ PROMPT_TEMPLATE = """\
 역할: 유튜브 쇼츠 대본 작가
 입력: 주제="{topic}", 톤="{tone}", 목표길이={target_sec}초
 규칙:
-- 첫 문장은 3초 안에 시선을 잡는 훅 / 마지막 문장은 CTA
+- 첫 문장은 콜드오픈 훅 — 인사·자기소개·배경 설명 금지, 1초 안에 결론·충격·궁금증부터 던질 것
+  ("안녕하세요"·"오늘은 ~알아볼게요" 류로 시작하면 실패) / 마지막 문장은 CTA
+- 전체의 약 1/4 지점(3번째 이후) 문장 하나는 이탈을 막는 재훅으로 쓸 것 —
+  반전 예고·"진짜 핵심은 지금부터" 류. 그 문장에만 "rehook":true 표시 (정확히 1개)
 - 문장당 반드시 {max_chars}자 이내 (자막 1줄). 초과 문장 금지 — 길면 두 문장으로 나눌 것
 - 구어체. 숫자·영어 약어는 한글 발음으로 표기 (TTS 오독 방지. 예: "2026년"→"이천이십육년", "AI"→"에이아이")
 - highlight: 각 문장에서 시청자가 기억해야 할 단어 1개 (문장에 그대로 포함된 단어, 없으면 빈 문자열)
 - scene: 그 문장이 나올 때 화면에 보여줄 장면 묘사 1줄 (한국어, 그림 생성용. 인물·사물·배경·분위기를
   구체적으로. 글자·문자·로고는 절대 넣지 말 것)
-출력(JSON만): {{"title":"","sentences":[{{"text":"","highlight":"","scene":""}},...],"background_prompt":"","hashtags":[""]}}
+출력(JSON만): {{"title":"","sentences":[{{"text":"","highlight":"","scene":"","rehook":false}},...],"background_prompt":"","hashtags":[""]}}
 """
 
 
@@ -52,6 +55,7 @@ class Script:
     background_prompt: str = ""
     hashtags: List[str] = field(default_factory=list)
     scene_prompts: List[str] = field(default_factory=list)  # 문장별 장면 묘사 (v0.45 이미지 생성용)
+    rehook_idx: int = -1                 # 🪝 재훅 문장 번호 (v0.75 — 없으면 -1)
 
     def __post_init__(self):
         # highlights/scene_prompts는 항상 sentences와 같은 길이로 정규화
@@ -59,6 +63,8 @@ class Script:
         self.highlights += [""] * (len(self.sentences) - len(self.highlights))
         self.scene_prompts = (self.scene_prompts or [])[: len(self.sentences)]
         self.scene_prompts += [""] * (len(self.sentences) - len(self.scene_prompts))
+        if not (0 <= self.rehook_idx < len(self.sentences)):
+            self.rehook_idx = -1
 
     @classmethod
     def from_json_text(cls, text: str) -> "Script":
@@ -72,6 +78,7 @@ class Script:
             raise ScriptParseError(f"sentences 형식 오류: {raw!r}")
 
         sentences, highlights, scenes = [], [], []
+        rehook_idx = -1
         for item in raw:
             if isinstance(item, str) and item.strip():  # 구버전 문자열 형식 호환
                 sentences.append(item.strip())
@@ -81,6 +88,8 @@ class Script:
                 sentences.append(str(item["text"]).strip())
                 highlights.append(str(item.get("highlight", "") or "").strip())
                 scenes.append(str(item.get("scene", "") or "").strip())
+                if item.get("rehook") is True and rehook_idx < 0:  # 🪝 첫 true만 (v0.75)
+                    rehook_idx = len(sentences) - 1
             else:
                 raise ScriptParseError(f"sentences 항목 형식 오류: {item!r}")
         # 리스트 병렬 형식({"sentences":[...], "highlights":[...]})도 수용
@@ -96,16 +105,21 @@ class Script:
             background_prompt=str(data.get("background_prompt", "")),
             hashtags=[str(h) for h in data.get("hashtags", []) if h],
             scene_prompts=scenes,
+            rehook_idx=rehook_idx,
         )
 
     def to_json(self) -> str:
+        sent = []
+        for i, (t, h, s) in enumerate(
+                zip(self.sentences, self.highlights, self.scene_prompts)):
+            d = {"text": t, "highlight": h, "scene": s}
+            if i == self.rehook_idx:  # 🪝 재훅 표시 왕복 보존 (v0.75)
+                d["rehook"] = True
+            sent.append(d)
         return json.dumps(
             {
                 "title": self.title,
-                "sentences": [
-                    {"text": t, "highlight": h, "scene": s}
-                    for t, h, s in zip(self.sentences, self.highlights, self.scene_prompts)
-                ],
+                "sentences": sent,
                 "background_prompt": self.background_prompt,
                 "hashtags": self.hashtags,
             },
@@ -225,9 +239,11 @@ HIGHLIGHT_PROMPT = """\
 - 서두 훅 1개 + 중간 핵심들 + 마무리(결론·반전) 1개 구조를 권장.
 - 숫자·질문·반전·이득·결론이 있는 문장 우선. 지루한 설명·군더더기·중복은 버려.
 - 고른 문장은 그 자체로 말이 돼야 한다.
+- climax: keep 중에서 "가장 궁금하게 만드는 한 문장"의 번호 (첫 3초 티저로 맨 앞에
+  잠깐 보여줄 장면 — 영상 첫 문장 말고 중간·뒷부분에서 고를 것)
 자막들:
 {lines}
-출력(JSON만): {{"keep":[고른 번호들], "reason":"왜 이렇게 골랐는지 한 줄"}}
+출력(JSON만): {{"keep":[고른 번호들], "climax":번호, "reason":"왜 이렇게 골랐는지 한 줄"}}
 """
 
 
@@ -276,7 +292,13 @@ def suggest_highlights(subs: list, target_sec: int = 30,
             if is_prefix or front_only:
                 raise ScriptError(
                     "AI가 앞부분만 연속으로 골라(핵심 선별 실패) 무효 처리 — 후킹 점수 방식으로 대체")
-    return {"keep": keep, "reason": str(obj.get("reason", ""))}
+    try:  # ⚡ 콜드오픈 티저용 클라이맥스 (v0.75) — keep 안 번호만 인정
+        climax = int(obj.get("climax", -1))
+    except (TypeError, ValueError):
+        climax = -1
+    if climax not in keep:
+        climax = pick_climax(subs, keep)
+    return {"keep": keep, "climax": climax, "reason": str(obj.get("reason", ""))}
 
 
 REFINE_PROMPT = """\
@@ -359,6 +381,24 @@ def _hook_score(text: str, dur: float, idx: int, total: int) -> float:
     return score
 
 
+def pick_climax(subs: list, keep: list) -> int:
+    """keep 중 '첫 3초 티저(콜드오픈)'로 쓸 클라이맥스 한 문장 고르기 (v0.75).
+
+    영상 시작 문장은 제외(어차피 맨 앞이라 티저 의미가 없음) — keep의 2번째부터
+    후킹 점수(숫자·질문·키워드·밀도)가 가장 높은 문장. 후보가 없으면 -1.
+    """
+    cands = [i for i in keep if 0 <= i < len(subs)][1:]  # keep 첫 문장 제외
+    best, best_score = -1, -1.0
+    for i in cands:
+        s = subs[i]
+        dur = max(0.1, (s.get("end_us", 0) - s.get("start_us", 0)) / 1e6)
+        # idx=1,total=3 → 도입부/마무리 위치 보정 없이 내용 점수만 비교
+        score = _hook_score(str(s.get("text") or ""), dur, 1, 3)
+        if score > best_score:
+            best, best_score = i, score
+    return best
+
+
 def suggest_highlights_heuristic(subs: list, target_sec: int = 30) -> dict:
     """키 없이 쓰는 대역 — 영상 전체에서 '후킹 요소'(숫자·질문·키워드)가 강한
     구간들을 골라 모은다 (연속 구간이 아니라 임팩트 순, 시간순으로 재배열)."""
@@ -394,7 +434,7 @@ def suggest_highlights_heuristic(subs: list, target_sec: int = 30) -> dict:
         if not progressed:
             break
     keep.sort()                                        # 영상 순서 유지
-    return {"keep": keep,
+    return {"keep": keep, "climax": pick_climax(subs, keep),
             "reason": (f"영상 앞·중간·뒤에서 후킹 요소(숫자·질문·키워드)가 강한 "
                        f"{len(keep)}개 구간을 모아 약 {int(total)}초 "
                        f"(대략치 — 제미나이 키를 넣으면 문맥까지 봐요)")}

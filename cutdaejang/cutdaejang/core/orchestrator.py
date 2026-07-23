@@ -43,6 +43,7 @@ class JobOptions:
     pace_sec: int = 0                    # 내 대본일 때 목표 길이(초) — 간격을 늘려 맞춤 (v0.63)
     bgm: str = ""                        # ""(없음) | "random" | 파일명/경로
     hook: str = ""                       # 상단 제목(훅). 비면 대본 제목 사용
+    hook_voice: bool = False             # 🎙 훅을 성우가 읽는 인트로를 앞에 (v0.75)
     user_background: Optional[str] = None
     main_video_path: Optional[str] = None
     render: RenderOptions = field(default_factory=RenderOptions)
@@ -130,6 +131,68 @@ def build_style(settings: dict, orientation: str = "shorts") -> Style:
         sub_style=sub_style,
         tone=settings["bg"].get("tone", "기본"),
     )
+
+
+def pick_rehook_index(starts_us: List[int], duration_us: int, scripted_idx: int = -1,
+                      target_us: int = 14_000_000, min_video_us: int = 20_000_000,
+                      min_at_us: int = 8_000_000) -> int:
+    """🪝 재훅 문장 고르기 (v0.75) — '지속 배포'를 결정하는 14~15초 지점 액센트.
+
+    대본에 rehook 표시가 있으면 그 문장(단 8초 이후일 때), 없으면 시작 시각이
+    14초에 가장 가까운 문장. 20초 미만 영상·문장 4개 미만·너무 이른 위치면 -1.
+    """
+    if duration_us < min_video_us or len(starts_us) < 4:
+        return -1
+    if 0 < scripted_idx < len(starts_us) and starts_us[scripted_idx] >= min_at_us:
+        return scripted_idx
+    best = min(range(1, len(starts_us)), key=lambda i: abs(starts_us[i] - target_us))
+    return best if starts_us[best] >= min_at_us else -1
+
+
+def _hook_voice_text(hook: str) -> str:
+    """훅 문구 → TTS로 읽을 텍스트 (색 마크업·강조 구분자 제거)."""
+    t = re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", hook or "")
+    t = t.rsplit("|", 1)[0] if "|" in t else t
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _prepend_hook_voice(result: "JobResult", hook_text: str, opts: "JobOptions",
+                        settings: dict, job_dir: Path, workdir_root,
+                        note: Callable[[str], None]) -> None:
+    """🎙 후킹 보이스 (v0.75) — 훅 1문장을 성우가 읽는 인트로를 본편 앞에 붙인다.
+
+    첫 프레임 정지+미세 줌 + 훅 음성(+띠링) 인트로 → 본편. 실패해도 본편 유지.
+    """
+    import os as _os  # noqa: PLC0415
+
+    text = _hook_voice_text(hook_text)
+    if not text or not (result.mp4 and result.mp4.ok):
+        return
+    try:
+        clips, used, _n = tts_engine.synth_with_fallback(
+            [text], chain=list(opts.tts_chain),
+            cache_root=Path(workdir_root) / "cache" / "tts",
+            settings=settings, voice=opts.voice)
+        from . import sfx as sfx_mod  # noqa: PLC0415
+        from . import video_editor  # noqa: PLC0415
+
+        sfx_cfg = settings.get("sfx") or {}
+        ding = ""
+        if sfx_cfg.get("enabled", True):
+            try:
+                ding = sfx_mod.ensure_sfx().get("ding", "")
+            except Exception:  # noqa: BLE001
+                ding = ""
+        intro = video_editor.hook_intro_clip(
+            result.mp4.out_path, str(clips[0]), str(job_dir / "hook_intro.mp4"),
+            ding=ding, gain_db=float(sfx_cfg.get("volume_db", -13)))
+        merged = video_editor.attach_branding(
+            result.mp4.out_path, intro, "", str(job_dir / "hooked.mp4"))
+        if merged != result.mp4.out_path and Path(merged).is_file():
+            _os.replace(merged, result.mp4.out_path)  # 파일명 유지 → 히스토리 그대로
+            note(f"🎙 후킹 보이스 인트로를 앞에 붙였어요 (목소리: {used})")
+    except Exception as e:  # noqa: BLE001 — 부가 기능: 실패해도 본편은 그대로
+        note(f"후킹 보이스 생략: {str(e)[:80]}")
 
 
 def resolve_bgm(choice: str, settings: dict, bgm_dir: Optional[Path] = None) -> Optional[Bgm]:
@@ -368,6 +431,35 @@ def run_job(
             if pops:
                 note(f"🔢 숫자 인포 팝 {len(pops)}곳 ({', '.join(p.text for p in pops[:3])}…)")
 
+        # 🪝 14~15초 재훅 (v0.75) — 이탈을 막는 액센트: 펀치인 줌 + '휙' 효과음.
+        # 대본에 rehook 표시가 있으면 그 문장, 없으면 14초에 가장 가까운 문장.
+        try:
+            ri = pick_rehook_index([a.start_us for a in spec.audio], spec.duration_us,
+                                   getattr(script, "rehook_idx", -1))
+            if ri >= 0:
+                clip = spec.audio[ri]
+                from ..spec import Punch, Sfx  # noqa: PLC0415
+
+                if bg_cfg.get("punch_in", True) and not any(
+                        p.start_us <= clip.start_us < p.end_us
+                        for p in (spec.punchins or [])):
+                    spec.punchins = list(spec.punchins or []) + [Punch(
+                        start_us=clip.start_us,
+                        end_us=min(clip.start_us + 1_200_000, clip.end_us))]
+                if sfx_cfg.get("enabled", True):
+                    from . import sfx as sfx_mod  # noqa: PLC0415
+
+                    swish = sfx_mod.ensure_sfx().get("whoosh", "")
+                    if swish:
+                        spec.sfx = list(spec.sfx or []) + [Sfx(
+                            path=swish, start_us=max(0, clip.start_us - 120_000),
+                            gain_db=float(sfx_cfg.get("volume_db", -13)) - 2,
+                            name="whoosh")]
+                        spec.sfx.sort(key=lambda ev: ev.start_us)
+                note(f"🪝 재훅 강조 — {clip.start_us / 1e6:.0f}초 지점 (펀치인+효과음)")
+        except Exception as e:  # noqa: BLE001 — 액센트 실패가 렌더를 막으면 안 됨
+            note(f"재훅 생략: {str(e)[:80]}")
+
         spec_path = job_dir / "spec.json"
         spec.save(spec_path)
         result.spec_path = str(spec_path)
@@ -385,6 +477,10 @@ def run_job(
                 )
                 if not result.mp4.ok:
                     result.errors += [f"렌더 자가검증 실패: {e}" for e in result.mp4.errors]
+                if opts.hook_voice:  # 🎙 후킹 보이스 인트로 (v0.75)
+                    report("render", 1.0)
+                    _prepend_hook_voice(result, opts.hook or script.title, opts,
+                                        settings, job_dir, workdir_root, note)
             except Exception as e:  # noqa: BLE001 — A/B 독립: mp4 실패가 draft를 막지 않게
                 result.errors.append(f"mp4 렌더 실패: {e}")
 

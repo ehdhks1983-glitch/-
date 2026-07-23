@@ -631,6 +631,63 @@ def rebuild_from_keep(
     return new_video, _remap_subs_to_ranges(sorted(kept, key=lambda x: x.start_us), ranges)
 
 
+def rebuild_cold_open(
+    cut_video: str, subtitles: List[Subtitle], keep_idx: Optional[List[int]],
+    out_path: str, climax_idx: int = -1, teaser_us: int = 2_800_000,
+    pad_us: int = 150_000, transition: str = "none",
+) -> tuple:
+    """⚡ 콜드오픈 (v0.75) — 클라이맥스 2~3초를 맨 앞 티저로 놓고 본편(시간순)을 잇는다.
+
+    알파컷식 'HOOK+CLIMAX': 가장 궁금한 순간을 먼저 슬쩍 보여주고 본편 시작.
+    keep_idx=None이면 전체 자막이 본편. climax_idx가 무효면 후킹 점수로 자동 선택.
+    티저를 만들 수 없으면(자막 1개·클라이맥스가 영상 첫머리 등) 일반 재컷과 동일.
+    반환: (새 영상, 재매핑 자막, 티저 초 — 0.0이면 티저 없음)
+    """
+    idx = list(keep_idx) if keep_idx is not None else list(range(len(subtitles)))
+    kept = [subtitles[i] for i in idx if 0 <= i < len(subtitles)]
+    if not kept:
+        raise ValueError("남길 자막을 하나 이상 선택하세요")
+    kept_sorted = sorted(kept, key=lambda x: x.start_us)
+    dur = ff.probe_duration_us(cut_video)
+    ranges: List[tuple] = []
+    for s in kept_sorted:
+        a, b = max(0, s.start_us - pad_us), min(dur, s.end_us + pad_us)
+        if ranges and a <= ranges[-1][1]:
+            ranges[-1] = (ranges[-1][0], max(ranges[-1][1], b))
+        else:
+            ranges.append((a, b))
+    # 클라이맥스 — 지정이 무효면 후킹 점수(숫자·질문·키워드)로 자동 선택
+    if not (0 <= climax_idx < len(subtitles)) or climax_idx not in idx:
+        from . import script_generator as sg  # noqa: PLC0415
+
+        climax_idx = sg.pick_climax(subtitles_to_dicts(subtitles), sorted(set(idx)))
+    climax = subtitles[climax_idx] if 0 <= climax_idx < len(subtitles) else None
+    # 티저 불가 조건: 자막 1개뿐 / 클라이맥스가 사실상 영상 첫머리(티저 의미 없음)
+    if (climax is None or len(kept_sorted) < 2
+            or climax.start_us <= ranges[0][0] + 200_000):
+        video, subs = rebuild_from_keep(cut_video, subtitles, idx, out_path,
+                                        pad_us=pad_us, transition=transition)
+        return video, subs, 0.0
+    t_a = climax.start_us
+    t_b = min(dur, min(climax.end_us + pad_us, t_a + teaser_us))
+    if t_b - t_a < 700_000:  # 1초도 안 되는 티저는 오히려 어수선
+        video, subs = rebuild_from_keep(cut_video, subtitles, idx, out_path,
+                                        pad_us=pad_us, transition=transition)
+        return video, subs, 0.0
+    teaser_len = t_b - t_a
+    # 티저 구간을 맨 앞에 — cut_and_concat은 주어진 순서 그대로 이어붙인다
+    video = video_editor.cut_and_concat(cut_video, [(t_a, t_b)] + ranges, out_path,
+                                        transition=transition)
+    body = _remap_subs_to_ranges(kept_sorted, ranges)
+    subs_out = [Subtitle(text=climax.text, highlight=climax.highlight,
+                         start_us=0, end_us=teaser_len)]
+    for s in body:
+        subs_out.append(Subtitle(text=s.text, highlight=s.highlight,
+                                 start_us=s.start_us + teaser_len,
+                                 end_us=s.end_us + teaser_len))
+    return video, subs_out, teaser_len / 1e6
+
+
 def split_long_subtitles(subs: List[Subtitle], wrap_chars: int = 16,
                          max_lines: int = 2) -> List[Subtitle]:
     """2줄(wrap_chars×max_lines자)을 넘는 자막을 여러 개의 짧은 자막으로 자동 분할.

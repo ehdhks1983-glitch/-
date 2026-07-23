@@ -38,6 +38,7 @@ _EDIT_LAST_KEYS = (
     "stt_provider", "whisper_model", "speed", "quality", "narr_fit", "transition",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
     "tempo",  # ⚡ 빠른 템포 — 몽타주 컷 밀도 (v0.73)
+    "cold_open", "hook_voice",  # 🪝 훅 팩 (v0.75)
 )
 
 
@@ -397,6 +398,7 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
         tts_style=params.get("tts_style", ""),
         bgm=params.get("bgm", ""),
         hook=(params.get("hook") or "").strip(),
+        hook_voice=bool(params.get("hook_voice")),  # 🎙 후킹 보이스 (v0.75)
         target_sec=int(params.get("target_sec") or 60),
         orientation=(params.get("orientation")
                      if params.get("orientation") in ("wide", "reels") else "shorts"),  # v0.61·v0.74
@@ -507,6 +509,8 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
             pass
     if params.get("tts_provider") == "elevenlabs" and (params.get("voice") or "").strip():
         over_ui["gen_eleven_voice"] = str(params["voice"]).strip()[:80]  # 🎙 지난 성우 기억 (v0.67)
+    if "hook_voice" in params:  # 🎙 후킹 보이스 선택 기억 (v0.75)
+        over_ui["gen_hook_voice"] = bool(params.get("hook_voice"))
     if not over and not over_sub and not over_sfx and not over_ui:
         return settings
     save = {}
@@ -788,6 +792,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "hook_style": params.get("hook_style") or "",  # v0.52 프리셋
                          "sub_style": params.get("sub_style") or "",    # v0.54 자막 프리셋
                          "tone": params.get("tone") or "",              # v0.56 화면 톤
+                         "cold_open": bool(params.get("cold_open")),    # ⚡ 콜드오픈 (v0.75)
+                         "hook_voice": bool(params.get("hook_voice")),  # 🎙 후킹 보이스 (v0.75)
                          "wm_path": (params.get("wm_path") or "").strip().strip('"'),
                          "wm_pos": params.get("wm_pos") or "tr",
                          "wm_scale": params.get("wm_scale") or 0.14},
@@ -836,6 +842,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 return
             # 내레이션 대본은 이미 목표 길이로 새로 쓴 글 → 핵심 선별로 또 자르지 않음
             # (🧠 화면분석 대본도 길이를 이미 정했으므로 재차 자르지 않음 — v0.71)
+            climax = -1  # ⚡ 콜드오픈 티저 후보 (v0.75)
             if subs_d and tgt > 0 and not narr_topic and not narr_file and not narr_analyze:
                 _set_job(job_id, note=f"핵심 구간 골라 {tgt}초 쇼츠 구성 중…")
                 try:
@@ -847,6 +854,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                     pick = sg.suggest_highlights_heuristic(subs_d, target_sec=tgt)
                     pick_src = "후킹 점수"
                 keep = pick["keep"]
+                climax = int(pick.get("climax", -1))
                 if keep:  # 어떤 구간을 골랐는지 투명하게 (로그 + 완료 화면)
                     starts = [subs_d[i].get("start_us", 0) / 1e6 for i in keep]
                     fmt = " · ".join(f"{int(x // 60)}:{int(x % 60):02d}" for x in starts)
@@ -858,7 +866,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             _do_edit_render(job_id, subs_d, (params.get("hook") or "").strip(),
                             params.get("layout") or edit_cfg["layout"],
                             analysis.cut_video, workdir, keep, auto_speed,
-                            params.get("quality") or "standard", denoise)
+                            params.get("quality") or "standard", denoise,
+                            climax=climax)
             return
         if analysis.subtitles:  # STT/입력 대본/내레이션 대본이 있으면 검토 화면으로
             _set_job(
@@ -916,10 +925,34 @@ def _apply_trim(cut_video: str, subs: list, keep, trim, job_dir: Path):
     return video, new_subs, keep, note
 
 
+def _narr_tts_pref(ep: dict, settings: dict) -> tuple:
+    """내레이션 보이스 선택 → (폴백 체인, voice) — 내레이션·후킹 보이스 공용 (v0.75)."""
+    narr_voice = (ep.get("narr_voice") or "").strip()
+    chain = []
+    if narr_voice == "__sovits__":
+        chain.append("sovits")      # 무료 내 목소리(로컬) — 실패 시 아래로 폴백
+    if narr_voice == "__mine__" and os.environ.get("ELEVENLABS_API_KEY"):
+        chain.append("elevenlabs")  # 내 목소리 클론 — 실패 시 아래로 폴백
+    if narr_voice.startswith("el:") and os.environ.get("ELEVENLABS_API_KEY"):
+        chain.append("elevenlabs")  # 🎙 일레븐랩스 성우 보이스 (v0.46)
+    if os.environ.get("GEMINI_API_KEY"):
+        chain.append("gemini")
+    if sys.platform == "win32":
+        chain.append("windows")
+    chain.append("stub")
+    # __mine__/__sovits__는 보이스명이 아니라서 비움 → 제공자별 기본값으로 해석
+    if narr_voice.startswith("el:"):
+        voice = narr_voice[3:]      # 일레븐랩스 voice_id
+    else:
+        voice = "" if narr_voice in ("__mine__", "__sovits__") else (
+            narr_voice or settings["tts"].get("voice_gemini", ""))
+    return chain, voice
+
+
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     cut_video: str, workdir: str, keep: Optional[list] = None,
                     speed: float = 1.0, quality: str = "standard",
-                    denoise=False, trim=(0, 0)) -> None:
+                    denoise=False, trim=(0, 0), climax: int = -1) -> None:
     """2단계: (수정된) 자막으로 최종 렌더. keep이 일부면 그 구간만 남겨 쇼츠로 재컷."""
     try:
         from ..core import edit_mode  # noqa: PLC0415
@@ -971,13 +1004,37 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             bgm_db = float(settings["bgm"].get("volume_db", -16))
         # 핵심 구간만 골랐으면(전체가 아니면) 영상을 그 구간만 다시 잘라 진짜 쇼츠 길이로.
         # 내레이션보다 먼저 잘라야 목소리가 최종 타임라인 기준으로 배치된다.
+        # ⚡ 콜드오픈(v0.75): 내레이션 없는 흐름에서만 — 클라이맥스 티저를 맨 앞에.
+        cold_open = (bool(ep.get("cold_open")) and bool(subs)
+                     and not ep.get("narration") and not ep.get("narr_file"))
         if keep is not None and 0 < len(keep) < len(subs):
             _set_job(job_id, stage="cut", frac=0.0,
                      note=f"고른 {len(keep)}개 구간만 남겨 쇼츠로 자르는 중…")
-            cut_video, subs = edit_mode.rebuild_from_keep(
-                cut_video, subs, keep, str(Path(workdir) / job_id / "short.mp4"),
-                transition=(ep.get("transition") or "none"),
+            if cold_open:
+                cut_video, subs, teaser_s = edit_mode.rebuild_cold_open(
+                    cut_video, subs, keep, str(Path(workdir) / job_id / "short.mp4"),
+                    climax_idx=climax, transition=(ep.get("transition") or "none"),
+                )
+                if teaser_s > 0:
+                    w3 = f"⚡ 콜드오픈: 클라이맥스 {teaser_s:.1f}초를 맨 앞 티저로 배치"
+                    prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                    _set_job(job_id, tts_warn=f"{prev} · {w3}" if prev else w3)
+            else:
+                cut_video, subs = edit_mode.rebuild_from_keep(
+                    cut_video, subs, keep, str(Path(workdir) / job_id / "short.mp4"),
+                    transition=(ep.get("transition") or "none"),
+                )
+        elif cold_open and len(subs) >= 2:
+            # 구간 선별 없이(전체 사용) 콜드오픈만 켠 경우 — 전체 본편 앞에 티저
+            _set_job(job_id, stage="cut", frac=0.0, note="클라이맥스 티저 배치 중…")
+            cut_video, subs, teaser_s = edit_mode.rebuild_cold_open(
+                cut_video, subs, None, str(Path(workdir) / job_id / "short.mp4"),
+                climax_idx=climax, transition=(ep.get("transition") or "none"),
             )
+            if teaser_s > 0:
+                w3 = f"⚡ 콜드오픈: 클라이맥스 {teaser_s:.1f}초를 맨 앞 티저로 배치"
+                prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                _set_job(job_id, tts_warn=f"{prev} · {w3}" if prev else w3)
         narration_wav = None
         narr_rec = (ep.get("narr_file") or "").strip()
         if narr_rec and Path(narr_rec).is_file():
@@ -1020,24 +1077,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
 
             _set_job(job_id, stage="tts", frac=0.0, note="AI 목소리 만드는 중…")
             narr_voice = ep.get("narr_voice") or ""
-            chain = []
-            if narr_voice == "__sovits__":
-                chain.append("sovits")      # 무료 내 목소리(로컬) — 실패 시 아래로 폴백
-            if narr_voice == "__mine__" and os.environ.get("ELEVENLABS_API_KEY"):
-                chain.append("elevenlabs")  # 내 목소리 클론 — 실패 시 아래로 폴백
-            if narr_voice.startswith("el:") and os.environ.get("ELEVENLABS_API_KEY"):
-                chain.append("elevenlabs")  # 🎙 일레븐랩스 성우 보이스 (v0.46)
-            if os.environ.get("GEMINI_API_KEY"):
-                chain.append("gemini")
-            if sys.platform == "win32":
-                chain.append("windows")
-            chain.append("stub")
-            # __mine__/__sovits__는 보이스명이 아니라서 비움 → 제공자별 기본값으로 해석
-            if narr_voice.startswith("el:"):
-                voice = narr_voice[3:]      # 일레븐랩스 voice_id
-            else:
-                voice = "" if narr_voice in ("__mine__", "__sovits__") else (
-                    narr_voice or settings["tts"].get("voice_gemini", ""))
+            chain, voice = _narr_tts_pref(ep, settings)  # 보이스 선택 → 체인 (v0.75 공용화)
             texts = [_tts_clean(s2.text) or "네" for s2 in subs]
             clips, used, note = tts_engine.synth_with_fallback(
                 texts, chain, Path(workdir) / "cache" / "tts", settings,
@@ -1121,6 +1161,43 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         )
         logging.getLogger("cutdaejang").info(
             "렌더 %s: %s", "완료" if result.ok else "부분 실패", out)
+        # 🎙 후킹 보이스 (v0.75) — 훅 제목을 성우가 읽는 인트로를 맨 앞에
+        if ep.get("hook_voice") and (hook or "").strip() and Path(out).exists():
+            try:
+                from ..core import sfx as sfx_mod  # noqa: PLC0415
+                from ..core import tts_engine, video_editor  # noqa: PLC0415
+                from ..core.orchestrator import _hook_voice_text  # noqa: PLC0415
+
+                hv_text = _hook_voice_text(hook)
+                if hv_text:
+                    _set_job(job_id, note="🎙 후킹 보이스 만드는 중…")
+                    chain2, voice2 = _narr_tts_pref(ep, settings)
+                    clips2, used2, _n2 = tts_engine.synth_with_fallback(
+                        [hv_text], chain2, Path(workdir) / "cache" / "tts",
+                        settings, voice=voice2)
+                    ding = ""
+                    if (settings.get("sfx") or {}).get("enabled", True):
+                        try:
+                            ding = sfx_mod.ensure_sfx().get("ding", "")
+                        except Exception:  # noqa: BLE001
+                            ding = ""
+                    intro = video_editor.hook_intro_clip(
+                        out, str(clips2[0]),
+                        str(Path(workdir) / job_id / "hook_intro.mp4"), ding=ding,
+                        gain_db=float((settings.get("sfx") or {}).get("volume_db", -13)))
+                    merged = video_editor.attach_branding(
+                        out, intro, "", str(Path(workdir) / job_id / "hooked.mp4"))
+                    if merged != out and Path(merged).is_file():
+                        os.replace(merged, out)
+                        w4 = f"🎙 후킹 보이스 인트로를 앞에 붙였어요 (목소리: {used2})"
+                        prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                        _set_job(job_id, tts_warn=f"{prev} · {w4}" if prev else w4)
+            except Exception as hv_e:  # noqa: BLE001 — 부가 기능: 실패해도 본편 유지
+                logging.getLogger("cutdaejang").warning("후킹 보이스 실패(무시): %s", hv_e)
+                prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                w4 = "⚠ 후킹 보이스 만들기에 실패해 본편만 저장했어요"
+                if w4 not in prev:
+                    _set_job(job_id, tts_warn=f"{prev} · {w4}" if prev else w4)
         if Path(out).exists():  # 🎬 인트로/아웃트로 (설정에 있으면, v0.43)
             _attach_branding(job_id, out, Path(workdir) / job_id)
         _set_job(
@@ -3129,7 +3206,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.74.4)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.75.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3250,6 +3327,11 @@ _HTML = """<!doctype html>
           <option value="ultra">초고화질 (4K)</option>
         </select>
       </div>
+      <div class="chk" style="gap:8px;margin-top:6px">
+        <label class="chk" style="cursor:pointer" title="가장 궁금한 순간 2~3초를 맨 앞에 잠깐 보여주고 본편 시작 — 첫 3초 이탈을 막는 편집 공식">
+          <input type="checkbox" id="editColdOpen"> ⚡ 첫 3초 티저 (콜드오픈)</label>
+        <span class="hint">— 하이라이트를 맨 앞에 슬쩍 보여주고 시작해요 (내레이션과는 함께 안 돼요)</span>
+      </div>
       <div class="hint" style="margin-top:4px">💾 여기서 정한 세팅은 자동으로 기억돼요 — 다음부터는 영상만 바꿔 넣고 [만들기 시작]만 누르면 같은 방식으로 만들어집니다.</div>
     </div>
 
@@ -3297,6 +3379,8 @@ _HTML = """<!doctype html>
       </div>
       <div id="hookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
       <div class="hint">숫자는 자동으로 노랗게 강조돼요. 직접 표시하려면 <b>| 단어</b>(강조)나 <b>[노랑]글자[/]</b>(색)도 됩니다.</div>
+      <label class="chk" style="margin-top:6px;cursor:pointer" title="영상 맨 앞에서 성우가 이 제목을 읽어주고 시작 — 전문 채널 같은 오프닝">
+        <input type="checkbox" id="editHookVoice"> 🎙 후킹 보이스 <span class="hint">— 이 제목을 성우(위 내레이션 목소리)가 읽으며 시작해요</span></label>
     </details>
 
     <details class="opt" id="optNarr">
@@ -3790,6 +3874,8 @@ _HTML = """<!doctype html>
                 title="Google Fonts의 무료(OFL) 한글 글씨체 5종을 받아옵니다 (약 8MB) — 영상·상업용 사용 가능">⬇ 무료 글씨체 받기</button>
       </div>
       <div id="genHookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
+      <label class="chk" style="margin-top:6px;cursor:pointer" title="영상 맨 앞에서 성우가 제목을 읽어주고 시작 — 전문 채널 같은 오프닝">
+        <input type="checkbox" id="genHookVoice"> 🎙 후킹 보이스 <span class="hint">— 제목을 성우(고른 목소리)가 읽으며 시작해요 (비우면 AI 제목을 읽음)</span></label>
     </details>
 
     <details class="opt">
@@ -4699,6 +4785,7 @@ function applyEditLast(el){
   else if((el.narr_voice || '').startsWith('el:'))
     window._wantNarrVoice = el.narr_voice;   // 일레븐랩스 목록은 늦게 채워짐 → 로드 후 복원
   chk('autoSubChk', el.auto_subtitle); chk('cutSilenceChk', el.cut_silence);
+  chk('editColdOpen', el.cold_open); chk('editHookVoice', el.hook_voice);  // 🪝 훅 팩 (v0.75)
   set('whisperModelSel', el.whisper_model);
   window._wantStt = el.stt_provider || '';   // STT 목록은 늦게 채워짐 → loadStt에서 적용
   const lay = document.querySelector('input[name=editLayout][value="' + (el.layout || 'shorts') + '"]');
@@ -4848,6 +4935,8 @@ async function startEdit(){
     speed: +$('editSpeedSel').value || 1,
     tempo: (($('editTempoSel')||{}).value)||'',   // ⚡ 빠른 템포 — 몽타주 컷 밀도 (v0.73)
     quality: (($('autoQualitySel')||{}).value)||'standard',
+    cold_open: !!(($('editColdOpen')||{}).checked),   // ⚡ 첫 3초 티저 (v0.75)
+    hook_voice: !!(($('editHookVoice')||{}).checked), // 🎙 후킹 보이스 (v0.75)
     auto_edit: pick('editFinish') === 'auto', auto_target_sec: +$('autoTargetSec').value||0,
     auto_multi: (($('autoMultiSel')||{}).value) === 'multi',
     script: $('editScript').value,
@@ -5478,6 +5567,7 @@ async function generate(){
          : prov === 'eleven_voice' ? $('elevenVoiceSel').value : '',
     tts_style: prov === 'gemini' ? $('styleSel').value : '',
     bgm: $('bgmSel').value, hook: $('genHook').value,
+    hook_voice: !!(($('genHookVoice')||{}).checked),  // 🎙 후킹 보이스 (v0.75)
     bg_style: (($('genBgStyle')||{}).value)||'',
     bg_character: (($('genCharSel')||{}).value) === 'custom'
       ? ((($('genCharCustom')||{}).value)||'').trim()
@@ -6137,6 +6227,7 @@ function resetEditForm(ev){
   const rf = document.querySelector('input[name=editFinish][value=review]'); if(rf) rf.checked = true;
   set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1'); set('editTempoSel','');
   set('autoMultiSel','one'); set('autoQualitySel','standard');
+  chk('editColdOpen',false); chk('editHookVoice',false);  // 🪝 훅 팩 (v0.75)
   onFinishChange(); applyTargetPreset(); onAutoMultiChange();
   const st = $('sttSel'); if(st && st.options.length) st.selectedIndex = 0;
   set('whisperModelSel','small'); window._wantStt = '';
@@ -6148,6 +6239,7 @@ function resetEditForm(ev){
     bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', sub_style:'기본', tone:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
     stt_provider:'', whisper_model:'small', speed:1, quality:'standard', transition:'none',
     auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
+    cold_open:false, hook_voice:false,
     wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
 }
 
@@ -6243,6 +6335,8 @@ function collectTplParams(){
     stt_provider: $('sttSel').value||'', whisper_model: (($('whisperModelSel')||{}).value)||'small',
     speed: +$('editSpeedSel').value||1, tempo: (($('editTempoSel')||{}).value)||'',
     quality: (($('autoQualitySel')||{}).value)||'standard',
+    cold_open: !!(($('editColdOpen')||{}).checked),   // ⚡ 콜드오픈 (v0.75)
+    hook_voice: !!(($('editHookVoice')||{}).checked), // 🎙 후킹 보이스 (v0.75)
     auto_edit: pick('editFinish')==='auto', auto_multi: (($('autoMultiSel')||{}).value)==='multi',
     auto_target_sec: +$('autoTargetSec').value||0, photo_sec: +(($('photoSec')||{}).value)||15,
     wm_pos: (($('wmPos')||{}).value)||'tr', wm_scale: +(($('wmScale')||{}).value)||0.14,
@@ -6616,6 +6710,8 @@ async function poll(){
     }
     // 🎙 지난 제작에 쓴 일레븐랩스 성우 — 목록이 채워지면 자동 선택 (v0.67)
     window._wantGenElevenVoice = ((state.settings || {}).ui || {}).gen_eleven_voice || '';
+    // 🎙 후킹 보이스 선택 복원 (v0.75)
+    if($('genHookVoice')) $('genHookVoice').checked = !!((state.settings || {}).ui || {}).gen_hook_voice;
     // v0.51: 그림 방식·최대 장수 복원
     const scm = ((state.settings || {}).bg || {}).scene_mode || 'auto';
     if($('genSceneMode')) $('genSceneMode').value = scm;

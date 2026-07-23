@@ -446,6 +446,51 @@ def attach_branding(video: str, intro: str, outro: str, out_path: str,
     return str(out_path)
 
 
+def hook_intro_clip(video: str, hook_audio: str, out_path: str, ding: str = "",
+                    gain_db: float = -13.0, tail_s: float = 0.35, fps: int = 30) -> str:
+    """🎙 후킹 보이스 인트로 클립 (v0.75) — 본편 첫 프레임 + 훅 음성(+띠링).
+
+    본편 첫 프레임(상단 제목이 이미 구워져 있음)을 살짝 줌인하며 훅 음성을
+    들려준다 → '성우가 제목을 읽어주며 시작'하는 오프닝. attach_branding으로
+    본편 앞에 붙여 쓴다. 훅 음성이 비정상적으로 길어도 6초에서 자른다.
+    """
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    w, h = ff.probe_video_size(video)
+    dur_s = ff.probe_duration_us(hook_audio) / 1e6 + max(0.0, tail_s)
+    dur_s = max(1.0, min(dur_s, 6.0))
+    frame = out.with_suffix(".frame.png")
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-nostdin", "-i", str(video),
+            "-frames:v", "1", str(frame)])
+    audio = str(hook_audio)
+    if ding and Path(ding).is_file():  # 띠링을 훅 음성 머리에 살짝 (기존 효과음 재사용)
+        from ..spec import Sfx  # noqa: PLC0415
+        from . import sfx as sfx_mod  # noqa: PLC0415
+
+        mixed = str(out.with_suffix(".voice.wav"))
+        audio = sfx_mod.mix_sfx(
+            audio, [Sfx(path=ding, start_us=80_000, gain_db=gain_db, name="ding")],
+            mixed)
+    # 정지 프레임 + 미세 줌인 (zoompan — 켄번즈와 같은 패턴, 1.5x 선업스케일로 떨림 방지)
+    n = max(2, int(round(dur_s * fps)))
+    pre_w, pre_h = (w * 3 // 2) & ~1, (h * 3 // 2) & ~1
+    vf = (
+        f"[0:v]scale={pre_w}:{pre_h}:flags=lanczos,"
+        f"zoompan=z='min(1+0.06*on/{n},1.06)'"
+        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+        f":d={n}:s={w}x{h}:fps={fps},format=yuv420p[v];"
+        f"[1:a]apad=pad_dur={tail_s + 0.2:.2f},atrim=0:{dur_s:.3f},"
+        f"aformat=channel_layouts=stereo,aresample=44100[a]"
+    )
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-nostdin",
+            "-i", str(frame), "-i", audio,
+            "-filter_complex", vf, "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+            "-t", f"{dur_s:.3f}", "-movflags", "+faststart", str(out)])
+    return str(out)
+
+
 def extend_video(video: str, target_us: int, out_path: str, mode: str = "freeze") -> str:
     """영상을 target_us 길이까지 연장 (v0.42 — 내레이션이 영상보다 길 때).
 
