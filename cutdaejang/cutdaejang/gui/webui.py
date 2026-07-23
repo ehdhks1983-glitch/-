@@ -1283,6 +1283,12 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         from ..core.orchestrator import build_style  # noqa: PLC0415
         from ..utils import ffmpeg as ff  # noqa: PLC0415
 
+        if layout == "keep":  # 📐 원본 비율로 나눔을 완료 화면에 명시 (v0.76.1 — 혼동 방지)
+            w0 = ("📐 원본 비율로 나눴어요 — 세로 쇼츠(9:16)를 원하면 편집 폼 ①에서 "
+                  "[쇼츠 (세로 9:16)]을 고르고 다시 만들어 주세요")
+            prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+            if w0 not in prev:
+                _set_job(job_id, tts_warn=f"{prev} · {w0}" if prev else w0)
         settings = config.load_settings()
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         cut_video, subs, _, trim_note = _apply_trim(
@@ -3255,7 +3261,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.76.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.76.1)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3376,6 +3382,13 @@ _HTML = """<!doctype html>
           <option value="ultra">초고화질 (4K)</option>
         </select>
       </div>
+      <div class="hint" style="margin-top:4px">💾 여기서 정한 세팅은 자동으로 기억돼요 — 다음부터는 영상만 바꿔 넣고 [만들기 시작]만 누르면 같은 방식으로 만들어집니다.</div>
+    </div>
+
+    <div class="steplabel" style="margin-top:20px"><span class="stepnum">3</span>꾸미기 <span class="hint">— 전부 선택사항. 필요한 줄만 눌러서 펼치세요</span></div>
+
+    <details class="opt" id="optDirect">
+      <summary>🪄 자동 연출·말 다듬기 <span class="hint">— 첫 3초 티저 · 추임새 컷 · 반복 정리</span></summary>
       <div class="chk" style="gap:8px;margin-top:6px">
         <label class="chk" style="cursor:pointer" title="가장 궁금한 순간 2~3초를 맨 앞에 잠깐 보여주고 본편 시작 — 첫 3초 이탈을 막는 편집 공식">
           <input type="checkbox" id="editColdOpen"> ⚡ 첫 3초 티저 (콜드오픈)</label>
@@ -3388,10 +3401,7 @@ _HTML = """<!doctype html>
           <input type="checkbox" id="editTakeClean"> ↻ 반복 말하기(NG) 정리</label>
         <span class="hint">— 촬영 후 가편집을 자동으로 (Whisper 자막 추천)</span>
       </div>
-      <div class="hint" style="margin-top:4px">💾 여기서 정한 세팅은 자동으로 기억돼요 — 다음부터는 영상만 바꿔 넣고 [만들기 시작]만 누르면 같은 방식으로 만들어집니다.</div>
-    </div>
-
-    <div class="steplabel" style="margin-top:20px"><span class="stepnum">3</span>꾸미기 <span class="hint">— 전부 선택사항. 필요한 줄만 눌러서 펼치세요</span></div>
+    </details>
 
     <details class="opt" id="optHook">
       <summary>🪝 상단 제목 넣기 <span class="hint">— 화면 위에 크게 박히는 한 줄 (AI 추천·색·글씨 스타일)</span></summary>
@@ -3660,6 +3670,7 @@ _HTML = """<!doctype html>
             <label><input type="radio" name="editLayout" value="shorts" checked><span>쇼츠 (세로 9:16)</span></label>
             <label><input type="radio" name="editLayout" value="keep"><span>원본 비율 유지</span></label>
           </div>
+          <span class="hint hidden" id="layoutAutoHint"></span>
         </div>
         <div>
           <label>음성 인식 엔진</label>
@@ -4816,6 +4827,19 @@ function applyTargetPreset(){
   const n = $('autoTargetSec');
   n.classList.toggle('hidden', p !== 'custom');
   if(p !== 'custom') n.value = p;
+  ensureShortsLayout();
+}
+function ensureShortsLayout(){
+  // 📐 쇼츠 모드(길이 목표 있음)인데 '원본 비율 유지'가 기억돼 있으면 세로로 자동 전환 (v0.76.1)
+  // — "쇼츠로 나눴는데 가로로 나와요" 방지. 사용자가 다시 원본 비율을 고르면 그대로 둔다.
+  if((($('autoTargetPreset')||{}).value) === '0') return;
+  const keep = document.querySelector('input[name=editLayout][value=keep]');
+  const sh = document.querySelector('input[name=editLayout][value=shorts]');
+  const h = $('layoutAutoHint');
+  if(keep && keep.checked && sh){
+    sh.checked = true;
+    if(h){ h.textContent = '📐 쇼츠 모드라 세로(9:16)로 자동 선택했어요 — 원본 비율을 원하면 위에서 다시 고르세요'; h.classList.remove('hidden'); }
+  }
 }
 function onAutoMultiChange(){
   const multi = $('autoMultiSel').value === 'multi';
@@ -4824,6 +4848,7 @@ function onAutoMultiChange(){
     ? '예) 10분 영상 ÷ 60초 = 약 10개 (edited_1.mp4, edited_2.mp4 …)' : '';
   const p = $('autoTargetPreset');
   if(multi && p.value === '0'){ p.value = '60'; applyTargetPreset(); }  // 나누기엔 길이 필수
+  ensureShortsLayout();
 }
 // 지난번 편집 세팅 복원 (v0.38) — 경로·주제·대본만 빼고 전부 이어받아 "영상만 바꿔 반복"
 function applyEditLast(el){
