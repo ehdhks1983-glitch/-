@@ -832,8 +832,9 @@ def test_stt_engine_timed_filter_and_cache(talk_video, tmp_path):
     video_editor.extract_segment_audio(talk_video, 0, 1_500_000, str(wav))
     eng = STTEngine(FakeTimedSTT(), tmp_path / "cache")
     out = eng.transcribe_timed(str(wav))
-    assert [t for _, _, t in out] == ["첫 문장입니다", "둘째 문장입니다"]  # 환각 제외
-    assert all(isinstance(a, int) and b > a for a, b, _ in out)
+    assert [p[2] for p in out] == ["첫 문장입니다", "둘째 문장입니다"]  # 환각 제외
+    assert all(isinstance(p[0], int) and p[1] > p[0] for p in out)
+    assert all(len(p) == 5 for p in out)  # v0.76: (μs, μs, 텍스트, 단어들, 신뢰도)
     assert eng.stats["hallucinations"] == 1
     out2 = eng.transcribe_timed(str(wav))  # 캐시 적중 (재호출 없음)
     assert out2 == out and eng.stats["cache_hits"] == 1
