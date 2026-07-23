@@ -1131,7 +1131,8 @@ def test_beginner_first_run_defaults(server):
     assert html.count('value="stub"') == 1            # 라디오는 세부 설정 한 곳에만
     assert "소리 점검용 목소리" in html                 # 용어: 테스트 톤 → 소리 점검용
     assert "테스트 톤" not in html.split("<script>")[0]  # 화면 텍스트에서 제거
-    i = html.index("자동 연출")                        # 🎬 연출 4종이 한 그룹에
+    i = html.index("🎬 자동 연출")                     # 🎬 연출 4종이 한 그룹에
+    # (v0.76.1: 편집 폼에 "🪄 자동 연출·말 다듬기" 그룹이 새로 생겨 이모지까지 앵커)
     seg = html[i:i + 2600]
     for frag in ('id="genSfxChk"', 'id="genPunchChk"', 'id="genInfoChk"', 'id="genToneSel"'):
         assert frag in seg, frag
