@@ -421,24 +421,24 @@ def snap_boundaries_to_scenes(ranges: List[Tuple[int, int]], scenes: List[int],
     return [tuple(r) for r in out]
 
 
-def attach_branding(video: str, intro: str, outro: str, out_path: str,
-                    fps: int = 30, still_s: float = 2.5) -> str:
-    """본편 앞뒤에 인트로/아웃트로를 붙인다 (v0.43 채널 브랜딩).
+def concat_videos(clips: List[str], out_path: str, size=None,
+                  fps: int = 30, still_s: float = 2.5) -> str:
+    """여러 클립(영상/사진 혼합)을 순서대로 이어붙인다 (v0.80 구간 조립 공용).
 
-    - intro/outro: 영상 파일 또는 사진(png/jpg — still_s초 정지 클립으로).
-      빈 문자열/없는 파일은 조용히 건너뛰고, 둘 다 없으면 원본 경로를 그대로 반환.
-    - 해상도가 달라도 본편 크기에 맞춰 축소 + 패딩(검정)으로 안전하게 이어붙인다.
-    - 소리: 소리 있는 클립은 그대로, 없는 클립은 무음 트랙을 깔아 concat 오류 방지.
+    - 해상도가 제각각이어도 size(기본: 첫 영상 클립 크기)에 맞춰 축소+패딩.
+    - 소리 있는 클립은 44100 스테레오로 통일, 사진·무음 클립은 무음 트랙을 깔아
+      concat 오류를 막는다. 사진은 still_s초 정지 클립으로.
+    - N이 커서 필터 그래프가 길어지면 파일 경유(filter_complex_args).
     """
-    def _ok(p: str) -> bool:
-        return bool((p or "").strip()) and Path(p.strip().strip('"')).is_file()
-
-    intro = intro.strip().strip('"') if _ok(intro) else ""
-    outro = outro.strip().strip('"') if _ok(outro) else ""
-    if not intro and not outro:
-        return video
-    w, h = ff.probe_video_size(video)
-    clips = [c for c in (intro, video, outro) if c]
+    clips = [str(c) for c in clips if (c or "").strip() and Path(str(c)).is_file()]
+    if not clips:
+        raise ValueError("이어붙일 클립이 없습니다")
+    if size:
+        w, h = int(size[0]) & ~1, int(size[1]) & ~1
+    else:
+        first_vid = next((c for c in clips
+                          if Path(c).suffix.lower() not in IMAGE_EXTS), clips[0])
+        w, h = ff.probe_video_size(first_vid)
     args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-nostdin"]
     parts, labels, aux = [], [], []
     for i, clip in enumerate(clips):
@@ -464,12 +464,34 @@ def attach_branding(video: str, intro: str, outro: str, out_path: str,
         args += ["-f", "lavfi", "-t", f"{_dur:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
     fc = (";".join(parts) + ";" + "".join(labels)
           + f"concat=n={len(clips)}:v=1:a=1[v][a]")
-    args += ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+    args += ff.filter_complex_args(fc, Path(out_path).with_suffix(".filter.txt"))
+    args += ["-map", "[v]", "-map", "[a]",
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
              "-movflags", "+faststart", str(out_path)]
     ff.run(args)
     return str(out_path)
+
+
+def attach_branding(video: str, intro: str, outro: str, out_path: str,
+                    fps: int = 30, still_s: float = 2.5) -> str:
+    """본편 앞뒤에 인트로/아웃트로를 붙인다 (v0.43 채널 브랜딩).
+
+    - intro/outro: 영상 파일 또는 사진(png/jpg — still_s초 정지 클립으로).
+      빈 문자열/없는 파일은 조용히 건너뛰고, 둘 다 없으면 원본 경로를 그대로 반환.
+    - 해상도가 달라도 본편 크기에 맞춰 축소 + 패딩(검정)으로 안전하게 이어붙인다.
+    - 소리: 소리 있는 클립은 그대로, 없는 클립은 무음 트랙을 깔아 concat 오류 방지.
+    """
+    def _ok(p: str) -> bool:
+        return bool((p or "").strip()) and Path(p.strip().strip('"')).is_file()
+
+    intro = intro.strip().strip('"') if _ok(intro) else ""
+    outro = outro.strip().strip('"') if _ok(outro) else ""
+    if not intro and not outro:
+        return video
+    w, h = ff.probe_video_size(video)
+    return concat_videos([c for c in (intro, video, outro) if c], out_path,
+                         size=(w, h), fps=fps, still_s=still_s)
 
 
 def hook_intro_clip(video: str, hook_audio: str, out_path: str, ding: str = "",

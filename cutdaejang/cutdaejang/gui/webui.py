@@ -1701,6 +1701,131 @@ def _fetch_bgm_bg() -> None:
         _BGM_TASK.update(running=False, msg=f"받기 실패: {str(e)[:120]}")
 
 
+def _run_sections(job_id: str, params: dict, workdir: str) -> None:
+    """🎞 구간 대본 영상 (v0.80) — 구간마다 (클립, 내레이션) → 압축·낭독·자막 → 합본.
+
+    구간 길이 = 내레이션 실제 길이. 클립이 길면 핵심 조각 몽타주(spread_ranges
+    + 장면 스냅)로 압축, 짧으면 마지막 장면 정지로 연장. 구간별 렌더 후 이어붙임.
+    """
+    try:
+        from ..core import edit_mode, tts_engine, video_editor  # noqa: PLC0415
+        from ..core.orchestrator import build_style, resolve_bgm  # noqa: PLC0415
+        from ..core.script_generator import Script, split_long_sentences  # noqa: PLC0415
+        from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+        settings = config.load_settings()
+        secs = [s for s in (params.get("sections") or [])
+                if str(s.get("narration") or "").strip()]
+        if not secs:
+            _set_job(job_id, status="failed", errors=["구간이 없습니다 — 구간을 추가해 주세요"])
+            return
+        layout = params.get("layout") if params.get("layout") in ("wide", "shorts") else "wide"
+        quality = params.get("quality") or "standard"
+        piece_us = {"빠르게": 2_400_000, "아주 빠르게": 1_700_000}.get(
+            str(params.get("tempo") or ""), 3_500_000)
+        job_dir = Path(workdir) / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        style = build_style(settings)
+        ep_voice = {"narr_voice": (params.get("narr_voice") or "").strip(),
+                    "narr_style": (params.get("narr_style") or "").strip()}
+        chain, voice = _narr_tts_pref(ep_voice, settings)
+        wrap = int(settings["subtitle"].get("wrap_chars", 16) or 16)
+        n = len(secs)
+        outs, errors, notes = [], [], []
+        for i, sec in enumerate(secs, 1):
+            base = (i - 1) / n
+            try:
+                video = video_editor.resolve_input_video(str(sec.get("video_path") or ""))
+                lines = [ln.strip() for ln in str(sec["narration"]).splitlines() if ln.strip()]
+                lines = split_long_sentences(  # 🛡 자막 2줄 안전장치 (v0.77 재사용)
+                    Script(title="", sentences=lines), limit=max(8, wrap * 2)).sentences
+                _set_job(job_id, status="running", stage="tts", frac=base,
+                         note=f"🎞 구간 {i}/{n} — 목소리 만드는 중…")
+                clips, _used, tnote = tts_engine.synth_with_fallback(
+                    lines, list(chain), Path(workdir) / "cache" / "tts",
+                    settings, voice=voice)
+                if tnote and tnote not in notes:
+                    notes.append(tnote)
+                subs0 = edit_mode.dicts_to_subtitles(
+                    [{"text": t, "start_us": 0, "end_us": 1_000} for t in lines])
+                subs, clips2, _ = edit_mode.retime_narration(
+                    clips, subs0, 0, job_dir, fit="freeze")  # 순차 배치 (실측 길이)
+                narr_end = (subs[-1].end_us + 700_000) if subs else 1_000_000
+                dur = ff.probe_duration_us(video)
+                cut = video
+                if dur > narr_end + 1_000_000:      # 📹 핵심 조각 몽타주로 압축
+                    _set_job(job_id, stage="cut", frac=base,
+                             note=f"🎞 구간 {i}/{n} — 핵심 장면 골라 {narr_end / 1e6:.0f}초로 압축 중…")
+                    ranges = edit_mode.spread_ranges(dur, narr_end, piece_us=piece_us)
+                    try:                              # 장면 전환점에 스냅 (실패 무시)
+                        if dur < 20 * 60 * 1_000_000:
+                            scenes = video_editor.detect_scene_changes(video)
+                            ranges = video_editor.shift_ranges_to_scenes(ranges, scenes, dur)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    cut = video_editor.cut_and_concat(
+                        video, ranges, str(job_dir / f"sec_{i}_cut.mp4"), transition="fade")
+                elif dur < narr_end:                 # 짧으면 마지막 장면 정지로 연장
+                    cut = video_editor.extend_video(
+                        video, narr_end, str(job_dir / f"sec_{i}_ext.mp4"))
+                cut_us = ff.probe_duration_us(cut)
+                narr_wav = edit_mode.build_narration_wav(
+                    clips2, subs, max(cut_us, narr_end), job_dir / f"sec_{i}_narr.wav")
+                _set_job(job_id, stage="render", frac=base + 0.4 / n,
+                         note=f"🎞 구간 {i}/{n} — 자막·목소리 입혀 렌더 중…")
+                r = edit_mode.render_from_analysis(
+                    cut, subs, str(job_dir / f"sec_{i}.mp4"), style=style, layout=layout,
+                    hook="", quality=quality, narration_wav=str(narr_wav),
+                    orig_audio="mute",
+                    progress_cb=lambda f, b=base: _set_job(
+                        job_id, frac=min(0.97, b + (0.4 + f * 0.6) / n)))
+                if not r.ok:
+                    raise RuntimeError("; ".join(r.errors) or "렌더 실패")
+                outs.append(str(job_dir / f"sec_{i}.mp4"))
+            except Exception as se:  # noqa: BLE001 — 한 구간 실패해도 나머지는 계속
+                logging.getLogger("cutdaejang").error("구간 %d 실패: %s", i, se)
+                errors.append(f"구간 {i}: {str(se)[:200]}")
+        if not outs:
+            _set_job(job_id, status="failed", errors=errors or ["완성된 구간이 없습니다"])
+            return
+        _set_job(job_id, stage="render", frac=0.97, note="🎞 구간들을 이어붙이는 중…")
+        cw, ch = (1080, 1920) if layout == "shorts" else (1920, 1080)
+        final = outs[0]
+        if len(outs) > 1:
+            final = video_editor.concat_videos(
+                outs, str(job_dir / "sections_final.mp4"), size=(cw, ch))
+        if (params.get("bgm") or "").strip():        # 🎵 BGM은 최종 합본에 1회 (덕킹)
+            b = resolve_bgm(params["bgm"], settings)
+            if b and b.path:
+                _set_job(job_id, frac=0.98, note="🎵 배경음악 입히는 중…")
+                try:
+                    bgm_db = float(params.get("bgm_db"))
+                except (TypeError, ValueError):
+                    bgm_db = float(settings["bgm"].get("volume_db", -16))
+                withbgm = str(job_dir / "sections_bgm.mp4")
+                r2 = edit_mode.render_from_analysis(
+                    final, [], withbgm, style=style, layout="keep", hook="",
+                    quality=quality, orig_audio="keep",
+                    bgm_path=b.path, bgm_db=bgm_db,
+                    bgm_duck=bool(settings["bgm"].get("duck", True)))
+                if r2.ok:
+                    final = withbgm
+                else:
+                    notes.append("배경음악 입히기에 실패해 없이 완성했어요")
+        total_s = ff.probe_duration_us(final) / 1e6
+        msg = f"🎞 구간 {len(outs)}개 · 총 {int(total_s // 60)}분 {int(total_s % 60)}초"
+        _set_job(job_id, status=("ok" if not errors else "partial"), stage="done",
+                 frac=1.0, mp4=final, mp4s=[final] + (outs if len(outs) > 1 else []),
+                 note="", tts_warn=" · ".join([msg] + notes + errors))
+    except Exception as e:
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error(
+            "구간 대본 영상 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed",
+                 errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+
+
 def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
     """📦 배치 (v0.42) — 주제(또는 대본 벌, v0.62) 여러 개를 순차 생성해 mp4 N개.
 
@@ -2595,6 +2720,43 @@ class _Handler(BaseHTTPRequestHandler):
                              args=(url, self.server.workdir, target_sec),
                              daemon=True).start()
             self._send_json({"ok": True})
+        elif path == "/api/section_split":  # 🎞 대본 통째 → 구간 나누기 (v0.80)
+            _apply_keys(params)
+            from ..core import script_generator as sg  # noqa: PLC0415
+            text = (params.get("script_text") or "").strip()
+            if not text:
+                self._send_json({"error": "대본을 먼저 붙여넣어 주세요"}, 400)
+                return
+            secs = []
+            if os.environ.get("GEMINI_API_KEY"):
+                try:
+                    secs = sg.split_script_sections_ai(text)
+                except Exception as e:  # noqa: BLE001 — AI 실패 → 휴리스틱
+                    logging.getLogger("cutdaejang").warning("AI 구간 나누기 실패: %s", e)
+            if not secs:
+                secs = sg.split_script_sections(text)
+            if not secs:
+                self._send_json({"error": "대본에서 구간을 찾지 못했어요 — 문단(빈 줄)로 나눠 붙여넣어 보세요"}, 400)
+                return
+            self._send_json({"ok": True, "sections": secs})
+        elif path == "/api/section_edit":  # 🎞 구간 대본 영상 (v0.80)
+            secs = [s for s in (params.get("sections") or [])
+                    if str((s or {}).get("narration") or "").strip()]
+            if not secs:
+                self._send_json({"error": "구간이 없습니다 — [➕ 구간 추가]로 구간을 만들어 주세요"}, 400)
+                return
+            for si, s in enumerate(secs, 1):
+                if not str(s.get("video_path") or "").strip():
+                    self._send_json({"error": f"구간 {si}의 클립(영상)을 골라주세요"}, 400)
+                    return
+            _apply_keys(params)
+            title = (str(secs[0].get("title") or "").strip() or "구간대본영상")[:24]
+            job_id = orchestrator.new_job_id(title)
+            _set_job(job_id, status="running", stage="tts", frac=0.0,
+                     title=f"🎞 {title}", params=params)
+            threading.Thread(target=_run_sections, args=(job_id, params, workdir),
+                             daemon=True).start()
+            self._send_json({"job_id": job_id})
         elif path == "/api/template":  # 📋 편집 세팅 템플릿 (v0.43)
             name = (params.get("name") or "").strip()[:40]
             if not name:
@@ -3390,7 +3552,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.79.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.80.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3416,6 +3578,10 @@ _HTML = """<!doctype html>
       <button class="modecard" onclick="openMode('weblink')">
         <span class="mc-emoji">🔗</span><span class="mc-title">블로그 글로 만들기</span>
         <span class="mc-desc">내 블로그 글 주소만 넣으면<br>사진+내레이션 홍보 영상</span>
+      </button>
+      <button class="modecard" onclick="openMode('sections')">
+        <span class="mc-emoji">🎞</span><span class="mc-title">구간 대본 영상</span>
+        <span class="mc-desc">대본 구간마다 클립을 넣으면<br>압축·내레이션·이어붙이기 자동</span>
       </button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
@@ -4280,6 +4446,46 @@ _HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="card hidden" id="sectionCard">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <button class="ghost" onclick="showHome(event)">← 처음으로</button>
+      <b>🎞 구간 대본 영상</b>
+    </div>
+    <div class="hint">촬영 대본의 구간(장면)마다 화면녹화 클립을 넣으면: 클립을 <b>내레이션 길이에 맞게
+      핵심 장면만 남기고 압축</b>하고, 내레이션을 AI 목소리로 읽고, 자막을 넣어 <b>순서대로 이어붙인</b>
+      완성 영상 1개를 만들어요. 구간 길이는 대본의 시간표가 아니라 <b>말을 실제로 읽은 길이</b>를 따라요 (말 안 잘림).</div>
+    <details class="opt" id="secScriptBox">
+      <summary>📝 대본 통째로 붙여넣기 <span class="hint">— 구간과 내레이션을 자동으로 나눠 아래에 채워드려요</span></summary>
+      <textarea id="secScriptText" style="min-height:140px" placeholder="촬영 대본을 통째로 붙여넣으세요.&#10;[말] 표시가 있는 대본이면 그대로 인식하고, 일반 글이면 문단 단위로 나눠요."></textarea>
+      <button class="ghost" style="margin-top:6px" id="secSplitBtn" onclick="splitSections(event)">✂️ 구간 자동 나누기</button>
+    </details>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>구간 만들기 <span class="hint">— 행 순서대로 이어붙어요. 구간마다 클립 1개 + 읽을 내레이션</span></div>
+    <div id="secRows"></div>
+    <button class="ghost" style="margin-top:8px" onclick="addSectionRow()">➕ 구간 추가</button>
+    <div class="steplabel" style="margin-top:12px"><span class="stepnum">2</span>공통 설정</div>
+    <div class="chk" style="gap:10px;flex-wrap:wrap">
+      <span>화면</span>
+      <div class="toggle" style="margin:0">
+        <label><input type="radio" name="secLayout" value="wide" checked><span>🖥 가로 (16:9)</span></label>
+        <label><input type="radio" name="secLayout" value="shorts"><span>📱 세로 쇼츠 (9:16)</span></label>
+      </div>
+      <span style="margin-left:6px">목소리</span>
+      <select id="secVoiceSel" style="width:auto;min-width:180px"></select>
+      <span style="margin-left:6px">압축 템포</span>
+      <select id="secTempoSel" style="width:auto;padding:6px 8px">
+        <option value="">보통 (3.5초 조각)</option>
+        <option value="빠르게">빠르게 (2.4초 조각)</option>
+        <option value="아주 빠르게">아주 빠르게 (1.7초 조각)</option>
+      </select>
+      <span style="margin-left:6px">배경음악</span>
+      <select id="secBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button id="secGoBtn" style="flex:1" onclick="startSectionsSafe()">🎬 영상 만들기</button>
+    </div>
+    <div class="hint">구간이 많으면 시간이 걸려요 (구간당 보통 1~2분). 진행 상황에 구간 번호가 표시됩니다.</div>
+  </div>
+
   <div class="card hidden" id="statusCard">
     <div id="statusTitle" style="font-weight:700"></div>
     <div class="bar"><div id="barFill"></div></div>
@@ -4928,13 +5134,15 @@ function pick(name){ return document.querySelector(`input[name=${name}]:checked`
 
 // ── 첫 화면(홈) ↔ 만들기 폼 전환 (v0.36 초보자 UI) ──
 function openMode(kind){
-  window._view = kind;                       // 'gen' | 'edit' | 'photo' | 'weblink'
+  window._view = kind;                       // 'gen' | 'edit' | 'photo' | 'weblink' | 'sections'
   $('homeCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
   $('weblinkCard').classList.toggle('hidden', kind !== 'weblink');  // 🔗 전용 탭 (v0.79)
+  $('sectionCard').classList.toggle('hidden', kind !== 'sections'); // 🎞 구간 대본 (v0.80)
   $('formCard').classList.toggle('hidden', kind !== 'gen');
-  $('editCard').classList.toggle('hidden', kind === 'gen' || kind === 'weblink');
+  $('editCard').classList.toggle('hidden', kind === 'gen' || kind === 'weblink' || kind === 'sections');
   if(kind === 'weblink'){ initWeblinkCard(); return; }
+  if(kind === 'sections'){ initSectionCard(); return; }
   if(kind !== 'gen'){
     window._editKind = kind;
     $('videoBlock').classList.toggle('hidden', kind === 'photo');
@@ -4953,6 +5161,7 @@ function showHome(ev){
   $('editCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
   $('weblinkCard').classList.add('hidden');
+  $('sectionCard').classList.add('hidden');
 }
 // ── 🎤 내 목소리 등록 전용 화면 (v0.37) — 어디서 열었든 [← 돌아가기]로 복귀 ──
 function openVoice(ev){
@@ -4962,6 +5171,7 @@ function openVoice(ev){
   $('formCard').classList.add('hidden');
   $('editCard').classList.add('hidden');
   $('weblinkCard').classList.add('hidden');
+  $('sectionCard').classList.add('hidden');
   $('voiceCard').classList.remove('hidden');
   window._view = 'voice';
 }
@@ -4969,7 +5179,7 @@ function closeVoice(ev){
   if(ev) ev.preventDefault();
   $('voiceCard').classList.add('hidden');
   const r = window._voiceReturn;
-  if(r === 'gen' || r === 'edit' || r === 'photo' || r === 'weblink') openMode(r); else showHome();
+  if(r === 'gen' || r === 'edit' || r === 'photo' || r === 'weblink' || r === 'sections') openMode(r); else showHome();
 }
 function markMyVoice(){
   for(const id of ['myVoiceState', 'myVoiceStateNarr', 'homeVoiceState']){
@@ -7071,6 +7281,138 @@ async function startWeblink(){
   timer = setInterval(poll, 900);
 }
 async function startWeblinkSafe(){ try{ await startWeblink(); }catch(e){ reportUiError('영상 만들기', e); } }
+
+// ── 🎞 구간 대본 영상 (v0.80) ──
+function initSectionCard(){
+  const nv = $('narrVoiceSel'), sv = $('secVoiceSel');
+  if(nv && sv && nv.options.length && sv.options.length !== nv.options.length){
+    const cur = sv.value;
+    sv.innerHTML = nv.innerHTML;
+    sv.value = [...sv.options].some(o => o.value === cur) && cur ? cur : nv.value;
+  }
+  const bg = $('bgmEditSel'), sb = $('secBgmSel');
+  if(bg && sb && bg.options.length && sb.options.length !== bg.options.length){
+    const cur = sb.value;
+    sb.innerHTML = bg.innerHTML;
+    sb.value = [...sb.options].some(o => o.value === cur) ? cur : '';
+  }
+  if($('secRows') && !$('secRows').children.length) addSectionRow();
+}
+
+function addSectionRow(title, narration){
+  const rows = $('secRows'); if(!rows) return;
+  const div = document.createElement('div');
+  div.className = 'secrow';
+  div.style.cssText = 'border:1px solid #2c3347;border-radius:10px;padding:10px;margin-top:8px;background:#171a23';
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+  const num = document.createElement('b');
+  num.className = 'sec-num'; num.style.cssText = 'color:#8b93a7;white-space:nowrap';
+  const ti = document.createElement('input');
+  ti.type = 'text'; ti.className = 'sec-title'; ti.placeholder = '구간 제목 (선택 — 메모용)';
+  ti.style.cssText = 'flex:1;min-width:140px'; ti.value = title || '';
+  const del = document.createElement('button');
+  del.className = 'ghost'; del.textContent = '✕'; del.title = '이 구간 삭제';
+  del.style.cssText = 'padding:4px 10px';
+  del.onclick = function(ev){ ev.preventDefault(); div.remove(); renumberSections(); };
+  head.appendChild(num); head.appendChild(ti); head.appendChild(del);
+  const vrow = document.createElement('div');
+  vrow.style.cssText = 'display:flex;gap:8px;margin-top:6px';
+  const vi = document.createElement('input');
+  vi.type = 'text'; vi.className = 'sec-video';
+  vi.placeholder = '이 구간에 쓸 영상(화면녹화) 파일 경로';
+  vi.style.cssText = 'flex:1';
+  const pick = document.createElement('button');
+  pick.className = 'ghost'; pick.textContent = '🎬 클립 선택';
+  pick.style.cssText = 'white-space:nowrap';
+  pick.onclick = function(ev){ pickSectionVideo(ev, vi); };
+  vrow.appendChild(vi); vrow.appendChild(pick);
+  const na = document.createElement('textarea');
+  na.className = 'sec-narr';
+  na.placeholder = '이 구간에서 읽을 내레이션 — 한 줄 = 자막 한 줄. 이 길이만큼 구간이 만들어져요';
+  na.style.cssText = 'min-height:64px;margin-top:6px'; na.value = narration || '';
+  div.appendChild(head); div.appendChild(vrow); div.appendChild(na);
+  rows.appendChild(div);
+  renumberSections();
+  return div;
+}
+
+function renumberSections(){
+  const rows = $('secRows'); if(!rows) return;
+  [...rows.children].forEach((d, i) => {
+    const n = d.querySelector('.sec-num'); if(n) n.textContent = '구간 ' + (i + 1);
+  });
+}
+
+async function pickSectionVideo(ev, input){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true; const label = btn.textContent;
+  try{
+    const data = await (await fetch('/api/pick_file', {method:'POST',
+      body: JSON.stringify({kind: 'video'})})).json();
+    if(data.error){ alert(data.error + PASTE_TIP); }
+    else if(data.path){ input.value = data.path; }
+  } catch(e){ alert('선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
+  finally { btn.disabled = false; btn.textContent = label; }
+}
+
+async function splitSections(ev){
+  ev.preventDefault();
+  const text = (($('secScriptText')||{}).value||'').trim();
+  if(!text){ alert('대본을 먼저 붙여넣어 주세요'); return; }
+  const btn = $('secSplitBtn'); btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '나누는 중…';
+  try{
+    const key = ensureGeminiKey();  // 형식 자유 대본은 AI가 더 잘 나눔 (없으면 규칙 기반)
+    const d = await (await fetch('/api/section_split', {method:'POST',
+      body: JSON.stringify({script_text: text, gemini_key: key, save_key: true})})).json();
+    if(d.error){ alert(d.error); return; }
+    const rows = $('secRows'); rows.innerHTML = '';
+    (d.sections || []).forEach(s => addSectionRow(s.title || '', s.narration || ''));
+    alert('✂️ 구간 ' + (d.sections || []).length + '개로 나눴어요 — 이제 구간마다 [🎬 클립 선택]으로 영상을 넣어주세요');
+  } catch(e){ alert('구간 나누기 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+async function startSections(){
+  const rows = [...(($('secRows')||{}).children || [])];
+  const sections = rows.map(d => ({
+    title: (d.querySelector('.sec-title')||{}).value || '',
+    video_path: ((d.querySelector('.sec-video')||{}).value || '').trim(),
+    narration: (d.querySelector('.sec-narr')||{}).value || '',
+  })).filter(s => s.narration.trim());
+  if(!sections.length){ alert('구간이 없어요 — [➕ 구간 추가]로 구간을 만들고 내레이션을 넣어주세요'); return; }
+  for(let i = 0; i < sections.length; i++){
+    if(!sections[i].video_path){ alert('구간 ' + (i + 1) + '의 클립(영상)을 골라주세요'); return; }
+  }
+  let key = '';
+  if(!window._hasGeminiKey) key = ensureGeminiKey();  // 보이스 적용용 (없어도 내장 음성)
+  const body = {
+    sections,
+    layout: pick('secLayout') || 'wide',
+    quality: 'standard',
+    narr_voice: ($('secVoiceSel')||{}).value || '',
+    tempo: ($('secTempoSel')||{}).value || '',
+    bgm: ($('secBgmSel')||{}).value || '',
+    gemini_key: key, save_key: true,
+  };
+  const res = await fetch('/api/section_edit', {method:'POST', body: JSON.stringify(body)});
+  const data = await res.json();
+  if(data.error){ alert(data.error); return; }
+  currentJob = data.job_id;
+  window._jobMode = 'edit';
+  window._subLoaded = false;
+  window._kitLoaded = false;
+  $('kitBox').classList.add('hidden'); $('kitBody').classList.add('hidden');
+  $('sectionCard').classList.add('hidden');
+  $('statusCard').classList.remove('hidden');
+  $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  $('subEditBox').classList.add('hidden');
+  $('rawErr').classList.add('hidden'); $('noteText').textContent='';
+  poll();
+  timer = setInterval(poll, 900);
+}
+async function startSectionsSafe(){ try{ await startSections(); }catch(e){ reportUiError('영상 만들기', e); } }
 
 async function saveWeblinkProduct(ev){
   ev.preventDefault();

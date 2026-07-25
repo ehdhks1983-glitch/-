@@ -207,6 +207,129 @@ def split_long_sentences(script: Script, limit: int = 32) -> Script:
     )
 
 
+_HEADER_RE = re.compile(r"^#{1,6}\s*(.+?)\s*$")            # 마크다운 헤더
+_SPEAK_RE = re.compile(r"\[\s*말\s*\]")                     # **[말]** 표기
+_QUOTE_RE = re.compile(r"^>\s?(.*)$")                       # 블록 인용(> …)
+
+
+def _clean_section_title(raw: str) -> str:
+    t = re.sub(r"[#*`]+", "", raw).strip()
+    t = re.sub(r"^[🎬📋📌⭐️\s]+", "", t)
+    t = re.sub(r"\(\s*\d+:?\d*\s*[~〜-]\s*\d+:?\d*\s*\)", "", t)  # (0:00 ~ 0:20) 제거
+    return t.strip(" -—·").strip()[:60]
+
+
+def _clean_speak_line(raw: str) -> str:
+    t = raw.replace("**", "").strip()
+    t = t.strip('"“”')
+    t = re.sub(r"^\*\(.*?\)\*$", "", t)                      # *(마무리)* 류 주석 줄
+    return t.strip()
+
+
+def split_script_sections(text: str) -> list:
+    """구간 대본(마크다운 + [말] 블록) → [{"title","narration"}] (v0.80, 무키 휴리스틱).
+
+    사용자 촬영 대본 형식 지원: "## 🎬 N. 제목 (0:00~0:20)" 헤더 아래 "**[말]**" 뒤의
+    블록 인용(>)들이 그 구간의 내레이션. 같은 헤더 안 [말]이 여러 개면 합친다.
+    [말] 블록이 하나도 없으면 빈 줄 기준 문단을 구간으로 (마크다운 잡음 줄 제외).
+    """
+    lines = (text or "").splitlines()
+    sections: list = []
+    cur_title = ""
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        m = _HEADER_RE.match(ln.strip())
+        if m:
+            cur_title = _clean_section_title(m.group(1))
+            i += 1
+            continue
+        if _SPEAK_RE.search(ln):
+            i += 1
+            spoken: list = []
+            while i < len(lines):
+                q = _QUOTE_RE.match(lines[i].strip())
+                if q is None:
+                    if not lines[i].strip():          # 빈 줄은 인용 사이 허용
+                        if i + 1 < len(lines) and _QUOTE_RE.match(lines[i + 1].strip()):
+                            i += 1
+                            continue
+                    break
+                s = _clean_speak_line(q.group(1))
+                if s:
+                    spoken.append(s)
+                i += 1
+            if spoken:
+                narr = "\n".join(spoken)
+                if sections and sections[-1]["title"] == cur_title:
+                    sections[-1]["narration"] += "\n" + narr   # 같은 구간의 [말] 여러 개
+                else:
+                    sections.append({"title": cur_title or f"구간 {len(sections) + 1}",
+                                     "narration": narr})
+            continue
+        i += 1
+    if sections:
+        return sections
+    # 폴백: [말] 표기가 없는 일반 대본 → 빈 줄 문단 = 구간
+    para: list = []
+    out: list = []
+
+    def _flush():
+        body = "\n".join(para).strip()
+        if len(body) >= 10:
+            out.append({"title": f"구간 {len(out) + 1}", "narration": body})
+        para.clear()
+
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            _flush()
+            continue
+        if s.startswith(("#", "|", "-", "```", "[", "*", ">")):
+            s2 = _clean_speak_line(_QUOTE_RE.match(s).group(1)) if s.startswith(">") else ""
+            if s2:
+                para.append(s2)
+            continue
+        para.append(s)
+    _flush()
+    return out
+
+
+SECTION_SPLIT_PROMPT = """\
+아래는 영상 촬영용 구간 대본이다. 구간(장면)별로 나눠서, 각 구간에서 내레이션으로
+소리 내어 읽을 문장만 뽑아라. 화면 지시·자막 문구·편집 메모·체크리스트는 제외.
+출력(JSON만): {{"sections":[{{"title":"구간 제목(짧게)","narration":"읽을 문장들(줄바꿈 구분)"}},...]}}
+대본:
+{text}
+"""
+
+
+def split_script_sections_ai(text: str, model: str = "gemini-2.5-flash",
+                             api_key=None) -> list:
+    """AI로 구간·내레이션 추출 (형식 자유 대본용). 키 없음/실패 → ScriptError."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 AI 구간 나누기를 쓸 수 없습니다")
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent")
+    payload = {"contents": [{"parts": [{"text": SECTION_SPLIT_PROMPT.format(
+        text=(text or "").strip()[:12000])}]}],
+        "generationConfig": {"responseMimeType": "application/json"}}
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
+        secs = [{"title": str(s.get("title") or "")[:60],
+                 "narration": str(s.get("narration") or "").strip()[:2000]}
+                for s in (out.get("sections") or []) if str(s.get("narration") or "").strip()]
+    except (KeyError, IndexError, json.JSONDecodeError, AttributeError) as e:
+        raise ScriptError(f"AI 구간 나누기 응답 예상 밖: {str(e)[:120]}") from e
+    if not secs:
+        raise ScriptError("AI가 구간을 찾지 못했습니다")
+    return secs[:30]
+
+
 class GeminiScript:
     name = "gemini"
 
