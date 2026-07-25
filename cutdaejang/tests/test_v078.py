@@ -132,6 +132,16 @@ def test_html_has_weblink_and_script_tts_ui():
     assert "script_tts" in html  # startEdit payload에 포함
 
 
+def test_start_buttons_report_errors_visibly():
+    """⚠ 버튼 무반응 방지 — 시작 버튼은 try/catch 래퍼를 거치고 오류를 배너로 보여준다."""
+    html = webui._HTML
+    assert 'onclick="generateSafe()"' in html
+    assert 'onclick="startEditSafe()"' in html
+    assert "function reportUiError" in html and "function uiBanner" in html
+    # 키 입력 취소 같은 '조용한 중단'도 배너로 이유를 알려준다
+    assert "생성을 시작하지 않았어요" in html
+
+
 # ── 🔊 script_tts — 사진+대본을 목소리로 (stub TTS 폴백 체인) ─────
 
 

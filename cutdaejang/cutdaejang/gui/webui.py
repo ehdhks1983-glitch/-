@@ -3800,7 +3800,7 @@ _HTML = """<!doctype html>
 
     <div class="hint" style="margin-top:14px">그냥 [만들기 시작]만 눌러도 충분해요 — 빈(무음) 구간을 잘라내고, 말한 내용을 자막으로 붙이고, 가로 영상은 세로 쇼츠로 자동 배치합니다.</div>
     <div style="display:flex;gap:8px">
-      <button id="editBtn" style="flex:1" onclick="startEdit()">✂️ 만들기 시작</button>
+      <button id="editBtn" style="flex:1" onclick="startEditSafe()">✂️ 만들기 시작</button>
       <button class="ghost" style="white-space:nowrap" onclick="resetEditForm(event)" title="편집 폼의 모든 입력을 기본값으로 되돌립니다">↺ 초기화</button>
     </div>
   </div>
@@ -4198,7 +4198,7 @@ _HTML = """<!doctype html>
       <button class="ghost" style="padding:4px 10px;font-size:12.5px;border-color:#4266d5" onclick="clearGenProduct(event)">✕ 제품 끄기</button>
     </div>
     <div style="display:flex;gap:8px">
-      <button id="goBtn" style="flex:1" onclick="generate()">🎬 생성 시작</button>
+      <button id="goBtn" style="flex:1" onclick="generateSafe()">🎬 생성 시작</button>
       <button class="ghost" style="white-space:nowrap" onclick="resetGenForm(event)" title="생성 폼의 입력을 기본값으로 되돌립니다">↺ 초기화</button>
     </div>
   </div>
@@ -5742,6 +5742,26 @@ function onBatchChange(){
   $('topic').classList.toggle('hidden', on);
 }
 
+// ⚠ 버튼 무반응 방지 (v0.78) — 화면 동작 중 오류·조용한 중단을 상단 배너로 보여준다
+// (알림창이 브라우저에서 차단돼 있어도 배너는 항상 보임)
+function uiBanner(msg){
+  try{
+    const b = $('envBanner');
+    if(b){ b.textContent = msg; b.classList.remove('hidden');
+           b.scrollIntoView({behavior:'smooth', block:'center'}); }
+  }catch(_e){}
+}
+function reportUiError(where, e){
+  const raw = String((e && (e.message || e)) || '알 수 없는 오류');
+  let msg = '⚠ ' + where + ' 중 화면 오류: ' + raw;
+  if(/fetch|network/i.test(raw)) msg += ' — 컷대장 서버(검은 창)가 꺼져 있지 않은지 확인하고, 창을 닫았다면 windows\\2_UI실행.bat 로 다시 켜주세요';
+  else msg += ' — 새로고침(F5) 후에도 반복되면 🩺 진단 리포트를 저장해 올려주세요';
+  uiBanner(msg);
+  try{ console.error('[컷대장]', where, e); }catch(_e){}
+}
+async function generateSafe(){ try{ await generate(); }catch(e){ reportUiError('생성 시작', e); } }
+async function startEditSafe(){ try{ await startEdit(); }catch(e){ reportUiError('만들기 시작', e); } }
+
 async function generate(){
   const prov = pick('prov');
   if(prov === 'eleven_voice' && !(($('elevenVoiceSel')||{}).value)){
@@ -5750,7 +5770,11 @@ async function generate(){
   if(prov === 'gemini' && !window._hasGeminiKey && !($('geminiKey').value||'').trim()){
     const k = ensureGeminiKey();   // 무료 발급 안내 포함 프롬프트 (1회 저장)
     if(k){ $('geminiKey').value = k; }
-    else if(!confirm('Gemini 키 없이 만들면 내장 음성·기본 배경으로 완성돼요.' + String.fromCharCode(10) + '키 없이 계속할까요?')) return;
+    else if(!confirm('Gemini 키 없이 만들면 내장 음성·기본 배경으로 완성돼요.' + String.fromCharCode(10) + '키 없이 계속할까요?')){
+      // 입력·확인창이 취소(또는 브라우저에서 차단)되면 왜 안 시작됐는지 보여준다 (v0.78)
+      uiBanner('ℹ 생성을 시작하지 않았어요 — 제미나이 키 입력(또는 "키 없이 계속" 확인)이 취소됐어요. ⚙ 설정에서 키를 저장해 두면 다시 묻지 않아요.');
+      return;
+    }
   }
   let autoMode = pick('mode') === 'auto';
   const sceneMode = (($('genSceneMode')||{}).value)||'auto';
