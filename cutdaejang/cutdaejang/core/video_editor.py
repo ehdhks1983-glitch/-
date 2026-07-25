@@ -282,6 +282,21 @@ def _cut_reordered(video_path: str, segments: List[Tuple[int, int]], out_path: s
     return str(out)
 
 
+def speed_video(video: str, factor: float, out_path: str, fps: int = 30) -> str:
+    """영상만 배속한 무음 클립 (v0.82 구간 조립용 — 원본 소리는 어차피 내레이션이 대체).
+
+    factor>1 빠르게, <1 느리게 (0.25~8배 클램프). 화질 저손실(crf16)·ultrafast.
+    """
+    factor = max(0.25, min(8.0, float(factor or 1.0)))
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(video),
+            "-vf", f"setpts=PTS/{factor:.6f}", "-an",
+            "-r", str(fps), "-c:v", "libx264", "-crf", "16",
+            "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(out_path)])
+    return str(out_path)
+
+
 def extract_segment_audio(video_path: str, start_us: int, end_us: int, out_wav: str) -> str:
     """원본 영상에서 한 발화 구간의 오디오만 wav로 추출 (구간별 STT 입력용, 16kHz mono)."""
     ff.run(

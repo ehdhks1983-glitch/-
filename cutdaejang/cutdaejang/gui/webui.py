@@ -1740,7 +1740,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         chain, voice = _narr_tts_pref(ep_voice, settings)
         wrap = int(settings["subtitle"].get("wrap_chars", 16) or 16)
         n = len(secs)
-        outs, errors, notes = [], [], []
+        outs, out_titles, errors, notes = [], [], [], []
         for i, sec in enumerate(secs, 1):
             base = (i - 1) / n
             try:
@@ -1761,6 +1761,22 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                     clips, subs0, 0, job_dir, fit="freeze")  # 순차 배치 (실측 길이)
                 narr_end = (subs[-1].end_us + 700_000) if subs else 1_000_000
                 dur = ff.probe_duration_us(video)
+                # ⏩ 구간별 배속 (v0.82) — ""=자동(몽타주) | "fit"=배속으로 길이 맞춤 | "1.5"/"2"/"3"
+                sp = str(sec.get("speed") or "").strip()
+                if sp:
+                    if sp == "fit":
+                        factor = max(1.0, min(8.0, dur / max(1, narr_end)))
+                    else:
+                        try:
+                            factor = max(0.5, min(8.0, float(sp)))
+                        except (TypeError, ValueError):
+                            factor = 1.0
+                    if abs(factor - 1.0) > 0.01:
+                        _set_job(job_id, stage="cut", frac=base,
+                                 note=f"🎞 구간 {i}/{n} — {factor:.1f}배속 적용 중…")
+                        video = video_editor.speed_video(
+                            video, factor, str(job_dir / f"sec_{i}_spd.mp4"))
+                        dur = ff.probe_duration_us(video)
                 cut = video
                 if dur > narr_end + 1_000_000:      # 📹 핵심 조각 몽타주로 압축
                     _set_job(job_id, stage="cut", frac=base,
@@ -1791,6 +1807,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 if not r.ok:
                     raise RuntimeError("; ".join(r.errors) or "렌더 실패")
                 outs.append(str(job_dir / f"sec_{i}.mp4"))
+                out_titles.append((str(sec.get("title") or "").strip() or f"구간 {i}"))
             except Exception as se:  # noqa: BLE001 — 한 구간 실패해도 나머지는 계속
                 logging.getLogger("cutdaejang").error("구간 %d 실패: %s", i, se)
                 errors.append(f"구간 {i}: {str(se)[:200]}")
@@ -1821,10 +1838,17 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                     final = withbgm
                 else:
                     notes.append("배경음악 입히기에 실패해 없이 완성했어요")
+        # ⏱ 유튜브 설명란용 타임라인 (v0.82) — 구간 실제 시작 시각 + 제목
+        chap_lines, cum = [], 0.0
+        for path_i, title_i in zip(outs, out_titles):
+            mm, ss = int(cum // 60), int(cum % 60)
+            chap_lines.append(f"{mm:02d}:{ss:02d} {title_i}")
+            cum += ff.probe_duration_us(path_i) / 1e6
         total_s = ff.probe_duration_us(final) / 1e6
         msg = f"🎞 구간 {len(outs)}개 · 총 {int(total_s // 60)}분 {int(total_s % 60)}초"
         _set_job(job_id, status=("ok" if not errors else "partial"), stage="done",
                  frac=1.0, mp4=final, mp4s=[final] + (outs if len(outs) > 1 else []),
+                 chapters=("\n".join(chap_lines) if len(chap_lines) > 1 else ""),
                  note="", tts_warn=" · ".join([msg] + notes + errors))
     except Exception as e:
         import traceback  # noqa: PLC0415
@@ -3561,7 +3585,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.81.2)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.82.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4480,6 +4504,7 @@ _HTML = """<!doctype html>
     <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>구간 만들기 <span class="hint">— 행 순서대로 이어붙어요. 구간마다 클립 1개 + 읽을 내레이션</span></div>
     <div id="secRows"></div>
     <button class="ghost" style="margin-top:8px" onclick="addSectionRow()">➕ 구간 추가</button>
+    <div class="hint" id="secTotal" style="margin-top:6px"></div>
     <div class="steplabel" style="margin-top:12px"><span class="stepnum">2</span>공통 설정</div>
     <div class="chk" style="gap:10px;flex-wrap:wrap">
       <span>화면</span>
@@ -4655,6 +4680,14 @@ _HTML = """<!doctype html>
       <div class="stage" id="providerBadge"></div>
       <video id="player" controls playsinline></video>
       <div class="stage" id="outPaths"></div>
+      <div id="chaptersBox" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px dashed #3a4157;border-radius:10px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <b style="font-size:13px">⏱ 구간 타임라인</b>
+          <span class="hint">— 유튜브 설명란에 그대로 붙여넣으면 영상에 챕터(구간 이동 바)가 생겨요</span>
+          <button class="ghost" style="padding:2px 8px" onclick="copyChapters(event)">📋 복사</button>
+        </div>
+        <pre id="chaptersText" style="margin:6px 0 0;white-space:pre-wrap;font-size:13px;color:#c8cede;font-family:inherit"></pre>
+      </div>
       <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'mix')" title="완성 영상의 소리(목소리+BGM+효과음)를 mp3로 저장">🔊 소리 저장(mp3)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'voice')" title="BGM·원본 소리 없이 내레이션 목소리만 mp3로 저장 — 다른 편집기·팟캐스트에 재사용">🎙 목소리만(mp3)</button>
@@ -7359,28 +7392,37 @@ function addSectionRow(title, narration){
   const num = document.createElement('b');
   num.className = 'sec-num'; num.style.cssText = 'color:#8b93a7;white-space:nowrap';
   const ti = document.createElement('input');
-  ti.type = 'text'; ti.className = 'sec-title'; ti.placeholder = '구간 제목 (선택 — 메모용)';
+  ti.type = 'text'; ti.className = 'sec-title'; ti.placeholder = '구간 제목 (선택 — 타임라인에 표시)';
   ti.style.cssText = 'flex:1;min-width:140px'; ti.value = title || '';
+  const tm = document.createElement('span');           // ⏱ 예상 시간 (v0.82)
+  tm.className = 'sec-time hint'; tm.style.cssText = 'white-space:nowrap;color:#7fd18a';
   const del = document.createElement('button');
   del.className = 'ghost'; del.textContent = '✕'; del.title = '이 구간 삭제';
   del.style.cssText = 'padding:4px 10px';
   del.onclick = function(ev){ ev.preventDefault(); div.remove(); renumberSections(); };
-  head.appendChild(num); head.appendChild(ti); head.appendChild(del);
+  head.appendChild(num); head.appendChild(ti); head.appendChild(tm); head.appendChild(del);
   const vrow = document.createElement('div');
-  vrow.style.cssText = 'display:flex;gap:8px;margin-top:6px';
+  vrow.style.cssText = 'display:flex;gap:8px;margin-top:6px;flex-wrap:wrap';
   const vi = document.createElement('input');
   vi.type = 'text'; vi.className = 'sec-video';
   vi.placeholder = '이 구간에 쓸 영상(화면녹화) 파일 경로';
-  vi.style.cssText = 'flex:1';
+  vi.style.cssText = 'flex:1;min-width:180px';
   const pick = document.createElement('button');
   pick.className = 'ghost'; pick.textContent = '🎬 클립 선택';
   pick.style.cssText = 'white-space:nowrap';
   pick.onclick = function(ev){ pickSectionVideo(ev, vi); };
-  vrow.appendChild(vi); vrow.appendChild(pick);
+  const sp = document.createElement('select');         // ⏩ 구간별 배속 (v0.82)
+  sp.className = 'sec-speed'; sp.style.cssText = 'width:auto;padding:6px 8px';
+  sp.title = '클립이 내레이션보다 길 때 줄이는 방법 — 몽타주는 핵심 장면만 잘라 붙이고, 배속은 안 자르고 빨리 감아요';
+  [['', '컷: 자동 (핵심 몽타주)'], ['fit', '⏩ 배속으로 통째로 맞춤 (안 잘림)'],
+   ['1.5', '⏩ 1.5배속'], ['2', '⏩ 2배속'], ['3', '⏩ 3배속']
+  ].forEach(function(o){ sp.add(new Option(o[1], o[0])); });
+  vrow.appendChild(vi); vrow.appendChild(pick); vrow.appendChild(sp);
   const na = document.createElement('textarea');
   na.className = 'sec-narr';
   na.placeholder = '이 구간에서 읽을 내레이션 — 한 줄 = 자막 한 줄. 이 길이만큼 구간이 만들어져요';
   na.style.cssText = 'min-height:64px;margin-top:6px'; na.value = narration || '';
+  na.oninput = updateSectionTimes;
   div.appendChild(head); div.appendChild(vrow); div.appendChild(na);
   rows.appendChild(div);
   renumberSections();
@@ -7392,6 +7434,32 @@ function renumberSections(){
   [...rows.children].forEach((d, i) => {
     const n = d.querySelector('.sec-num'); if(n) n.textContent = '구간 ' + (i + 1);
   });
+  updateSectionTimes();
+}
+
+function fmtMMSS(s){
+  s = Math.max(0, Math.round(s));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+// ⏱ 대본처럼 "몇 초부터 몇 초" — 내레이션 글자수로 구간 시간 실시간 예측 (v0.82)
+function updateSectionTimes(){
+  const rows = [...(($('secRows')||{}).children || [])];
+  let cum = 0;
+  rows.forEach(function(d){
+    const el = d.querySelector('.sec-time'); if(!el) return;
+    const txt = ((d.querySelector('.sec-narr')||{}).value || '');
+    const lines = txt.split('\\n').filter(function(t){ return t.trim(); });
+    const chars = lines.join('').replace(/\\s/g, '').length;
+    if(!chars){ el.textContent = ''; return; }
+    const est = Math.max(2, chars / 5.5 + lines.length * 0.35 + 0.7);  // 한국어 낭독 ≈ 초당 5.5자
+    el.textContent = '⏱ 예상 ' + fmtMMSS(cum) + ' ~ ' + fmtMMSS(cum + est);
+    cum += est;
+  });
+  const tot = $('secTotal');
+  if(tot) tot.textContent = cum
+    ? ('⏱ 전체 예상: 약 ' + fmtMMSS(cum) + ' — 실제 읽은 길이에 따라 조금 달라져요. 완성되면 유튜브 설명란용 실제 타임라인을 드려요.')
+    : '';
 }
 
 async function pickSectionVideo(ev, input){
@@ -7430,6 +7498,7 @@ async function startSections(){
     title: (d.querySelector('.sec-title')||{}).value || '',
     video_path: ((d.querySelector('.sec-video')||{}).value || '').trim(),
     narration: (d.querySelector('.sec-narr')||{}).value || '',
+    speed: (d.querySelector('.sec-speed')||{}).value || '',  // ⏩ 구간별 배속 (v0.82)
   })).filter(s => s.narration.trim());
   if(!sections.length){ alert('구간이 없어요 — [➕ 구간 추가]로 구간을 만들고 내레이션을 넣어주세요'); return; }
   for(let i = 0; i < sections.length; i++){
@@ -7467,6 +7536,16 @@ async function startSections(){
   timer = setInterval(poll, 900);
 }
 async function startSectionsSafe(){ try{ await startSections(); }catch(e){ reportUiError('영상 만들기', e); } }
+
+// ⏱ 타임라인 복사 (v0.82) — 유튜브 설명란에 붙여넣으면 챕터가 생겨요
+async function copyChapters(ev){
+  ev.preventDefault();
+  try{
+    await navigator.clipboard.writeText(($('chaptersText')||{}).textContent || '');
+    const btn = ev.target; btn.textContent = '✓ 복사됨';
+    setTimeout(() => { btn.textContent = '📋 복사'; }, 1500);
+  } catch(e){ alert('복사 실패 — 직접 드래그해서 복사하세요'); }
+}
 
 async function saveWeblinkProduct(ev){
   ev.preventDefault();
@@ -7695,6 +7774,10 @@ async function poll(){
       } else {
         $('outPaths').textContent = 'mp4: ' + job.mp4;
       }
+      // ⏱ 구간 타임라인 (v0.82) — 유튜브 설명란용 챕터 텍스트
+      const chp = job.chapters || '';
+      $('chaptersBox').classList.toggle('hidden', !chp);
+      $('chaptersText').textContent = chp;
     }
     showErrors(job.errors);
     $('goBtn').disabled = false; $('editBtn').disabled = false;
