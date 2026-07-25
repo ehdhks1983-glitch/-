@@ -75,6 +75,33 @@ def _wait_status(base, job_id, targets, timeout=300):
 
 
 @requires_ffmpeg
+def test_cut_and_concat_reordered_segments_memory_safe(tmp_path):
+    """v0.81.1: 콜드오픈형 재정렬 컷(뒤 구간을 앞에) — 긴 영상 메모리 폭발 수정.
+
+    한 그래프 재정렬은 뒤 구간 프레임을 통째로 버퍼링해 OOM(사용자 리포트:
+    149초 영상 + 첫 3초 티저). 2단계(구간 추출→합본) 경로로 우회되는지 확인.
+    """
+    from cutdaejang.core import video_editor
+    from cutdaejang.utils import ffmpeg as ff
+
+    src = tmp_path / "long.mp4"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-f", "lavfi", "-i", "color=c=orange:s=320x240:r=30:d=12",
+            "-f", "lavfi", "-i", "sine=frequency=500:duration=12",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(src)])
+    out = tmp_path / "cold.mp4"
+    video_editor.cut_and_concat(
+        str(src), [(10_000_000, 12_000_000), (0, 12_000_000)], str(out),
+        transition="fade")
+    dur = ff.probe_duration_us(str(out)) / 1e6
+    assert 13.2 <= dur <= 15.0, dur          # 티저 2초 + 본편 12초 ≈ 14초
+    assert ff.probe_video_size(str(out)) == (320, 240)
+    assert ff.has_audio_stream(str(out))
+    assert not list(tmp_path.glob("cold_seg*.mp4"))   # 조각 파일 정리됨
+
+
+@requires_ffmpeg
 def test_sections_with_style_override_e2e(server, tmp_path):
     """🎞 구간 1개 + 자막 스타일 지정 → 스타일 파라미터 경로로 정상 완성."""
     from cutdaejang.utils import ffmpeg as ff

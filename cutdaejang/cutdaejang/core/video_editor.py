@@ -179,6 +179,13 @@ def cut_and_concat(
     if not segments:
         raise ValueError("자를 발화 구간이 없습니다")
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    # ⛑ 시간 순서가 뒤바뀐 구간(콜드오픈 티저 앞세우기 등)을 한 그래프로 처리하면
+    # ffmpeg이 앞 구간을 내보내는 동안 뒤 구간 프레임을 전부 메모리에 쌓아
+    # 긴 영상에서 'Cannot allocate memory'로 죽는다 (v0.81.1 사용자 리포트:
+    # 149초 영상 + 첫 3초 티저). → 구간별 추출 후 합본하는 2단계로 우회.
+    starts = [s for s, _ in segments]
+    if any(b < a for a, b in zip(starts, starts[1:])):
+        return _cut_reordered(video_path, segments, out_path, fps, transition)
     has_audio = ff.has_audio_stream(str(video_path))
 
     parts = []
@@ -218,6 +225,52 @@ def cut_and_concat(
     args += ["-movflags", "+faststart", str(out_path)]
     ff.run(args)
     return str(out_path)
+
+
+def _cut_reordered(video_path: str, segments: List[Tuple[int, int]], out_path: str,
+                   fps: int = 30, transition: str = "none") -> str:
+    """시간 역행 구간 컷 — 구간별로 따로 뽑아 파일 합본 (v0.81.1 메모리 안전).
+
+    한 필터 그래프의 branch 재정렬은 긴 영상에서 프레임이 통째로 버퍼링돼 메모리
+    부족을 일으키므로, 구간마다 입력 시킹(-ss)으로 조각 파일을 만든 뒤
+    concat_videos로 잇는다. 조각은 crf16(저손실)으로 뽑아 이중 인코딩 손실 최소화.
+    """
+    out = Path(out_path)
+    has_audio = ff.has_audio_stream(str(video_path))
+    fd = TRANSITION_FADE_S
+    n = len(segments)
+    tmps: List[str] = []
+    try:
+        for i, (s, e) in enumerate(segments):
+            piece = out.with_name(f"{out.stem}_seg{i:02d}.mp4")
+            dur_s = max(0.05, (e - s) / 1e6)
+            vf = "setpts=PTS-STARTPTS"
+            if transition == "fade" and n > 1:
+                if i > 0 and dur_s > fd * 2:
+                    vf += f",fade=t=in:st=0:d={fd}"
+                if i < n - 1 and dur_s > fd * 2:
+                    vf += f",fade=t=out:st={max(0.0, dur_s - fd):.3f}:d={fd}"
+            args = [ff.ffmpeg_bin(), "-y", "-v", "error",
+                    "-ss", us_to_seconds_str(s), "-i", str(video_path),
+                    "-t", f"{dur_s:.6f}", "-vf", vf,
+                    "-r", str(fps), "-c:v", "libx264", "-crf", "16",
+                    "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
+            if has_audio:
+                args += ["-c:a", "aac", "-b:a", "192k"]
+            else:
+                args += ["-an"]
+            args += ["-movflags", "+faststart", str(piece)]
+            ff.run(args)
+            tmps.append(str(piece))
+        w, h = ff.probe_video_size(str(video_path))
+        concat_videos(tmps, str(out), size=(w, h), fps=fps)
+    finally:
+        for t in tmps:
+            try:
+                Path(t).unlink()
+            except OSError:
+                pass
+    return str(out)
 
 
 def extract_segment_audio(video_path: str, start_us: int, end_us: int, out_wav: str) -> str:
