@@ -1816,10 +1816,14 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             return
         _set_job(job_id, stage="render", frac=0.97, note="🎞 구간들을 이어붙이는 중…")
         cw, ch = (1080, 1920) if layout == "shorts" else (1920, 1080)
+        sec_xfade = 0.45          # 🎬 구간 사이 크로스페이드 (v0.83) — "뚝" 끊김 제거
+        durs = [ff.probe_duration_us(p) / 1e6 for p in outs]
+        fade = video_editor.xfade_clamp(sec_xfade, durs)
         final = outs[0]
         if len(outs) > 1:
             final = video_editor.concat_videos(
-                outs, str(job_dir / "sections_final.mp4"), size=(cw, ch))
+                outs, str(job_dir / "sections_final.mp4"), size=(cw, ch),
+                crossfade_s=sec_xfade)
         if (params.get("bgm") or "").strip():        # 🎵 BGM은 최종 합본에 1회 (덕킹)
             b = resolve_bgm(params["bgm"], settings)
             if b and b.path:
@@ -1828,22 +1832,20 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                     bgm_db = float(params.get("bgm_db"))
                 except (TypeError, ValueError):
                     bgm_db = float(settings["bgm"].get("volume_db", -16))
-                withbgm = str(job_dir / "sections_bgm.mp4")
-                r2 = edit_mode.render_from_analysis(
-                    final, [], withbgm, style=style, layout="keep", hook="",
-                    quality=quality, orig_audio="keep",
-                    bgm_path=b.path, bgm_db=bgm_db,
-                    bgm_duck=bool(settings["bgm"].get("duck", True)))
-                if r2.ok:
-                    final = withbgm
-                else:
+                try:
+                    # v0.83: 영상 재인코딩 없이 소리만 섞음 — 화질 유지·용량↓·빠름
+                    final = video_editor.mix_bgm(
+                        final, b.path, str(job_dir / "sections_bgm.mp4"),
+                        bgm_db=bgm_db, duck=bool(settings["bgm"].get("duck", True)))
+                except Exception:  # noqa: BLE001 — BGM 실패해도 본편은 산다
                     notes.append("배경음악 입히기에 실패해 없이 완성했어요")
         # ⏱ 유튜브 설명란용 타임라인 (v0.82) — 구간 실제 시작 시각 + 제목
+        # 크로스페이드만큼 뒤 구간이 앞당겨지는 것 반영 (v0.83)
         chap_lines, cum = [], 0.0
-        for path_i, title_i in zip(outs, out_titles):
+        for k, title_i in enumerate(out_titles):
             mm, ss = int(cum // 60), int(cum % 60)
             chap_lines.append(f"{mm:02d}:{ss:02d} {title_i}")
-            cum += ff.probe_duration_us(path_i) / 1e6
+            cum += durs[k] - (fade if k < len(outs) - 1 else 0.0)
         total_s = ff.probe_duration_us(final) / 1e6
         msg = f"🎞 구간 {len(outs)}개 · 총 {int(total_s // 60)}분 {int(total_s % 60)}초"
         _set_job(job_id, status=("ok" if not errors else "partial"), stage="done",
@@ -2790,6 +2792,34 @@ class _Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_run_sections, args=(job_id, params, workdir),
                              daemon=True).start()
             self._send_json({"job_id": job_id})
+        elif path == "/api/shrink":  # 📦 업로드용 용량 줄이기 (v0.83)
+            job_id = str(params.get("job_id") or "")
+            job = _get_job(job_id) or {}
+            src = job.get("mp4") or ""
+            if not src or not Path(src).is_file():
+                self._send_json({"error": "완성된 영상 파일을 찾을 수 없어요 — 영상을 먼저 완성해 주세요"}, 400)
+                return
+            if job.get("shrink_status") == "running":
+                self._send_json({"ok": True})   # 이미 진행 중 — 그대로 기다리면 됨
+                return
+            out = str(Path(src).with_name(Path(src).stem + "_업로드용.mp4"))
+            _set_job(job_id, shrink_status="running", shrink_out="", shrink_error="")
+
+            def _shrink_bg(jid=job_id, s=src, o=out):
+                from ..core import video_editor  # noqa: PLC0415
+                try:
+                    before = os.path.getsize(s) / 1048576
+                    video_editor.shrink_video(s, o)
+                    after = os.path.getsize(o) / 1048576
+                    _set_job(jid, shrink_status="done", shrink_out=o,
+                             shrink_before_mb=round(before, 1),
+                             shrink_after_mb=round(after, 1))
+                except Exception as e:  # noqa: BLE001
+                    logging.getLogger("cutdaejang").error("용량 줄이기 실패: %s", e)
+                    _set_job(jid, shrink_status="failed", shrink_error=str(e)[:300])
+
+            threading.Thread(target=_shrink_bg, daemon=True).start()
+            self._send_json({"ok": True})
         elif path == "/api/template":  # 📋 편집 세팅 템플릿 (v0.43)
             name = (params.get("name") or "").strip()[:40]
             if not name:
@@ -3585,7 +3615,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.82.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.83.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4689,6 +4719,7 @@ _HTML = """<!doctype html>
         <pre id="chaptersText" style="margin:6px 0 0;white-space:pre-wrap;font-size:13px;color:#c8cede;font-family:inherit"></pre>
       </div>
       <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
+      <button class="ghost" style="margin-top:10px" onclick="shrinkVideo(event)" title="용량이 커서 업로드가 안 될 때 — 화질 거의 그대로 파일 크기를 크게 줄인 업로드용 mp4를 하나 더 만들어요 (원본은 그대로)">📦 용량 줄이기 (업로드용)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'mix')" title="완성 영상의 소리(목소리+BGM+효과음)를 mp3로 저장">🔊 소리 저장(mp3)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'voice')" title="BGM·원본 소리 없이 내레이션 목소리만 mp3로 저장 — 다른 편집기·팟캐스트에 재사용">🎙 목소리만(mp3)</button>
       <button class="ghost" style="margin-top:10px" onclick="toggleKit(event)">📦 업로드 키트 (제목·태그·설명 자동)</button>
@@ -7545,6 +7576,36 @@ async function copyChapters(ev){
     const btn = ev.target; btn.textContent = '✓ 복사됨';
     setTimeout(() => { btn.textContent = '📋 복사'; }, 1500);
   } catch(e){ alert('복사 실패 — 직접 드래그해서 복사하세요'); }
+}
+
+// 📦 업로드용 용량 줄이기 (v0.83) — 화질 거의 그대로 파일 크기 대폭 축소
+async function shrinkVideo(ev){
+  ev.preventDefault();
+  if(!currentJob){ alert('완성된 작업이 없어요'); return; }
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '📦 줄이는 중… (긴 영상은 몇 분 걸려요)';
+  try{
+    const d = await (await fetch('/api/shrink', {method:'POST',
+      body: JSON.stringify({job_id: currentJob})})).json();
+    if(d.error){ alert(d.error); return; }
+    for(let i = 0; i < 1800; i++){                  // 최대 1시간 대기 (2초 간격)
+      await new Promise(r => setTimeout(r, 2000));
+      const st = await (await fetch('/api/state')).json();
+      const job = (st.jobs || []).find(j => j.id === currentJob) || {};
+      if(job.shrink_status === 'done'){
+        $('outPaths').innerHTML += '<br>📦 업로드용: ' + escHtml(job.shrink_out || '') +
+          ' <span class="hint">(' + job.shrink_before_mb + ' MB → ' + job.shrink_after_mb + ' MB)</span>';
+        alert('📦 업로드용 파일 완성!\\n' + job.shrink_before_mb + ' MB → ' + job.shrink_after_mb +
+              ' MB\\n[📂 폴더 열기]를 눌러 이름 끝에 _업로드용 이 붙은 mp4를 올리세요');
+        return;
+      }
+      if(job.shrink_status === 'failed'){
+        alert('용량 줄이기 실패: ' + (job.shrink_error || '알 수 없는 오류')); return;
+      }
+    }
+    alert('시간이 오래 걸리고 있어요 — [📂 폴더 열기]에서 _업로드용.mp4가 생겼는지 확인해 주세요');
+  } catch(e){ alert('용량 줄이기 오류: ' + e); }
+  finally{ btn.disabled = false; btn.textContent = old; }
 }
 
 async function saveWeblinkProduct(ev){

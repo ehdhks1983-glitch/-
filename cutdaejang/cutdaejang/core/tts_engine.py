@@ -246,21 +246,41 @@ class ElevenLabsTTS:
 
     name = "elevenlabs"
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "eleven_multilingual_v2"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "eleven_multilingual_v2",
+                 stability: float = 0.75, similarity: float = 0.75):
         self.api_key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
         self.model = model
+        # 🎙 목소리 일관성 (v0.83) — 문장마다 따로 합성하면 톤이 들쑥날쑥해지는
+        # 문제: stability를 0.5→0.75로 올리고(변주 억제), 앞뒤 문장을
+        # previous_text/next_text로 보내 이어읽기(문맥 조건화)한다.
+        self.stability = max(0.0, min(1.0, float(stability)))
+        self.similarity = max(0.0, min(1.0, float(similarity)))
+        self.cache_extra = f"stab{self.stability:.2f}|sim{self.similarity:.2f}|ctx1"
+        self.wants_context = True     # 엔진이 앞뒤 문장을 넣어줌
+        self._prev_text = ""
+        self._next_text = ""
         if not self.api_key:
             raise TTSError("ELEVENLABS_API_KEY가 설정되어 있지 않습니다")
+
+    def _payload(self, text: str) -> dict:
+        p = {
+            "text": text, "model_id": self.model,
+            "voice_settings": {"stability": self.stability,
+                               "similarity_boost": self.similarity},
+        }
+        # 문맥은 과금되지 않는 조건화 입력 — 앞뒤 300자면 충분
+        if self._prev_text:
+            p["previous_text"] = self._prev_text[-300:]
+        if self._next_text:
+            p["next_text"] = self._next_text[:300]
+        return p
 
     def synthesize(self, text: str, voice: str, out_path: str) -> str:
         if not voice:
             raise TTSNonRetryable("내 목소리가 아직 등록되지 않았습니다 — [🎤 내 목소리 등록]을 먼저 해주세요")
         req = urllib.request.Request(
             f"https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_44100_128",
-            data=json.dumps({
-                "text": text, "model_id": self.model,
-                "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
-            }).encode("utf-8"),
+            data=json.dumps(self._payload(text)).encode("utf-8"),
             headers={"Content-Type": "application/json", "xi-api-key": self.api_key},
             method="POST",
         )
@@ -686,17 +706,19 @@ class TTSEngine:
 
     # ---------- 캐시 ----------
 
-    def _cache_key(self, text: str, voice: str) -> str:
+    def _cache_key(self, text: str, voice: str, ctx: str = "") -> str:
         model = getattr(self.provider, "model", "")
         raw = f"{self.provider.name}|{model}|{voice}|{self.style_preset}|{text}"
         # 참조 기반 제공자(SoVITS 등)는 참조가 바뀌면 다른 목소리 → 키에 반영
         extra = getattr(self.provider, "cache_extra", "")
         if extra:
             raw += f"|{extra}"
+        if ctx:  # 이어읽기 문맥이 다르면 다른 소리 (v0.83)
+            raw += f"|ctx:{ctx}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def cache_path(self, text: str, voice: str) -> Path:
-        return self.cache_dir / f"{self._cache_key(text, voice)}.wav"
+    def cache_path(self, text: str, voice: str, ctx: str = "") -> Path:
+        return self.cache_dir / f"{self._cache_key(text, voice, ctx)}.wav"
 
     # ---------- 합성 ----------
 
@@ -790,26 +812,44 @@ class TTSEngine:
             f"{self.provider.name} TTS 재시도 {max_retries}회 소진: {str(last)[:160]}", raw=raw
         )
 
-    def synth_sentence(self, text: str, voice: str = "") -> Path:
-        # 숫자·영어를 한글 발음으로 (2026년→이천이십육년, AI→에이아이) — 오독 방지 (v0.46.1).
-        # 자막은 원문 그대로, TTS 입력만 바꾼다. 캐시 키도 변환 후 텍스트 기준.
+    def _pronounced(self, text: str) -> str:
         if self.settings["tts"].get("auto_pronounce", True):
             from ..utils.pronounce import pronounce_ko  # noqa: PLC0415
             try:
-                text = pronounce_ko(text)
+                return pronounce_ko(text)
             except Exception:  # noqa: BLE001 — 발음 변환 문제로 합성이 죽으면 안 됨
                 pass
+        return text
+
+    def synth_sentence(self, text: str, voice: str = "",
+                       prev_text: str = "", next_text: str = "") -> Path:
+        # 숫자·영어를 한글 발음으로 (2026년→이천이십육년, AI→에이아이) — 오독 방지 (v0.46.1).
+        # 자막은 원문 그대로, TTS 입력만 바꾼다. 캐시 키도 변환 후 텍스트 기준.
+        text = self._pronounced(text)
         voice = self._resolve_voice(voice)
-        out = self.cache_path(text, voice)
+        # 🎙 이어읽기 문맥 (v0.83) — 지원 제공자(일레븐랩스)만: 앞뒤 문장을 함께
+        # 보내 문장 사이 톤이 이어지게 한다. 문맥이 바뀌면 소리도 달라지므로 캐시 키에 포함.
+        ctx = ""
+        if getattr(self.provider, "wants_context", False) and (prev_text or next_text):
+            prev_text = self._pronounced(prev_text) if prev_text else ""
+            next_text = self._pronounced(next_text) if next_text else ""
+            ctx = f"{prev_text}\x1f{next_text}"
+        out = self.cache_path(text, voice, ctx)
         if out.exists():
             self.stats["cache_hits"] += 1
             return out
         raw = out.with_suffix(f".{uuid.uuid4().hex[:8]}.raw.wav")  # 동시 잡 경쟁 방지
         try:
+            if getattr(self.provider, "wants_context", False):
+                self.provider._prev_text = prev_text
+                self.provider._next_text = next_text
             self._synth_raw_with_retry(text, voice, str(raw))
             raw_us, final_us = postprocess_clip(str(raw), str(out), self.settings["audio"])
             self.stats["trim_saved_us"] += max(0, raw_us - final_us)
         finally:
+            if getattr(self.provider, "wants_context", False):
+                self.provider._prev_text = ""
+                self.provider._next_text = ""
             raw.unlink(missing_ok=True)
         return out
 
@@ -822,7 +862,10 @@ class TTSEngine:
         paths = []
         for i, text in enumerate(sentences):
             try:
-                paths.append(self.synth_sentence(text, voice))
+                paths.append(self.synth_sentence(
+                    text, voice,
+                    prev_text=(sentences[i - 1] if i > 0 else ""),
+                    next_text=(sentences[i + 1] if i + 1 < len(sentences) else "")))
             except TTSExhausted as e:
                 raise TTSExhausted(f"문장 {i + 1}: {e}", raw=e.raw) from e
             if on_progress:
@@ -845,7 +888,10 @@ def make_provider(name: str, settings: dict) -> TTSProvider:
     if name == "openai":
         return OpenAITTS(model=tts_cfg.get("model_openai", "gpt-4o-mini-tts"))
     if name == "elevenlabs":
-        return ElevenLabsTTS(model=tts_cfg.get("model_elevenlabs", "eleven_multilingual_v2"))
+        return ElevenLabsTTS(
+            model=tts_cfg.get("model_elevenlabs", "eleven_multilingual_v2"),
+            stability=float(tts_cfg.get("eleven_stability", 0.75)),
+            similarity=float(tts_cfg.get("eleven_similarity", 0.75)))
     if name == "sovits":
         return GPTSoVITSTTS(url=tts_cfg.get("sovits_url", ""),
                             ref_audio=tts_cfg.get("sovits_ref_audio", ""),

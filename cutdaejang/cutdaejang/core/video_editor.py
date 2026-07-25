@@ -498,13 +498,29 @@ def snap_boundaries_to_scenes(ranges: List[Tuple[int, int]], scenes: List[int],
     return [tuple(r) for r in out]
 
 
+def xfade_clamp(crossfade_s: float, durs_s: List[float]) -> float:
+    """클립 길이에 맞춰 크로스페이드 길이를 안전하게 줄인다 (v0.83).
+
+    가장 짧은 클립의 45%를 넘지 않게(양쪽 다 겹칠 여유), 최대 1초.
+    0.05초 미만이면 0(하드컷) — 그보다 짧으면 어차피 안 보인다.
+    """
+    if crossfade_s <= 0 or len(durs_s) < 2:
+        return 0.0
+    fade = min(float(crossfade_s), min(durs_s) * 0.45, 1.0)
+    return fade if fade >= 0.05 else 0.0
+
+
 def concat_videos(clips: List[str], out_path: str, size=None,
-                  fps: int = 30, still_s: float = 2.5) -> str:
+                  fps: int = 30, still_s: float = 2.5,
+                  crossfade_s: float = 0.0) -> str:
     """여러 클립(영상/사진 혼합)을 순서대로 이어붙인다 (v0.80 구간 조립 공용).
 
     - 해상도가 제각각이어도 size(기본: 첫 영상 클립 크기)에 맞춰 축소+패딩.
     - 소리 있는 클립은 44100 스테레오로 통일, 사진·무음 클립은 무음 트랙을 깔아
       concat 오류를 막는다. 사진은 still_s초 정지 클립으로.
+    - crossfade_s>0 (v0.83): 경계마다 화면은 디졸브(xfade), 소리는 겹침 페이드
+      (acrossfade)로 부드럽게 — 하드컷 "뚝" 끊김 제거. 전체 길이는 경계당
+      crossfade_s만큼 짧아진다.
     - N이 커서 필터 그래프가 길어지면 파일 경유(filter_complex_args).
     """
     clips = [str(c) for c in clips if (c or "").strip() and Path(str(c)).is_file()]
@@ -517,13 +533,14 @@ def concat_videos(clips: List[str], out_path: str, size=None,
                           if Path(c).suffix.lower() not in IMAGE_EXTS), clips[0])
         w, h = ff.probe_video_size(first_vid)
     args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-nostdin"]
-    parts, labels, aux = [], [], []
+    parts, labels, aux, durs = [], [], [], []
     for i, clip in enumerate(clips):
         is_img = Path(clip).suffix.lower() in IMAGE_EXTS
         if is_img:
             args += ["-loop", "1", "-t", f"{still_s:.3f}", "-i", str(clip)]
         else:
             args += ["-i", str(clip)]
+        durs.append(still_s if is_img else ff.probe_duration_us(clip) / 1e6)
         parts.append(
             f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p[v{i}]"
@@ -539,13 +556,83 @@ def concat_videos(clips: List[str], out_path: str, size=None,
         labels.append(f"[v{i}][a{i}]")
     for _idx, _dur in aux:
         args += ["-f", "lavfi", "-t", f"{_dur:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
-    fc = (";".join(parts) + ";" + "".join(labels)
-          + f"concat=n={len(clips)}:v=1:a=1[v][a]")
+    fade = xfade_clamp(crossfade_s, durs)
+    if fade > 0:
+        # 🎬 크로스페이드 체인 — 입력을 순서대로 소비하므로 긴 영상도 메모리 안전
+        chain, vcur, acur, t = [], "[v0]", "[a0]", durs[0]
+        for i in range(1, len(clips)):
+            off = max(0.0, t - fade)
+            vn, an = f"[vx{i}]", f"[ax{i}]"
+            chain.append(f"{vcur}[v{i}]xfade=transition=fade:"
+                         f"duration={fade:.3f}:offset={off:.3f}{vn}")
+            chain.append(f"{acur}[a{i}]acrossfade=d={fade:.3f}{an}")
+            vcur, acur = vn, an
+            t = off + durs[i]
+        fc = ";".join(parts + chain)
+        vmap, amap = vcur, acur
+    else:
+        fc = (";".join(parts) + ";" + "".join(labels)
+              + f"concat=n={len(clips)}:v=1:a=1[v][a]")
+        vmap, amap = "[v]", "[a]"
     args += ff.filter_complex_args(fc, Path(out_path).with_suffix(".filter.txt"))
-    args += ["-map", "[v]", "-map", "[a]",
+    args += ["-map", vmap, "-map", amap,
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
              "-movflags", "+faststart", str(out_path)]
+    ff.run(args)
+    return str(out_path)
+
+
+def mix_bgm(video: str, bgm: str, out_path: str, bgm_db: float = -16.0,
+            duck: bool = True) -> str:
+    """완성 영상에 BGM만 얹는다 — 영상은 재인코딩 없이 복사 (v0.83).
+
+    합본 전체를 다시 인코딩하던 방식(화질 열화·용량 증가·느림) 대체.
+    소리 레시피는 렌더 단계와 동일: 루프 + 페이드인/아웃 + (옵션) 목소리
+    덕킹(sidechaincompress).
+    """
+    dur_s = ff.probe_duration_us(video) / 1e6
+    gain = 10 ** (bgm_db / 20)
+    fade_st = max(0.0, dur_s - 1.2)
+    parts = []
+    if ff.has_audio_stream(video):
+        parts.append("[0:a]anull[abase]")
+    else:
+        parts.append(f"anullsrc=r=44100:cl=stereo:d={dur_s:.3f}[abase]")
+    parts.append(
+        f"[1:a]volume={gain:.4f},atrim=0:{dur_s:.3f},"
+        f"afade=t=in:d=0.8,afade=t=out:st={fade_st:.3f}:d=1.2[abgm]")
+    if duck:
+        parts.append("[abase]asplit[vmain][vside]")
+        parts.append("[abgm][vside]sidechaincompress="
+                     "threshold=0.03:ratio=8:attack=20:release=300[abgmd]")
+        parts.append("[vmain][abgmd]amix=inputs=2:duration=first:normalize=0[a]")
+    else:
+        parts.append("[abase][abgm]amix=inputs=2:duration=first:normalize=0[a]")
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(video),
+            "-stream_loop", "-1", "-i", str(bgm),
+            "-filter_complex", ";".join(parts),
+            "-map", "0:v", "-map", "[a]",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart", str(out_path)])
+    return str(out_path)
+
+
+def shrink_video(video: str, out_path: str, crf: int = 25, max_h: int = 1080) -> str:
+    """📦 업로드용 용량 줄이기 (v0.83) — 화질 거의 그대로 파일 크기 대폭 축소.
+
+    1080p 초과(4K 업스케일 등)는 1080p로 낮추고, 이하면 해상도 유지.
+    카페·블로그 첨부 한도나 느린 회선 때문에 업로드가 안 될 때 쓴다.
+    """
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(video),
+            "-vf", f"scale=-2:'min({int(max_h)},ih)'",
+            "-c:v", "libx264", "-crf", str(int(crf)),
+            "-preset", "veryfast", "-pix_fmt", "yuv420p"]
+    if ff.has_audio_stream(video):
+        args += ["-c:a", "aac", "-b:a", "128k"]
+    args += ["-movflags", "+faststart", str(out_path)]
     ff.run(args)
     return str(out_path)
 
