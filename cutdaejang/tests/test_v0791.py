@@ -29,3 +29,15 @@ def test_narration_flow_rules_in_script_prompts():
         assert "이어 말하는 내레이션" in p, p[:80]
         assert "나열식" in p
     assert "이어지는 한 흐름" in VIDEO_ANALYZE_PROMPT
+
+
+def test_sentence_ending_rules_in_script_prompts():
+    """v0.81: '확인 필수' 같은 명사형(개조식) 종결 금지 — 완결 어미 규칙 (사용자 리포트)."""
+    for p in (PROMPT_TEMPLATE, ARTICLE_SCRIPT_PROMPT, VIDEO_ANALYZE_PROMPT):
+        assert "명사형" in p and "확인 필수" in p, p[:80]
+    # 폴백(원문 문장)도 어미가 잘리지 않게 문장 통째로
+    from cutdaejang.core.script_generator import summarize_article_stub
+
+    long_sent = "이 문장은 아주 길어서 예순 자를 넘기지만 어미가 잘리면 안 되는 문장으로 끝까지 완결되게 유지되어야 해요."
+    out = summarize_article_stub("제목", long_sent, 45)
+    assert out["sentences"][0].endswith("해요.")
