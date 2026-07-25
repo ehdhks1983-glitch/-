@@ -237,11 +237,19 @@ def _cut_reordered(video_path: str, segments: List[Tuple[int, int]], out_path: s
     """
     out = Path(out_path)
     has_audio = ff.has_audio_stream(str(video_path))
+    total_us = ff.probe_duration_us(str(video_path))
     fd = TRANSITION_FADE_S
     n = len(segments)
-    tmps: List[str] = []
+    tmps: List[str] = []     # 합본 입력 (순서 유지)
+    made: List[str] = []     # 새로 만든 조각만 정리 대상 (원본은 지우면 안 됨)
     try:
         for i, (s, e) in enumerate(segments):
+            # ⚡ 본편 전체(≈0~끝) 구간은 재추출 생략 — 원본을 그대로 합본 입력으로.
+            # 콜드오픈(티저+전체)에서 긴 인코딩 1회가 통째로 줄어 몇 분 단축 (v0.81.2).
+            # (이 구간의 0.14초 경계 페이드만 생략됨 — 체감 없음)
+            if s <= 100_000 and e >= total_us - 100_000:
+                tmps.append(str(video_path))
+                continue
             piece = out.with_name(f"{out.stem}_seg{i:02d}.mp4")
             dur_s = max(0.05, (e - s) / 1e6)
             vf = "setpts=PTS-STARTPTS"
@@ -262,10 +270,11 @@ def _cut_reordered(video_path: str, segments: List[Tuple[int, int]], out_path: s
             args += ["-movflags", "+faststart", str(piece)]
             ff.run(args)
             tmps.append(str(piece))
+            made.append(str(piece))
         w, h = ff.probe_video_size(str(video_path))
         concat_videos(tmps, str(out), size=(w, h), fps=fps)
     finally:
-        for t in tmps:
+        for t in made:
             try:
                 Path(t).unlink()
             except OSError:

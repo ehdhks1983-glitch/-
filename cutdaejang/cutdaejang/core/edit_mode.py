@@ -583,6 +583,8 @@ def analyze_video(
         note(f"입력한 대본 {len(subtitles)}줄을 영상 타이밍에 배치했습니다 (음성 인식 생략)")
     elif auto_subtitle and stt is not None:
         report("stt", 0.0)
+        note(f"🗣 말소리 인식 중… (영상 {cut_us / 1e6 / 60:.0f}분 — 긴 영상은 몇 분 걸려요, 멈춘 게 아니에요)"
+             if cut_us >= 60_000_000 else "🗣 말소리 인식 중…")
         # v0.41: 문장 단위 타임스탬프 — 긴 발화 구간도 문장별로 자막이 바뀐다
         pieces = transcribe_segments_timed(
             video_path, segments, stt, work,

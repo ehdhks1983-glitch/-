@@ -1082,7 +1082,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 )
         elif cold_open and len(subs) >= 2:
             # 구간 선별 없이(전체 사용) 콜드오픈만 켠 경우 — 전체 본편 앞에 티저
-            _set_job(job_id, stage="cut", frac=0.0, note="클라이맥스 티저 배치 중…")
+            _set_job(job_id, stage="cut", frac=0.0,
+                     note="클라이맥스 티저 배치 중… (긴 영상은 몇 분 걸릴 수 있어요 — 멈춘 게 아니에요)")
             cut_video, subs, teaser_s = edit_mode.rebuild_cold_open(
                 cut_video, subs, None, str(Path(workdir) / job_id / "short.mp4"),
                 climax_idx=climax, transition=(ep.get("transition") or "none"),
@@ -3560,7 +3561,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.81.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.81.2)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
