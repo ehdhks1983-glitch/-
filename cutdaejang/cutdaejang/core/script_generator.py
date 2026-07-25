@@ -128,6 +128,82 @@ class Script:
         )
 
 
+_COLOR_MARKUP_RE = re.compile(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]")  # [노랑]…[/] 자막 색
+
+
+def _chunk_by_words(text: str, limit: int) -> List[str]:
+    """단어 경계로 limit자 이하 조각들로 분할 (edit_mode.split_long_subtitles와 동일 규칙)."""
+    chunks: List[str] = []
+    cur = ""
+    for w in text.split():
+        cand = f"{cur} {w}".strip()
+        if len(cand) > limit and cur:
+            chunks.append(cur)
+            cur = w
+        else:
+            cur = cand
+    if cur:
+        chunks.append(cur)
+    fixed: List[str] = []  # 공백 없는 초장문은 단어 분할이 안 됨 → 글자 단위 강제 분할
+    for c in chunks:
+        while len(c) > limit:
+            fixed.append(c[:limit])
+            c = c[limit:]
+        fixed.append(c)
+    return [c for c in fixed if c]
+
+
+def split_long_sentences(script: Script, limit: int = 32) -> Script:
+    """limit(자막 2줄 분량)를 넘는 문장을 단어 경계로 쪼갠 새 Script를 돌려준다.
+
+    AI가 "N자 이내" 규칙을 어겨도 자막이 3줄 이상으로 화면을 덮지 않게 하는
+    안전장치 (v0.77). 문장=클립 1:1 구조라 조각마다 TTS가 따로 합성돼 싱크는
+    자연히 맞는다. 강조어는 그 단어가 든 첫 조각에만, 장면 묘사는 첫 조각에만
+    남긴다(빈칸은 fill_scene_gaps가 이웃으로 채움). 재훅 번호도 새 위치로 재매핑.
+    색 마크업([노랑]…[/])이 든 문장은 쌍이 깨질 수 있어 분할하지 않는다.
+    """
+    if limit <= 0 or not script.sentences:
+        return script
+    sents: List[str] = []
+    hls: List[str] = []
+    scenes: List[str] = []
+    rehook = -1
+    changed = False
+    for i, raw in enumerate(script.sentences):
+        text = (raw or "").strip()
+        hl = script.highlights[i] if i < len(script.highlights) else ""
+        scene = script.scene_prompts[i] if i < len(script.scene_prompts) else ""
+        if i == script.rehook_idx:
+            rehook = len(sents)  # 분할돼도 첫 조각이 재훅 (원래 시점 보존)
+        visible = _COLOR_MARKUP_RE.sub("", text)
+        if len(visible) <= limit or visible != text:  # 짧거나 색 마크업 있음 → 그대로
+            sents.append(text)
+            hls.append(hl)
+            scenes.append(scene)
+            continue
+        changed = True
+        placed_hl = False
+        for j, c in enumerate(_chunk_by_words(text, limit)):
+            sents.append(c)
+            if hl and not placed_hl and hl in c:
+                hls.append(hl)
+                placed_hl = True
+            else:
+                hls.append("")
+            scenes.append(scene if j == 0 else "")
+    if not changed:
+        return script
+    return Script(
+        title=script.title,
+        sentences=sents,
+        highlights=hls,
+        background_prompt=script.background_prompt,
+        hashtags=list(script.hashtags),
+        scene_prompts=scenes,
+        rehook_idx=rehook,
+    )
+
+
 class GeminiScript:
     name = "gemini"
 

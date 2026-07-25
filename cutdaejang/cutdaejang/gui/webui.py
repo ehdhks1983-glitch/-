@@ -1283,8 +1283,9 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         from ..core.orchestrator import build_style  # noqa: PLC0415
         from ..utils import ffmpeg as ff  # noqa: PLC0415
 
-        if layout == "keep":  # 📐 원본 비율로 나눔을 완료 화면에 명시 (v0.76.1 — 혼동 방지)
-            w0 = ("📐 원본 비율로 나눴어요 — 세로 쇼츠(9:16)를 원하면 편집 폼 ①에서 "
+        if layout in ("keep", "wide"):  # 📐 비율을 완료 화면에 명시 (v0.76.1·v0.77 — 혼동 방지)
+            how = "원본 비율" if layout == "keep" else "가로(16:9)"
+            w0 = (f"📐 {how}로 나눴어요 — 세로 쇼츠(9:16)를 원하면 편집 폼 ①에서 "
                   "[쇼츠 (세로 9:16)]을 고르고 다시 만들어 주세요")
             prev = (_get_job(job_id) or {}).get("tts_warn") or ""
             if w0 not in prev:
@@ -3261,7 +3262,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.76.2)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.77.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3668,6 +3669,7 @@ _HTML = """<!doctype html>
           <label>출력 형태</label>
           <div class="toggle">
             <label><input type="radio" name="editLayout" value="shorts" checked><span>쇼츠 (세로 9:16)</span></label>
+            <label><input type="radio" name="editLayout" value="wide"><span>가로 (16:9)</span></label>
             <label><input type="radio" name="editLayout" value="keep"><span>원본 비율 유지</span></label>
           </div>
           <span class="hint hidden" id="layoutAutoHint"></span>
@@ -3797,7 +3799,7 @@ _HTML = """<!doctype html>
       대본으로 만들려면 아래 「📝 대본 직접 넣기」에 대본 여러 벌을 <b>=== 줄로 구분</b>해 넣으세요 (한 벌 = 영상 1개).</div>
     <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:8px">
       <span>📇 제품</span>
-      <select id="genProductSel" style="width:auto;min-width:150px">
+      <select id="genProductSel" style="width:auto;min-width:150px" onchange="onGenProductChange()">
         <option value="">없음 (일반 주제)</option>
       </select>
       <button class="ghost" style="padding:4px 10px;font-size:12.5px" onclick="toggleProductCard()">📇 관리</button>
@@ -4098,6 +4100,10 @@ _HTML = """<!doctype html>
     </details>
 
     <div class="hint" style="margin-top:14px">주제와 목소리만 고르고 [생성 시작]을 누르면 끝 — 완성까지 보통 몇 분 걸려요.</div>
+    <div class="hidden" id="prodBadge" style="margin-top:12px;background:#12305a;border:1px solid #4266d5;border-radius:10px;padding:10px 12px;font-size:13.5px;color:#dfe7f5;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span>📇 <b id="prodBadgeName"></b> 제품 정보로 만들어져요 — 일반 주제로 만들려면 끄세요</span>
+      <button class="ghost" style="padding:4px 10px;font-size:12.5px;border-color:#4266d5" onclick="clearGenProduct(event)">✕ 제품 끄기</button>
+    </div>
     <div style="display:flex;gap:8px">
       <button id="goBtn" style="flex:1" onclick="generate()">🎬 생성 시작</button>
       <button class="ghost" style="white-space:nowrap" onclick="resetGenForm(event)" title="생성 폼의 입력을 기본값으로 되돌립니다">↺ 초기화</button>
@@ -6155,7 +6161,26 @@ async function loadProducts(keep){
     gsel.innerHTML = '<option value="">없음 (일반 주제)</option>';
     window._products.forEach(x => gsel.add(new Option('📇 ' + x.name, x.name)));
     if([...gsel.options].some(o => o.value === cur)) gsel.value = cur;
+    updateProductBadge();
   }
+}
+// 📇 제품 배지 — 제품이 골라져 있으면 [생성 시작] 바로 위에 크게 표시 (v0.77 혼동 방지)
+function updateProductBadge(){
+  const badge = $('prodBadge'); if(!badge) return;
+  const v = (($('genProductSel')||{}).value)||'';
+  if($('prodBadgeName')) $('prodBadgeName').textContent = v;
+  badge.classList.toggle('hidden', !v);
+}
+function onGenProductChange(){
+  updateProductBadge();
+  // 고른 값을 즉시 저장 — "없음"도 저장해서 다음에 옛 제품이 조용히 되살아나지 않게 (v0.77)
+  fetch('/api/settings', {method:'POST', body: JSON.stringify({settings:{ui:{
+    gen_product: (($('genProductSel')||{}).value)||''}}})}).catch(() => {});
+}
+function clearGenProduct(ev){
+  if(ev) ev.preventDefault();
+  const gsel = $('genProductSel'); if(gsel) gsel.value = '';
+  onGenProductChange();
 }
 function fillProductForm(){
   const x = (window._products || []).find(v => v.name === (($('prodSel')||{}).value)) || {};
@@ -6363,6 +6388,8 @@ function resetGenForm(ev){
   if($('genSfxChk')) $('genSfxChk').checked = true;    // v0.53 효과음
   if($('genPunchChk')) $('genPunchChk').checked = true; // v0.55 펀치 줌
   set('genToneSel','기본'); if($('genInfoChk')) $('genInfoChk').checked = true; // v0.56
+  if($('genProductSel')){ $('genProductSel').value = ''; onGenProductChange(); } // 📇 제품 끄기 + 즉시 저장 (v0.77)
+  set('genContext','');
   syncDecorChips();
 }
 
@@ -6788,6 +6815,7 @@ async function poll(){
       window._products.forEach(x => gsel.add(new Option('📇 ' + x.name, x.name)));
       const lastP = ((state.settings || {}).ui || {}).gen_product || '';
       if(lastP && [...gsel.options].some(o => o.value === lastP)) gsel.value = lastP;
+      updateProductBadge();  // 복원된 제품을 배지로 크게 알림 (v0.77)
     }
     // v0.63: 글씨체·기울임 복원 + 설치 목록 반영
     fillFontSels(state.fonts || []);

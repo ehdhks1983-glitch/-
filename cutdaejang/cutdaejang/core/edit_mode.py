@@ -209,12 +209,15 @@ def _denoise_filter(denoise) -> str:
     return DENOISE_LEVELS.get(str(denoise), "")
 
 
+_FIXED_CANVAS = {"shorts": (1080, 1920), "wide": (1920, 1080)}  # 고정 캔버스 형태 (v0.77 가로 추가)
+
+
 def _quality_canvas(layout: str, src_w: int, src_h: int, quality: str):
-    """화질 등급 → (Canvas, crf, preset, sharpen). shorts는 세로 기준, keep은 원본 기준 배수."""
+    """화질 등급 → (Canvas, crf, preset, sharpen). shorts/wide는 고정 캔버스, keep은 원본 기준 배수."""
     q = QUALITY_PRESETS.get(quality, QUALITY_PRESETS["standard"])
-    base_w, base_h = (1080, 1920) if layout == "shorts" else (src_w, src_h)
+    base_w, base_h = _FIXED_CANVAS.get(layout, (src_w, src_h))
     mult = q["mult"]
-    if layout != "shorts" and max(base_w, base_h) > 0:  # keep: 최대 3840 캡
+    if layout not in _FIXED_CANVAS and max(base_w, base_h) > 0:  # keep: 최대 3840 캡
         mult = max(1.0, min(mult, _MAX_DIM / max(base_w, base_h)))
     w = int(round(base_w * mult)) & ~1
     h = int(round(base_h * mult)) & ~1
@@ -226,7 +229,7 @@ def render_edited(
     subtitles: List[Subtitle],
     out_path: str,
     style: Style,
-    layout: str = "shorts",            # "shorts"(세로 1080x1920) | "keep"(원본 비율)
+    layout: str = "shorts",            # "shorts"(세로 1080x1920) | "wide"(가로 1920x1080, v0.77) | "keep"(원본 비율)
     hook: str = "",                    # 상단 제목(훅)
     fonts_dir: str = DEFAULT_FONTS_DIR,
     opts: Optional[RenderOptions] = None,
@@ -297,8 +300,9 @@ def render_edited(
     if tone_f:  # 🎨 화면 톤 (v0.56) — 자막 굽기 직전 (글자는 원색 유지)
         subs_arg = f"{tone_f},{subs_arg}"
     sharp = f",{_SHARPEN[sharpen]}" if sharpen else ""  # 전경만 선명화(자막·블러배경은 제외)
-    if layout == "shorts":
-        # 블러 커버 배경 + 원본 비율 유지 전경 오버레이 (가로영상도 세로로 자연스럽게)
+    if layout in _FIXED_CANVAS:
+        # 고정 캔버스(세로 쇼츠·가로 16:9): 블러 커버 배경 + 원본 비율 유지 전경 오버레이
+        # (가로영상→세로, 세로영상→가로 모두 잘림 없이 자연스럽게)
         vf = (
             f"[0:v]split=2[bg][fg];"
             f"[bg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=increase:flags=lanczos,"

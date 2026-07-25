@@ -22,7 +22,7 @@ from ..spec import Background, Bgm, MainVideo, Style
 from . import background_generator, render_engine, timeline_calculator, tts_engine
 from .render_engine import RenderResult
 from .render_engine.ffmpeg_composer import RenderOptions
-from .script_generator import Script, ScriptParseError
+from .script_generator import Script, ScriptParseError, split_long_sentences
 
 log = logging.getLogger("cutdaejang")
 
@@ -250,6 +250,13 @@ def run_job(
         log.info("%s", msg)
         if status_cb:
             status_cb(msg)
+
+    # 🛡 긴 문장 안전장치 (v0.77) — AI가 글자수 규칙을 어겨도 자막이 3줄+로 화면을 덮지 않게
+    wrap = int(settings["subtitle"].get("wrap_chars", 16) or 16)
+    n0 = len(script.sentences)
+    script = split_long_sentences(script, limit=max(8, wrap * 2))
+    if len(script.sentences) != n0:
+        note(f"🛡 너무 긴 문장을 자막 2줄에 맞게 나눴어요 ({n0}→{len(script.sentences)}문장)")
 
     script_path = job_dir / "script.json"
     script_path.write_text(script.to_json(), encoding="utf-8")
