@@ -243,6 +243,32 @@ def silence_ratio(segments: List[Tuple[int, int]], duration_us: int) -> float:
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
+def photo_sentence_spans(n_images: int, sub_starts_us: List[int],
+                         total_us: int) -> List[Tuple[int, int]]:
+    """사진 ↔ 내레이션 문장 매핑 → [(사진 번호, 지속 μs)] (v0.79 사진-문장 싱크).
+
+    문장 j 블록 = [j 시작, j+1 시작) — 첫 블록은 0부터, 마지막은 total_us까지.
+    사진이 문장보다 많으면 앞쪽 문장 수만큼만 쓰고, 적으면 연속 블록을 묶어 커버.
+    지속 합계는 항상 total_us (내레이션 길이와 영상 길이가 정확히 일치).
+    """
+    m = len(sub_starts_us)
+    if n_images <= 0 or m == 0 or total_us <= 0:
+        return []
+    bounds = [0] + [max(0, int(s)) for s in sub_starts_us[1:]] + [int(total_us)]
+    durs = [max(0, bounds[j + 1] - bounds[j]) for j in range(m)]
+    n = min(n_images, m)
+    spans: List[Tuple[int, int]] = []
+    for i in range(n):
+        lo, hi = i * m // n, (i + 1) * m // n
+        d = sum(durs[lo:hi])
+        if d > 0:
+            spans.append((i, d))
+    gap = int(total_us) - sum(d for _, d in spans)  # 경계 반올림·0블록 보정
+    if spans and gap > 0:
+        spans[-1] = (spans[-1][0], spans[-1][1] + gap)
+    return spans
+
+
 def resolve_photo_inputs(path_str: str) -> List[str]:
     """사진 입력 해석 — 폴더(안의 사진 전부, 이름순) 또는 줄바꿈/세미콜론 구분 파일들."""
     raw = (path_str or "").replace(";", "\n").splitlines()

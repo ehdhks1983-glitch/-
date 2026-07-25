@@ -173,18 +173,22 @@ def parse_article_html(html: str, base_url: str) -> dict:
     imgs: List[str] = []
     seen = set()
     og_img = (p.og.get("image") or "").strip()
-    for u in ([og_img] if og_img else []) + p.image_urls:
+    # 본문에 사진이 있으면 og 대표 이미지는 제외 — 대부분 본문 첫 사진의 리사이즈
+    # 복사본이라 장수가 1장 늘어나는 원인 (v0.79 사용자 리포트: 6장이 7장으로)
+    candidates = p.image_urls if p.image_urls else ([og_img] if og_img else [])
+    for u in candidates:
         u = urllib.parse.urljoin(base_url, u)
         low = u.lower()
         if not low.startswith(("http://", "https://")):
             continue                              # data: URI 등 제외
-        path = urllib.parse.urlparse(low).path
-        if path.endswith(".gif"):
+        parsed = urllib.parse.urlparse(low)
+        if parsed.path.endswith(".gif"):
             continue                              # 움짤·스티커 제외
         if any(h in low for h in _STICKER_HOSTS):
             continue
-        if u not in seen:
-            seen.add(u)
+        key = parsed.netloc + parsed.path         # ?type=w800 같은 크기 쿼리 무시하고 중복 제거
+        if key not in seen:
+            seen.add(key)
             imgs.append(u)
     links = []
     for u in p.links:

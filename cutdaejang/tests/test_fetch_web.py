@@ -51,9 +51,8 @@ def test_parse_naver_smarteditor():
     assert "세럼 후기예요" in d["text"] and "재구매" in d["text"]
     # 컨테이너 밖 텍스트·스크립트는 본문에 안 들어감
     assert "본문 아님" not in d["text"] and "추천글" not in d["text"] and "쿠팡에서" not in d["text"]
-    # og 대표 이미지 먼저 + lazy-src 우선(placeholder src 무시), gif·스티커 제외
-    assert d["image_urls"] == ["https://m.blog.naver.com/og_main.jpg",
-                               "https://m.blog.naver.com/photo1.jpg?type=w800"]
+    # 본문 사진이 있으면 og 대표 이미지 제외(리사이즈 중복 방지, v0.79) + lazy-src 우선 + gif·스티커 제외
+    assert d["image_urls"] == ["https://m.blog.naver.com/photo1.jpg?type=w800"]
     # 제휴·상품 링크만 수집 (일반 링크 제외)
     assert d["links"] == ["https://link.coupang.com/a/xyz123",
                           "https://smartstore.naver.com/shop/products/1"]

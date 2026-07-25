@@ -598,10 +598,12 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             _set_job(job_id, status="failed",
                      errors=[f"녹음 파일을 찾을 수 없습니다: {narr_file}"])
             return
+        photo_imgs: list = []  # 📸 사진 목록 — 렌더 때 문장 타이밍 재배치용 (v0.79)
         if photo_path:  # 📸 사진들 → 슬라이드쇼 영상 (장수로 전체 길이 균등 분배)
             from ..core.video_editor import photos_to_video, resolve_photo_inputs  # noqa: PLC0415
             try:
                 imgs = resolve_photo_inputs(photo_path)
+                photo_imgs = list(imgs)
                 try:
                     photo_sec = float(params.get("photo_sec") or 15)
                 except (TypeError, ValueError):
@@ -811,6 +813,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          # 자막만 모드면 대본은 쓰되 목소리(TTS)는 넣지 않음
                          "denoise": denoise,
                          "narration": (bool(narr_topic) or narr_analyze or script_tts) and not narr_subs_only,
+                         "photo_files": photo_imgs,  # 📸 문장 타이밍 재배치용 (v0.79)
                          "narr_file": narr_file,  # 🎤 녹음 내레이션 (v0.58)
                          "narr_voice": (params.get("narr_voice") or "").strip(),
                          "narr_style": (params.get("narr_style") or "").strip(),
@@ -1171,7 +1174,40 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             if sync_note:
                 note = f"{note} · {sync_note}" if note else sync_note
             narr_end_us = subs[-1].end_us + 700_000 if subs else cut_us
-            if narr_fit in ("freeze", "loop") and narr_end_us > cut_us + 50_000:
+            # 📸→🗣 사진을 문장 타이밍에 맞춰 재배치 (v0.79) — 예상 길이가 어긋나면
+            # 꼬리 트림으로 뒤쪽 사진이 통째로 사라지고 내레이션과 안 맞던 문제 해결
+            photo_synced = False
+            photo_files = [p for p in (ep.get("photo_files") or []) if Path(p).is_file()]
+            if photo_files and subs:
+                try:
+                    import traceback as _tb  # noqa: PLC0415
+
+                    from ..core import background_generator as bg_gen  # noqa: PLC0415
+                    from ..spec import Canvas  # noqa: PLC0415
+                    _set_job(job_id, stage="cut", note="사진을 내레이션 문장 타이밍에 맞춰 배치 중…")
+                    spans = video_editor.photo_sentence_spans(
+                        len(photo_files), [s.start_us for s in subs], narr_end_us)
+                    if spans:
+                        cw, ch = (1920, 1080) if layout == "wide" else (1080, 1920)
+                        synced_path = str(Path(workdir) / job_id / "photo_sync.mp4")
+                        bg_gen.scene_slideshow(
+                            [(photo_files[i], d) for i, d in spans], synced_path,
+                            Canvas(w=cw, h=ch, fps=30))
+                        cut_video = synced_path
+                        cut_us = ff.probe_duration_us(cut_video)
+                        photo_synced = True
+                        used = len({i for i, _ in spans})
+                        w3 = f"📸 사진 {used}장을 내레이션 문장 타이밍에 맞춰 배치했어요"
+                        if used < len(photo_files):
+                            w3 += f" (문장 수보다 많은 사진 {len(photo_files) - used}장은 뺐어요)"
+                        prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                        _set_job(job_id, tts_warn=f"{prev} · {w3}" if prev else w3)
+                except Exception:  # noqa: BLE001 — 실패 시 기존 늘림/트림 방식으로 계속
+                    logging.getLogger("cutdaejang").warning(
+                        "사진-문장 싱크 배치 실패 → 기본 방식 사용\n%s", _tb.format_exc())
+            if photo_synced:
+                pass  # 길이가 내레이션과 정확히 일치 — 늘림/트림 불필요
+            elif narr_fit in ("freeze", "loop") and narr_end_us > cut_us + 50_000:
                 # v0.42: 내레이션이 더 길면 영상을 늘려 전 문장을 담는다 (정지/반복)
                 extra_s = (narr_end_us - cut_us) / 1e6
                 _set_job(job_id, stage="cut", note="내레이션 길이에 맞춰 영상을 늘리는 중…")
@@ -1621,6 +1657,8 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int) -> None:
             "script_lines": summ.get("sentences") or [],
             "hashtags": summ.get("hashtags") or [],
             "images": art["images"],
+            # 🖼 브라우저 미리보기 주소 (v0.79) — /weblink/<해시>/<파일>
+            "previews": [f"/weblink/{dest.name}/{Path(pth).name}" for pth in art["images"]],
             "links": art["links"],
             "text_excerpt": (art["text"] or "")[:2000],
             "text": art["text"],
@@ -1883,6 +1921,16 @@ class _Handler(BaseHTTPRequestHandler):
                 self._serve_file(str(p))
             else:
                 self._send_json({"error": "장면 이미지 없음"}, 404)
+        elif path.startswith("/weblink/"):  # 🔗 가져온 글 사진 미리보기 (v0.79)
+            import re as _re  # noqa: PLC0415
+
+            m = _re.match(r"^/weblink/([0-9a-f]{8})/(img_\d{2}\.(?:jpg|jpeg|png|webp|bmp))$", path)
+            p = (Path(self.server.workdir) / "weblink" / m.group(1) / m.group(2)  # type: ignore[attr-defined]
+                 ) if m else None
+            if p and p.is_file():
+                self._serve_file(str(p))
+            else:
+                self._send_json({"error": "사진 없음"}, 404)
         elif path.startswith("/thumbnail/"):
             job = _get_job(path.split("/", 2)[2])
             tp = job.get("thumbnail") if job else None
@@ -3342,7 +3390,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.78.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.79.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3364,6 +3412,10 @@ _HTML = """<!doctype html>
       <button class="modecard" onclick="openMode('photo')">
         <span class="mc-emoji">📸</span><span class="mc-title">사진으로 영상</span>
         <span class="mc-desc">사진 몇 장이면<br>내레이션 넣은 영상 완성</span>
+      </button>
+      <button class="modecard" onclick="openMode('weblink')">
+        <span class="mc-emoji">🔗</span><span class="mc-title">블로그 글로 만들기</span>
+        <span class="mc-desc">내 블로그 글 주소만 넣으면<br>사진+내레이션 홍보 영상</span>
       </button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
@@ -3404,15 +3456,7 @@ _HTML = """<!doctype html>
 
     <div id="photoBlock" class="hidden">
       <div class="steplabel"><span class="stepnum">1</span>사진 고르기</div>
-      <div style="background:#12305a;border:1px solid #2c4a7a;border-radius:10px;padding:10px 12px;margin-bottom:10px">
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <input type="text" id="weblinkUrl" style="flex:1;min-width:220px" placeholder="🔗 블로그 글 주소 붙여넣기 (네이버 블로그 권장) — 글·사진을 자동으로 가져와요">
-          <button class="ghost" style="white-space:nowrap;border-color:#4266d5" id="weblinkBtn" onclick="loadWeblink(event)">🔗 글 가져오기</button>
-          <button class="ghost hidden" style="white-space:nowrap" id="weblinkProdBtn" onclick="saveWeblinkProduct(event)" title="가져온 글에서 제품 정보를 정리해 「📇 내 제품 정보」에 저장 — AI 영상 만들기에서도 이 제품 근거로 대본을 써요">📇 이 글로 제품 프로필 저장</button>
-        </div>
-        <div class="hint" id="weblinkHint">내가 쓴 블로그 글(상품 소개·후기)을 붙여넣으면 사진과 대본이 아래에 자동으로 채워져요.
-          쿠팡·네이버쇼핑 상품 페이지는 접근이 막혀 있으니 <b>상품을 소개한 블로그 글 주소</b>를 넣어주세요.</div>
-      </div>
+      <div class="hint" style="margin-bottom:6px">💡 블로그 글에서 사진·대본을 가져오려면 첫 화면의 <b>[🔗 블로그 글로 만들기]</b>를 쓰세요.</div>
       <div style="display:flex;gap:8px">
         <input type="text" id="photoPath" style="flex:1" placeholder="사진 파일들(세미콜론 구분) 또는 폴더 경로">
         <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','images')">🖼 사진 고르기 (여러 장)</button>
@@ -4203,6 +4247,39 @@ _HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="card hidden" id="weblinkCard">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <button class="ghost" onclick="showHome(event)">← 처음으로</button>
+      <b>🔗 블로그 글로 만들기</b>
+    </div>
+    <div class="hint">내가 쓴 블로그 글(상품 소개·후기) 주소를 넣으면 글 속 <b>사진</b>과 <b>대본</b>을 가져와
+      AI 목소리 내레이션 영상으로 만들어요. ⚠ 쿠팡·네이버쇼핑 <b>상품 페이지</b> 주소는 쇼핑몰이 막아서 안 돼요
+      — 꼭 <b>상품을 소개한 블로그 글</b> 주소를 넣어주세요 (네이버 블로그 권장).</div>
+    <div class="steplabel"><span class="stepnum">1</span>블로그 글 주소</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input type="text" id="weblinkUrl" style="flex:1;min-width:220px" placeholder="예) https://blog.naver.com/아이디/글번호">
+      <button class="ghost" style="white-space:nowrap;border-color:#4266d5" id="weblinkBtn" onclick="loadWeblink(event)">🔗 글 가져오기</button>
+    </div>
+    <div class="hint" id="weblinkHint"></div>
+    <div id="wlPreview" class="hidden">
+      <div class="steplabel"><span class="stepnum">2</span>사진 확인 <span class="hint">— 체크를 끄면 그 사진은 영상에서 빠져요 (순서 = 문장 순서)</span></div>
+      <div id="wlGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px"></div>
+      <div class="steplabel"><span class="stepnum">3</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄 = 사진 한 장 타이밍. AI 목소리가 읽어요</span></div>
+      <textarea id="wlScript" style="min-height:110px"></textarea>
+      <div class="chk" style="gap:8px"><span>훅 제목</span><input type="text" id="wlHook" style="flex:1" placeholder="영상 상단에 크게 붙는 제목"></div>
+      <div class="chk" style="gap:8px">
+        <span>목소리</span>
+        <select id="wlVoiceSel" style="width:auto;min-width:200px"></select>
+        <span class="hint">— 🎙 AI 내레이션과 같은 목록 (제미나이 키가 있어야 적용)</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="wlGoBtn" style="flex:1;min-width:200px" onclick="startWeblinkSafe()">🎬 영상 만들기</button>
+        <button class="ghost" id="weblinkProdBtn" onclick="saveWeblinkProduct(event)" title="가져온 글에서 제품 정보를 AI로 정리해 「📇 내 제품 정보」에 저장 — 글 속 제휴 링크도 자동으로 넣어줘요">📇 제품 프로필 저장</button>
+      </div>
+      <div class="hint">만들면 자막 검토 화면이 나와요 — 확인 후 [완성]을 누르면 <b>사진이 문장 타이밍에 맞춰</b> 넘어갑니다.</div>
+    </div>
+  </div>
+
   <div class="card hidden" id="statusCard">
     <div id="statusTitle" style="font-weight:700"></div>
     <div class="bar"><div id="barFill"></div></div>
@@ -4851,11 +4928,13 @@ function pick(name){ return document.querySelector(`input[name=${name}]:checked`
 
 // ── 첫 화면(홈) ↔ 만들기 폼 전환 (v0.36 초보자 UI) ──
 function openMode(kind){
-  window._view = kind;                       // 'gen' | 'edit' | 'photo'
+  window._view = kind;                       // 'gen' | 'edit' | 'photo' | 'weblink'
   $('homeCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
+  $('weblinkCard').classList.toggle('hidden', kind !== 'weblink');  // 🔗 전용 탭 (v0.79)
   $('formCard').classList.toggle('hidden', kind !== 'gen');
-  $('editCard').classList.toggle('hidden', kind === 'gen');
+  $('editCard').classList.toggle('hidden', kind === 'gen' || kind === 'weblink');
+  if(kind === 'weblink'){ initWeblinkCard(); return; }
   if(kind !== 'gen'){
     window._editKind = kind;
     $('videoBlock').classList.toggle('hidden', kind === 'photo');
@@ -4873,6 +4952,7 @@ function showHome(ev){
   $('formCard').classList.add('hidden');
   $('editCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
+  $('weblinkCard').classList.add('hidden');
 }
 // ── 🎤 내 목소리 등록 전용 화면 (v0.37) — 어디서 열었든 [← 돌아가기]로 복귀 ──
 function openVoice(ev){
@@ -4881,6 +4961,7 @@ function openVoice(ev){
   $('homeCard').classList.add('hidden');
   $('formCard').classList.add('hidden');
   $('editCard').classList.add('hidden');
+  $('weblinkCard').classList.add('hidden');
   $('voiceCard').classList.remove('hidden');
   window._view = 'voice';
 }
@@ -4888,7 +4969,7 @@ function closeVoice(ev){
   if(ev) ev.preventDefault();
   $('voiceCard').classList.add('hidden');
   const r = window._voiceReturn;
-  if(r === 'gen' || r === 'edit' || r === 'photo') openMode(r); else showHome();
+  if(r === 'gen' || r === 'edit' || r === 'photo' || r === 'weblink') openMode(r); else showHome();
 }
 function markMyVoice(){
   for(const id of ['myVoiceState', 'myVoiceStateNarr', 'homeVoiceState']){
@@ -6905,25 +6986,91 @@ async function loadWeblink(ev){
   finally { btn.disabled = false; btn.textContent = old; }
 }
 
+function initWeblinkCard(){
+  // 목소리 목록: 🎙 내레이션 셀렉트와 동일하게 (상태 로드 때 채워짐)
+  const nv = $('narrVoiceSel'), wl = $('wlVoiceSel');
+  if(nv && wl && nv.options.length && wl.options.length !== nv.options.length){
+    const cur = wl.value;
+    wl.innerHTML = nv.innerHTML;
+    wl.value = [...wl.options].some(o => o.value === cur) && cur ? cur : nv.value;
+  }
+}
+
 function applyWeblink(r){
   const imgs = r.images || [], lines = r.script_lines || [];
-  if($('photoPath')) $('photoPath').value = imgs.join(';');
-  if($('editScript')){ $('editScript').value = lines.join('\\n'); onScriptInput(); }
-  const os = $('optScript'); if(os && lines.length) os.open = true;
-  if($('scriptTtsChk')) $('scriptTtsChk').checked = lines.length > 0;  // 목소리 내레이션 기본 켬
-  if($('editHook') && (r.hook || r.title)){ $('editHook').value = r.hook || r.title; renderHookPreview(); }
-  if($('photoSec') && lines.length){  // 문장당 약 4초 페이스 제안 (내레이션 길이가 최종 결정)
-    $('photoSec').value = Math.max(10, Math.min(180, Math.round(lines.length * 4)));
+  // 🖼 사진 미리보기 그리드 — 체크 해제 = 영상에서 제외 (v0.79)
+  const grid = $('wlGrid');
+  if(grid){
+    grid.innerHTML = '';
+    (r.previews || []).forEach((u, i) => {
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:block;cursor:pointer;background:#0f1117;border:1px solid #2c3347;border-radius:10px;padding:6px';
+      const img = document.createElement('img');
+      img.src = u; img.loading = 'lazy';
+      img.style.cssText = 'width:100%;height:110px;object-fit:cover;border-radius:6px;display:block';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px;color:#cdd3e0';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = true; cb.dataset.i = i;
+      row.appendChild(cb); row.appendChild(document.createTextNode((i + 1) + '번'));
+      lab.appendChild(img); lab.appendChild(row);
+      grid.appendChild(lab);
+    });
   }
+  if($('wlScript')) $('wlScript').value = lines.join('\\n');
+  if($('wlHook')) $('wlHook').value = r.hook || r.title || '';
+  const pv = $('wlPreview'); if(pv) pv.classList.remove('hidden');
   const h = $('weblinkHint');
   if(h){
-    let msg = '✅ <b>사진 ' + imgs.length + '장 · 대본 ' + lines.length + '문장</b>을 채웠어요 — 아래에서 확인·수정하고 [✂️ 만들기 시작]을 누르세요.';
-    if((r.links||[]).length) msg += ' 🛒 글에서 상품 링크도 찾았어요 — [📇 이 글로 제품 프로필 저장]을 누르면 기억해 둬요.';
+    let msg = '✅ <b>사진 ' + imgs.length + '장 · 대본 ' + lines.length + '문장</b>을 가져왔어요 — 아래에서 확인하고 [🎬 영상 만들기]를 누르세요.';
+    if((r.links||[]).length) msg += ' 🛒 글에서 상품 링크도 찾았어요 — [📇 제품 프로필 저장]을 누르면 기억해 둬요.';
     (r.notes||[]).forEach(n => { msg += '<br>ℹ ' + n; });
     h.innerHTML = msg;
   }
   const pb = $('weblinkProdBtn'); if(pb) pb.classList.remove('hidden');
 }
+
+async function startWeblink(){
+  const r = window._weblink || {};
+  const all = r.images || [];
+  const imgs = all.filter((_, i) => {
+    const c = document.querySelector('#wlGrid input[data-i="' + i + '"]');
+    return !c || c.checked;
+  });
+  if(!imgs.length){ alert('사진을 1장 이상 남겨주세요'); return; }
+  const NL = String.fromCharCode(10);
+  const lines = ($('wlScript').value || '').split(NL).map(s => s.trim()).filter(Boolean);
+  if(!lines.length){ alert('대본이 비어 있어요 — 한 줄에 한 문장씩 넣어주세요'); return; }
+  let key = '';
+  if(!window._hasGeminiKey) key = ensureGeminiKey();  // 보이스 적용용 (없어도 내장 음성으로 진행)
+  const body = {
+    photo_path: imgs.join(';'),
+    photo_sec: Math.max(10, Math.min(180, Math.round(lines.length * 4))),
+    layout: 'shorts', quality: 'standard',
+    script: lines.join(NL), script_tts: true,      // 🔊 대본을 목소리로
+    hook: ($('wlHook')||{}).value || '',
+    narr_voice: ($('wlVoiceSel')||{}).value || '',
+    auto_subtitle: false, cut_silence: false,
+    bgm: ($('bgmEditSel')||{}).value || '',        // 편집 폼에서 고른 BGM 있으면 같이
+    gemini_key: key, save_key: true,
+  };
+  const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
+  const data = await res.json();
+  if(data.error){ alert(data.error); return; }
+  currentJob = data.job_id;
+  window._jobMode = 'edit';
+  window._subLoaded = false;
+  window._kitLoaded = false;
+  $('kitBox').classList.add('hidden'); $('kitBody').classList.add('hidden');
+  $('weblinkCard').classList.add('hidden');   // 진행 화면에 집중
+  $('statusCard').classList.remove('hidden');
+  $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  $('subEditBox').classList.add('hidden');
+  $('rawErr').classList.add('hidden'); $('noteText').textContent='';
+  poll();
+  timer = setInterval(poll, 900);
+}
+async function startWeblinkSafe(){ try{ await startWeblink(); }catch(e){ reportUiError('영상 만들기', e); } }
 
 async function saveWeblinkProduct(ev){
   ev.preventDefault();
