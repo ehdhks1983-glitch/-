@@ -634,6 +634,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
         has_script = any(ln.strip() for ln in script_lines)
         narr_topic = "" if narr_file else (params.get("narr_topic") or "").strip()
         narr_analyze = bool(params.get("narr_analyze")) and not narr_file  # 🧠 화면 분석 대본 (v0.69)
+        # 🔊 붙여넣은 대본을 AI 목소리로 읽기 (v0.78) — 주제·녹음·화면분석 내레이션이 우선
+        script_tts = (has_script and bool(params.get("script_tts"))
+                      and not narr_file and not narr_topic and not narr_analyze)
         stt = None
         if auto_subtitle and not has_script and not narr_topic and not narr_file and not narr_analyze:
             # 대본/내레이션(AI·녹음) 있으면 원본 영상 STT 생략
@@ -807,14 +810,15 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "hook": (params.get("hook") or "").strip(),
                          # 자막만 모드면 대본은 쓰되 목소리(TTS)는 넣지 않음
                          "denoise": denoise,
-                         "narration": (bool(narr_topic) or narr_analyze) and not narr_subs_only,
+                         "narration": (bool(narr_topic) or narr_analyze or script_tts) and not narr_subs_only,
                          "narr_file": narr_file,  # 🎤 녹음 내레이션 (v0.58)
                          "narr_voice": (params.get("narr_voice") or "").strip(),
                          "narr_style": (params.get("narr_style") or "").strip(),
                          "narr_fit": params.get("narr_fit") or "freeze",
                          # 원본 소리: 목소리를 얹을 때만 기본 무음 (자막만이면 유지)
                          "orig_audio": params.get("orig_audio")
-                         or ("mute" if ((narr_topic or narr_analyze) and not narr_subs_only) or narr_file
+                         or ("mute" if ((narr_topic or narr_analyze or script_tts)
+                                        and not narr_subs_only) or narr_file
                              else "keep"),
                          "bgm": (params.get("bgm") or "").strip(),
                          "bgm_db": params.get("bgm_db"),
@@ -872,7 +876,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             except (TypeError, ValueError):
                 auto_speed = 1.0
             multi = bool(params.get("auto_multi")) and not photo_path
-            if multi and (narr_topic or narr_file or narr_analyze):  # 내레이션은 영상 전체 기준 → 분할과 배타
+            if multi and (narr_topic or narr_file or narr_analyze or script_tts):  # 내레이션은 영상 전체 기준 → 분할과 배타
                 multi = False
                 prev = (_get_job(job_id) or {}).get("tts_warn") or ""
                 w = "ℹ 내레이션과 '여러 개로 나누기'는 함께 쓸 수 없어 1개로 만들었어요"
@@ -886,7 +890,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             # 내레이션 대본은 이미 목표 길이로 새로 쓴 글 → 핵심 선별로 또 자르지 않음
             # (🧠 화면분석 대본도 길이를 이미 정했으므로 재차 자르지 않음 — v0.71)
             climax = -1  # ⚡ 콜드오픈 티저 후보 (v0.75)
-            if subs_d and tgt > 0 and not narr_topic and not narr_file and not narr_analyze:
+            if subs_d and tgt > 0 and not narr_topic and not narr_file and not narr_analyze and not script_tts:
                 _set_job(job_id, note=f"핵심 구간 골라 {tgt}초 쇼츠 구성 중…")
                 try:
                     pick = sg.suggest_highlights(subs_d, target_sec=tgt)
@@ -1579,6 +1583,62 @@ def _prepare_scenes(job_id: str, script: Script, params: dict, workdir: str) -> 
 
 
 _BGM_TASK = {"running": False, "msg": ""}  # 🎵 무료 BGM 받기 진행 상태 (v0.50.1)
+
+_WEBLINK_TASK = {"running": False, "msg": "", "result": None, "error": ""}  # 🔗 글 가져오기 (v0.78)
+
+
+def _fetch_weblink_bg(url: str, workdir: str, target_sec: int) -> None:
+    """🔗 블로그 글 수집 → (키 있으면) AI 대본 요약 — 백그라운드 싱글턴 (v0.78)."""
+    import hashlib as _hl  # noqa: PLC0415
+
+    from ..core import script_generator as sg  # noqa: PLC0415
+    from ..tools import fetch_web  # noqa: PLC0415
+
+    log = logging.getLogger("cutdaejang")
+    try:
+        norm = fetch_web.normalize_url(url)
+        dest = Path(workdir) / "weblink" / _hl.sha1(norm.encode("utf-8")).hexdigest()[:8]
+
+        def say(msg: str) -> None:
+            _WEBLINK_TASK["msg"] = msg
+
+        art = fetch_web.fetch_article(norm, dest, progress_cb=say)
+        say("대본으로 정리하는 중…")
+        try:
+            summ = sg.summarize_article(art["title"], art["text"], target_sec=target_sec)
+            summ_src = "AI"
+        except Exception as se:  # noqa: BLE001 — 키 없음·응답 오류: 원문 문장 폴백
+            log.warning("글 요약 AI 실패 → 원문 문장 사용: %s", se)
+            summ = sg.summarize_article_stub(art["title"], art["text"], target_sec=target_sec)
+            summ_src = "원문 문장"
+        notes = list(art["notes"])
+        if summ_src != "AI":
+            notes.append("제미나이 키가 없거나 요약에 실패해 원문 문장을 그대로 대본으로 넣었어요"
+                         " — 검토 화면에서 다듬어 주세요")
+        result = {
+            "title": summ.get("title") or art["title"],
+            "hook": summ.get("hook") or "",
+            "script_lines": summ.get("sentences") or [],
+            "hashtags": summ.get("hashtags") or [],
+            "images": art["images"],
+            "links": art["links"],
+            "text_excerpt": (art["text"] or "")[:2000],
+            "text": art["text"],
+            "source_url": art["source_url"],
+            "notes": notes,
+        }
+        _WEBLINK_TASK.update(running=False, error="",
+                             msg=f"완료 — 사진 {len(art['images'])}장 · 대본 "
+                                 f"{len(result['script_lines'])}문장 ({summ_src})",
+                             result=result)
+    except ValueError as ve:                      # 사용자에게 그대로 보여줄 안내
+        _WEBLINK_TASK.update(running=False, result=None, msg="", error=str(ve)[:300])
+    except Exception as e:  # noqa: BLE001
+        import traceback  # noqa: PLC0415
+
+        log.error("웹링크 수집 실패\n%s", traceback.format_exc())
+        _WEBLINK_TASK.update(running=False, result=None, msg="",
+                             error=f"글 가져오기에 실패했어요: {str(e)[:200]}")
 
 
 def _fetch_bgm_bg() -> None:
@@ -2468,6 +2528,25 @@ class _Handler(BaseHTTPRequestHandler):
                 _BGM_TASK.update(running=True, msg="무료 BGM 받기 시작…")
             threading.Thread(target=_fetch_bgm_bg, daemon=True).start()
             self._send_json({"ok": True})
+        elif path == "/api/fetch_url":  # 🔗 블로그 글 가져오기 (v0.78)
+            _apply_keys(params)  # 제미나이 키 → AI 대본 요약에 사용
+            url = (params.get("url") or "").strip()
+            if not url.startswith(("http://", "https://")):
+                self._send_json({"error": "글 주소가 올바르지 않아요 — http로 시작하는 주소를 붙여넣어 주세요"}, 400)
+                return
+            try:
+                target_sec = max(15, min(180, int(params.get("target_sec") or 45)))
+            except (TypeError, ValueError):
+                target_sec = 45
+            with _LOCK:
+                if _WEBLINK_TASK["running"]:
+                    self._send_json({"ok": True, "already": True})
+                    return
+                _WEBLINK_TASK.update(running=True, msg="글 여는 중…", result=None, error="")
+            threading.Thread(target=_fetch_weblink_bg,
+                             args=(url, self.server.workdir, target_sec),
+                             daemon=True).start()
+            self._send_json({"ok": True})
         elif path == "/api/template":  # 📋 편집 세팅 템플릿 (v0.43)
             name = (params.get("name") or "").strip()[:40]
             if not name:
@@ -2984,6 +3063,7 @@ class _Handler(BaseHTTPRequestHandler):
             "styles": list(STYLE_INSTRUCTIONS),
             "stt_available": _stt_available(),
             "bgm_fetch": dict(_BGM_TASK),
+            "weblink_fetch": dict(_WEBLINK_TASK),  # 🔗 글 가져오기 진행/결과 (v0.78)
             "logs": list(_LOG_BUF)[-120:],
         }
 
@@ -3262,7 +3342,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.77.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.78.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -3324,6 +3404,15 @@ _HTML = """<!doctype html>
 
     <div id="photoBlock" class="hidden">
       <div class="steplabel"><span class="stepnum">1</span>사진 고르기</div>
+      <div style="background:#12305a;border:1px solid #2c4a7a;border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="weblinkUrl" style="flex:1;min-width:220px" placeholder="🔗 블로그 글 주소 붙여넣기 (네이버 블로그 권장) — 글·사진을 자동으로 가져와요">
+          <button class="ghost" style="white-space:nowrap;border-color:#4266d5" id="weblinkBtn" onclick="loadWeblink(event)">🔗 글 가져오기</button>
+          <button class="ghost hidden" style="white-space:nowrap" id="weblinkProdBtn" onclick="saveWeblinkProduct(event)" title="가져온 글에서 제품 정보를 정리해 「📇 내 제품 정보」에 저장 — AI 영상 만들기에서도 이 제품 근거로 대본을 써요">📇 이 글로 제품 프로필 저장</button>
+        </div>
+        <div class="hint" id="weblinkHint">내가 쓴 블로그 글(상품 소개·후기)을 붙여넣으면 사진과 대본이 아래에 자동으로 채워져요.
+          쿠팡·네이버쇼핑 상품 페이지는 접근이 막혀 있으니 <b>상품을 소개한 블로그 글 주소</b>를 넣어주세요.</div>
+      </div>
       <div style="display:flex;gap:8px">
         <input type="text" id="photoPath" style="flex:1" placeholder="사진 파일들(세미콜론 구분) 또는 폴더 경로">
         <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','images')">🖼 사진 고르기 (여러 장)</button>
@@ -3606,6 +3695,10 @@ _HTML = """<!doctype html>
       <textarea id="editScript" oninput="onScriptInput()" style="min-height:64px"
         placeholder="대본이 있으면 여기 붙여넣기 (한 줄 = 자막 한 줄)&#10;예)&#10;오늘은 라멘 맛집을 소개합니다&#10;가격은 육천구백원이에요&#10;&#10;비우면 영상 소리에서 자동으로 자막을 인식합니다"></textarea>
       <div class="hint" id="scriptHint">붙여넣으면 <b>음성 인식을 건너뛰고</b> 이 대본을 영상 타이밍에 맞춰 자막으로 넣어요 (오인식·비용 없음). 내레이션 없는 영상에도 쓸 수 있어요.</div>
+      <label class="chk" style="gap:8px">
+        <input type="checkbox" id="scriptTtsChk">
+        <span>🔊 <b>이 대본을 AI 목소리로 읽어주기</b> <span class="hint">— 사진 영상·무음 영상에 내레이션을 입혀요. 목소리는 🎙️ AI 내레이션의 보이스 선택을 따라요 (주제 입력·녹음 내레이션과 함께는 안 돼요)</span></span>
+      </label>
     </details>
 
     <details class="opt" id="optAdv">
@@ -4991,7 +5084,9 @@ async function startEdit(){
   // 내레이션 보이스는 제미나이 키가 있어야 적용 — 없으면 여기서 물어봐 저장
   const subsOnly = ($('narrSubsOnly')||{}).checked;
   const wantAnalyze = !narrFileMode && !!(($('narrAnalyzeChk')||{}).checked);
-  if(!narrFileMode && ((($('narrTopic')||{}).value||'').trim() || wantAnalyze) && !window._hasGeminiKey && !editKey){
+  const wantScriptTts = !narrFileMode && !!(($('scriptTtsChk')||{}).checked)
+    && !!(($('editScript')||{}).value||'').trim();   // 🔊 대본 읽어주기 (v0.78)
+  if(!narrFileMode && ((($('narrTopic')||{}).value||'').trim() || wantAnalyze || wantScriptTts) && !window._hasGeminiKey && !editKey){
     editKey = ensureGeminiKey();   // 대본 품질(+목소리)에 필요 — 화면 분석은 키 필수
     if(wantAnalyze && !editKey){ alert('🧠 화면 보고 대본 자동은 제미나이 키가 꼭 필요해요 (무료 발급: aistudio.google.com/apikey)'); return; }
     if(!editKey && !subsOnly && nv && nv !== '__mine__' && nv !== '__sovits__'
@@ -5032,6 +5127,7 @@ async function startEdit(){
     auto_edit: pick('editFinish') === 'auto', auto_target_sec: +$('autoTargetSec').value||0,
     auto_multi: (($('autoMultiSel')||{}).value) === 'multi',
     script: $('editScript').value,
+    script_tts: !!(($('scriptTtsChk')||{}).checked),  // 🔊 붙여넣은 대본을 목소리로 (v0.78)
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
     gemini_key: editKey, save_key: true,
   };
@@ -6355,6 +6451,8 @@ function resetEditForm(ev){
   set('autoMultiSel','one'); set('autoQualitySel','standard');
   chk('editColdOpen',false); chk('editHookVoice',false);  // 🪝 훅 팩 (v0.75)
   chk('editFillerCut',false); chk('editTakeClean',false);  // 🧹 말 다듬기 (v0.76)
+  set('weblinkUrl',''); chk('scriptTtsChk',false); window._weblink = null;  // 🔗 링크 채우기 (v0.78)
+  const wpb = $('weblinkProdBtn'); if(wpb) wpb.classList.add('hidden');
   onFinishChange(); applyTargetPreset(); onAutoMultiChange();
   const st = $('sttSel'); if(st && st.options.length) st.selectedIndex = 0;
   set('whisperModelSel','small'); window._wantStt = '';
@@ -6755,6 +6853,77 @@ async function fetchBgm(ev){
     }
   } catch(e){ alert('받기 중 오류: ' + e); }
   finally { btn.disabled = false; btn.textContent = '⬇ 무료 BGM 받기'; }
+}
+
+// ── 🔗 블로그 글로 사진 영상 채우기 (v0.78) ──
+async function loadWeblink(ev){
+  ev.preventDefault();
+  const url = (($('weblinkUrl')||{}).value||'').trim();
+  if(!url){ alert('블로그 글 주소를 먼저 붙여넣어 주세요'); return; }
+  const btn = $('weblinkBtn'); btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '가져오는 중…';
+  try{
+    const key = ensureGeminiKey();  // 대본 요약용 — 없으면 원문 문장으로 폴백
+    const d = await (await fetch('/api/fetch_url', {method:'POST',
+      body: JSON.stringify({url, target_sec: 45, gemini_key: key, save_key: true})})).json();
+    if(d.error){ alert(d.error); return; }
+    while(true){
+      await new Promise(s => setTimeout(s, 1500));
+      const st = await (await fetch('/api/state')).json();
+      const t = st.weblink_fetch || {};
+      if(t.running){ btn.textContent = (t.msg || '가져오는 중…').slice(0, 22); continue; }
+      if(t.error){ alert(t.error); break; }
+      window._weblink = t.result || {};
+      applyWeblink(window._weblink);
+      break;
+    }
+  } catch(e){ alert('가져오기 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+function applyWeblink(r){
+  const imgs = r.images || [], lines = r.script_lines || [];
+  if($('photoPath')) $('photoPath').value = imgs.join(';');
+  if($('editScript')){ $('editScript').value = lines.join('\\n'); onScriptInput(); }
+  const os = $('optScript'); if(os && lines.length) os.open = true;
+  if($('scriptTtsChk')) $('scriptTtsChk').checked = lines.length > 0;  // 목소리 내레이션 기본 켬
+  if($('editHook') && (r.hook || r.title)){ $('editHook').value = r.hook || r.title; renderHookPreview(); }
+  if($('photoSec') && lines.length){  // 문장당 약 4초 페이스 제안 (내레이션 길이가 최종 결정)
+    $('photoSec').value = Math.max(10, Math.min(180, Math.round(lines.length * 4)));
+  }
+  const h = $('weblinkHint');
+  if(h){
+    let msg = '✅ <b>사진 ' + imgs.length + '장 · 대본 ' + lines.length + '문장</b>을 채웠어요 — 아래에서 확인·수정하고 [✂️ 만들기 시작]을 누르세요.';
+    if((r.links||[]).length) msg += ' 🛒 글에서 상품 링크도 찾았어요 — [📇 이 글로 제품 프로필 저장]을 누르면 기억해 둬요.';
+    (r.notes||[]).forEach(n => { msg += '<br>ℹ ' + n; });
+    h.innerHTML = msg;
+  }
+  const pb = $('weblinkProdBtn'); if(pb) pb.classList.remove('hidden');
+}
+
+async function saveWeblinkProduct(ev){
+  ev.preventDefault();
+  const r = window._weblink || {};
+  const rawText = r.text || r.text_excerpt || '';
+  if(!rawText){ alert('먼저 [🔗 글 가져오기]로 글을 불러와 주세요'); return; }
+  const btn = $('weblinkProdBtn'); btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '📇 정리 중…';
+  try{
+    const key = ensureGeminiKey();
+    const d = await (await fetch('/api/product_summarize', {method:'POST',
+      body: JSON.stringify({text: (r.title ? r.title + '\\n' : '') + rawText,
+                            gemini_key: key, save_key: true})})).json();
+    if(d.error){ alert(d.error); return; }
+    const item = d.item || {};
+    if(!(item.name||'').trim()) item.name = (r.title || '새 제품').slice(0, 40);
+    if(!(item.link||'').trim() && (r.links||[]).length) item.link = r.links[0];  // 🛒 제휴 링크 자동
+    const sv = await (await fetch('/api/products', {method:'POST',
+      body: JSON.stringify({action:'save', item})})).json();
+    if(sv.error){ alert(sv.error); return; }
+    await loadProducts(item.name);
+    alert('📇 「' + item.name + '」 제품 프로필로 저장했어요!\\n🤖 AI 영상 만들기의 「📇 제품」에서 고르면 이 사실만 근거로 대본을 씁니다.');
+  } catch(e){ alert('저장 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
 }
 
 async function poll(){

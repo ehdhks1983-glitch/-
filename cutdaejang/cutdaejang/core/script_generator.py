@@ -267,6 +267,74 @@ def summarize_product(text: str, model: str = "gemini-2.5-flash", api_key=None) 
             for k in ("name", "desc", "points", "target", "tone", "link")}
 
 
+ARTICLE_SCRIPT_PROMPT = """\
+역할: 유튜브 쇼츠 대본 작가
+아래 블로그 글을 {target_sec}초짜리 쇼츠 내레이션 대본으로 다시 써줘.
+글 제목: "{title}"
+규칙:
+- 문장 {n_min}~{n_max}개. 첫 문장은 콜드오픈 훅 — 인사·자기소개 금지, 결론·이득·궁금증부터
+- 마지막 문장은 CTA(구매·클릭 강요 말고 "자세한 건 링크에" 정도로 부드럽게)
+- 문장당 반드시 22자 이내 (자막 1줄). 초과 문장 금지 — 길면 두 문장으로 나눌 것
+- 구어체. 숫자·영어 약어는 한글 발음으로 표기 (예: "50%"→"오십 퍼센트", "AI"→"에이아이")
+- 글에 있는 사실만 사용할 것 — 여기 없는 기능·가격·수치·효능은 절대 지어내지 말 것
+- hook: 영상 상단에 붙일 제목 1줄 (15자 안팎, 시선 잡기)
+출력(JSON만): {{"title":"","hook":"","sentences":["",...],"hashtags":["",...]}}
+본문:
+{text}
+"""
+
+
+def summarize_article(title: str, text: str, target_sec: int = 45,
+                      model: str = "gemini-2.5-flash", api_key=None) -> dict:
+    """🔗 블로그 글 → 쇼츠 내레이션 대본 (v0.78). 키 없으면 ScriptError."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 AI 대본 요약을 쓸 수 없습니다")
+    target_sec = max(15, min(180, int(target_sec or 45)))
+    n = max(6, min(20, target_sec // 4))          # 문장 ≈ 4초 (내레이션 페이스)
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent")
+    prompt = ARTICLE_SCRIPT_PROMPT.format(
+        target_sec=target_sec, title=(title or "").strip()[:120],
+        n_min=max(4, n - 2), n_max=n + 2, text=(text or "").strip()[:4000])
+    payload = {"contents": [{"parts": [{"text": prompt}]}],
+               "generationConfig": {"responseMimeType": "application/json"}}
+    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    try:
+        out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
+        sents = [str(s).strip() for s in out.get("sentences") or [] if str(s).strip()]
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        raise ScriptError(f"AI 대본 응답 예상 밖: {str(e)[:120]}") from e
+    if not sents:
+        raise ScriptError("AI가 대본 문장을 만들지 못했습니다")
+    return {"title": str(out.get("title") or title or "")[:100],
+            "hook": str(out.get("hook") or "")[:60],
+            "sentences": sents[:24],
+            "hashtags": [str(h)[:30] for h in (out.get("hashtags") or [])[:10] if h]}
+
+
+_KO_SENT_RE = re.compile(r"[^.!?…\n]*(?:다\.|요\.|[.!?…]|\n)")
+
+
+def summarize_article_stub(title: str, text: str, target_sec: int = 45) -> dict:
+    """키 없음/AI 실패 폴백 — 본문 앞쪽 문장을 잘라 그대로 대본으로 (v0.78)."""
+    n = max(4, min(12, int(target_sec or 45) // 4))
+    sents = []
+    for m in _KO_SENT_RE.finditer((text or "").strip()):
+        s = m.group(0).strip()
+        if len(s) < 4:
+            continue
+        sents.append(s[:60])
+        if len(sents) >= n:
+            break
+    if not sents:
+        sents = [((title or "블로그 글 소개").strip())[:60], "자세한 내용은 본문 링크를 확인해 주세요."]
+    return {"title": (title or "").strip()[:100], "hook": (title or "").strip()[:24],
+            "sentences": sents, "hashtags": []}
+
+
 HOOK_PROMPT = """\
 역할: 유튜브 쇼츠/영상 썸네일 카피라이터
 주제/내용: "{context}"
