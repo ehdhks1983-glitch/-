@@ -1726,6 +1726,14 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         job_dir = Path(workdir) / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         style = build_style(settings)
+        if params.get("hook_style"):     # 🎨 꾸미기 오버라이드 (v0.81)
+            style.hook_style = str(params["hook_style"])
+        if params.get("sub_style"):
+            style.sub_style = str(params["sub_style"])
+        if params.get("tone"):
+            style.tone = str(params["tone"])
+        if (params.get("sub_font") or "").strip():
+            style.font = str(params["sub_font"]).strip()
         ep_voice = {"narr_voice": (params.get("narr_voice") or "").strip(),
                     "narr_style": (params.get("narr_style") or "").strip()}
         chain, voice = _narr_tts_pref(ep_voice, settings)
@@ -3552,7 +3560,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.80.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.81.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4438,6 +4446,15 @@ _HTML = """<!doctype html>
         <select id="wlVoiceSel" style="width:auto;min-width:200px"></select>
         <span class="hint">— 🎙 AI 내레이션과 같은 목록 (제미나이 키가 있어야 적용)</span>
       </div>
+      <details class="opt" id="wlDecoBox">
+        <summary>🎨 꾸미기 <span class="hint">— 자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
+        <div class="chk" style="gap:10px;flex-wrap:wrap">
+          <span>자막 스타일</span><select id="wlSubStyleSel" style="width:auto"></select>
+          <span>제목 스타일</span><select id="wlHookStyleSel" style="width:auto"></select>
+          <span>자막 글씨체</span><select id="wlSubFontSel" style="width:auto;max-width:180px"></select>
+          <span>화면 톤</span><select id="wlToneSel" style="width:auto"></select>
+        </div>
+      </details>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="wlGoBtn" style="flex:1;min-width:200px" onclick="startWeblinkSafe()">🎬 영상 만들기</button>
         <button class="ghost" id="weblinkProdBtn" onclick="saveWeblinkProduct(event)" title="가져온 글에서 제품 정보를 AI로 정리해 「📇 내 제품 정보」에 저장 — 글 속 제휴 링크도 자동으로 넣어줘요">📇 제품 프로필 저장</button>
@@ -4480,6 +4497,15 @@ _HTML = """<!doctype html>
       <span style="margin-left:6px">배경음악</span>
       <select id="secBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
     </div>
+    <details class="opt" id="secDecoBox">
+      <summary>🎨 꾸미기 <span class="hint">— 자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
+      <div class="chk" style="gap:10px;flex-wrap:wrap">
+        <span>자막 스타일</span><select id="secSubStyleSel" style="width:auto"></select>
+        <span>제목 스타일</span><select id="secHookStyleSel" style="width:auto"></select>
+        <span>자막 글씨체</span><select id="secSubFontSel" style="width:auto;max-width:180px"></select>
+        <span>화면 톤</span><select id="secToneSel" style="width:auto"></select>
+      </div>
+    </details>
     <div style="display:flex;gap:8px;margin-top:4px">
       <button id="secGoBtn" style="flex:1" onclick="startSectionsSafe()">🎬 영상 만들기</button>
     </div>
@@ -7196,6 +7222,15 @@ async function loadWeblink(ev){
   finally { btn.disabled = false; btn.textContent = old; }
 }
 
+// 🎨 카드용 셀렉트 복제 — 편집 폼의 옵션·기억값을 그대로 (v0.81)
+function cloneSelect(srcId, dstId){
+  const s = $(srcId), d = $(dstId);
+  if(!s || !d || !s.options.length) return;
+  const cur = d.value;
+  if(d.options.length !== s.options.length) d.innerHTML = s.innerHTML;
+  d.value = ([...d.options].some(o => o.value === cur) && cur) ? cur : s.value;
+}
+
 function initWeblinkCard(){
   // 목소리 목록: 🎙 내레이션 셀렉트와 동일하게 (상태 로드 때 채워짐)
   const nv = $('narrVoiceSel'), wl = $('wlVoiceSel');
@@ -7204,6 +7239,11 @@ function initWeblinkCard(){
     wl.innerHTML = nv.innerHTML;
     wl.value = [...wl.options].some(o => o.value === cur) && cur ? cur : nv.value;
   }
+  // 🎨 꾸미기 — 편집 폼의 스타일 옵션·기억값 복제 (v0.81)
+  cloneSelect('editSubStyleSel', 'wlSubStyleSel');
+  cloneSelect('hookStyleSel', 'wlHookStyleSel');
+  cloneSelect('editSubFontSel', 'wlSubFontSel');
+  cloneSelect('editToneSel', 'wlToneSel');
 }
 
 function applyWeblink(r){
@@ -7262,6 +7302,10 @@ async function startWeblink(){
     narr_voice: ($('wlVoiceSel')||{}).value || '',
     auto_subtitle: false, cut_silence: false,
     bgm: ($('bgmEditSel')||{}).value || '',        // 편집 폼에서 고른 BGM 있으면 같이
+    sub_style: ($('wlSubStyleSel')||{}).value || '',   // 🎨 꾸미기 (v0.81)
+    hook_style: ($('wlHookStyleSel')||{}).value || '',
+    sub_font: ($('wlSubFontSel')||{}).value || '',
+    tone: ($('wlToneSel')||{}).value || '',
     gemini_key: key, save_key: true,
   };
   const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
@@ -7296,6 +7340,11 @@ function initSectionCard(){
     sb.innerHTML = bg.innerHTML;
     sb.value = [...sb.options].some(o => o.value === cur) ? cur : '';
   }
+  // 🎨 꾸미기 — 편집 폼의 스타일 옵션·기억값 복제 (v0.81)
+  cloneSelect('editSubStyleSel', 'secSubStyleSel');
+  cloneSelect('hookStyleSel', 'secHookStyleSel');
+  cloneSelect('editSubFontSel', 'secSubFontSel');
+  cloneSelect('editToneSel', 'secToneSel');
   if($('secRows') && !$('secRows').children.length) addSectionRow();
 }
 
@@ -7394,6 +7443,10 @@ async function startSections(){
     narr_voice: ($('secVoiceSel')||{}).value || '',
     tempo: ($('secTempoSel')||{}).value || '',
     bgm: ($('secBgmSel')||{}).value || '',
+    sub_style: ($('secSubStyleSel')||{}).value || '',  // 🎨 꾸미기 (v0.81)
+    hook_style: ($('secHookStyleSel')||{}).value || '',
+    sub_font: ($('secSubFontSel')||{}).value || '',
+    tone: ($('secToneSel')||{}).value || '',
     gemini_key: key, save_key: true,
   };
   const res = await fetch('/api/section_edit', {method:'POST', body: JSON.stringify(body)});
