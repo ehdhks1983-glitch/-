@@ -682,4 +682,5 @@ def test_normalize_kit_platforms():
     assert len(n["threads"]["post"]) == 500 and n["threads"]["topic"] == "토픽"
     # 누락 플랫폼도 빈 구조로 항상 존재 (UI가 안전하게 그림)
     assert n["instagram"] == {"caption": "", "hashtags": []}
-    assert n["naver_clip"] == {"title": "", "tags": []}
+    assert n["naver_clip"] == {"title": "", "tags": [],
+                               "category1": "", "category2": ""}  # 📂 v0.87
