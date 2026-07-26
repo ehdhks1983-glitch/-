@@ -12,7 +12,7 @@ from tests.conftest import requires_ffmpeg
 def test_ensure_sfx_synthesizes_and_user_override(tmp_path):
     """3종 합성 캐시 + 같은 이름의 사용자 파일이 있으면 그걸 우선."""
     paths = sfx.ensure_sfx(tmp_path)
-    assert set(paths) == {"pop", "whoosh", "ding"}
+    assert set(paths) == {"pop", "whoosh", "ding", "key"}  # key = ⌨ 타닥 (v0.86)
     for p in paths.values():
         assert ff.probe_duration_us(p) > 80_000  # 실제 소리 파일
     # 두 번째 호출은 캐시 재사용 (같은 경로)
