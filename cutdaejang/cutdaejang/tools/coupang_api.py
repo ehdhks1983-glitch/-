@@ -90,6 +90,26 @@ def search_products(keyword: str, access: str, secret: str,
     return items
 
 
+_THUMB_SIZE_RE = None  # 지연 컴파일 — 모듈 임포트 비용 최소화
+
+
+def hi_res_image(url: str) -> str:
+    """쿠팡 CDN 썸네일 URL을 큰 사이즈로 — 영상 배경엔 492px가 흐릿하다 (v0.90).
+
+    thumbnail*.coupangcdn.com/thumbnails/remote/492x492ex/image/... 형태의
+    크기 세그먼트만 1024x1024ex로 바꾼다. 패턴이 아니면 그대로 돌려준다.
+    """
+    global _THUMB_SIZE_RE
+    if _THUMB_SIZE_RE is None:
+        import re  # noqa: PLC0415
+
+        _THUMB_SIZE_RE = re.compile(r"/thumbnails/remote/\d+x\d+(ex)?/")
+    u = (url or "").strip()
+    if "coupangcdn.com" not in u:
+        return u
+    return _THUMB_SIZE_RE.sub("/thumbnails/remote/1024x1024ex/", u)
+
+
 def deeplink(urls: List[str], access: str, secret: str) -> List[dict]:
     """쿠팡 상품 URL들 → 파트너스 추적 단축링크 [{origin, short}]."""
     clean = [u.strip() for u in urls if (u or "").strip()][:5]

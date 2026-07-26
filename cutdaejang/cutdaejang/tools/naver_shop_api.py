@@ -23,6 +23,14 @@ class NaverShopError(RuntimeError):
     pass
 
 
+def hi_res_image(url: str) -> str:
+    """네이버 쇼핑 썸네일 URL을 원본 크기로 — ?type=f300 축소 파라미터 제거 (v0.90)."""
+    u = (url or "").strip()
+    if "pstatic.net" in u and "?type=" in u:
+        return u.split("?", 1)[0]
+    return u
+
+
 def search_shop(keyword: str, client_id: str, client_secret: str,
                 limit: int = 8, timeout: float = 15.0) -> List[dict]:
     """상품 검색 → [{name, price, image, url, mall, category}]."""

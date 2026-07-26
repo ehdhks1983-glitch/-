@@ -40,27 +40,75 @@ _JOB_QUEUE: "_queue_mod.Queue" = _queue_mod.Queue()
 _QUEUE_WORKER_STARTED = threading.Event()
 
 
+# 🔀 동시 작업 개수 (v0.90) — 사용자 피드백 "하나 하는 동안 다른 게 멈추면 너무 느리다".
+# 기본 2개 병렬, 진행·대기 바에서 1~4개로 조절 (settings.json ui.parallel_jobs).
+_ACTIVE_JOBS = 0
+_ACTIVE_LOCK = threading.Lock()
+_PLIMIT_CACHE = {"t": 0.0, "n": 2}   # settings 파일을 0.3초마다 읽지 않도록 2초 캐시
+
+
+def _parallel_limit() -> int:
+    now = time.time()
+    if now - _PLIMIT_CACHE["t"] > 2.0:
+        try:
+            n = int((config.load_settings().get("ui") or {}).get("parallel_jobs") or 2)
+        except Exception:  # noqa: BLE001 — 설정을 못 읽어도 기본값으로 계속
+            n = 2
+        _PLIMIT_CACHE.update(t=now, n=max(1, min(4, n)))
+    return _PLIMIT_CACHE["n"]
+
+
 def _queue_job(job_id: str, fn, *args) -> None:
-    """무거운 작업을 큐에 넣는다 — 앞 작업이 없으면 워커가 바로 집어간다."""
+    """무거운 작업을 큐에 넣는다 — 동시 한도에 자리가 나면 자동으로 시작된다."""
+    lim = _parallel_limit()
     _set_job(job_id, status="queued", stage="queued", frac=0.0,
-             note="⏳ 대기 중 — 앞 작업이 끝나면 자동으로 시작돼요")
+             note=f"⏳ 대기 중 — 동시 {lim}개 한도에 자리가 나면 자동 시작 "
+                  "(개수는 위 📋 진행·대기에서 조절)")
     _JOB_QUEUE.put((job_id, fn, args))
 
 
+def _run_queued(job_id: str, fn, args) -> None:
+    global _ACTIVE_JOBS
+    try:
+        _set_job(job_id, t_start=time.time())   # ⏱ 경과 시간 표시용 (v0.90)
+        fn(*args)
+    except Exception:  # noqa: BLE001 — 실행 스레드는 절대 죽으면 안 됨
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error(
+            "큐 작업 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed",
+                 errors=["작업 실행 중 오류", traceback.format_exc()[-800:]])
+    finally:
+        with _ACTIVE_LOCK:
+            _ACTIVE_JOBS -= 1
+
+
 def _queue_worker() -> None:
+    """디스패처 — 대기열에서 꺼내 동시 한도 안에서 각자 스레드로 실행 (v0.90 병렬화)."""
+    global _ACTIVE_JOBS
     while True:
         job_id, fn, args = _JOB_QUEUE.get()
         try:
-            if (_get_job(job_id) or {}).get("status") == "cancelled":
-                continue                      # ✕ 대기 중 취소된 작업은 건너뜀
-            fn(*args)
-        except Exception:  # noqa: BLE001 — 워커는 절대 죽으면 안 됨
+            cancelled = False
+            while True:
+                if (_get_job(job_id) or {}).get("status") == "cancelled":
+                    cancelled = True          # ✕ 자리 기다리는 동안 취소됨
+                    break
+                with _ACTIVE_LOCK:
+                    if _ACTIVE_JOBS < _parallel_limit():
+                        _ACTIVE_JOBS += 1
+                        break
+                time.sleep(0.3)
+            if cancelled:
+                continue
+            threading.Thread(target=_run_queued, args=(job_id, fn, args),
+                             daemon=True).start()
+        except Exception:  # noqa: BLE001 — 디스패처는 절대 죽으면 안 됨
             import traceback  # noqa: PLC0415
 
             logging.getLogger("cutdaejang").error(
-                "큐 작업 실패 %s\n%s", job_id, traceback.format_exc())
-            _set_job(job_id, status="failed",
-                     errors=["작업 실행 중 오류", traceback.format_exc()[-800:]])
+                "큐 디스패치 실패 %s\n%s", job_id, traceback.format_exc())
         finally:
             _JOB_QUEUE.task_done()
 
@@ -3053,6 +3101,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/coupang_pick":  # 🛒 고른 상품 → 사진 내려받기 + 딥링크 (v0.88)
             from ..tools import coupang_api, fetch_web  # noqa: PLC0415
             import hashlib as _hl  # noqa: PLC0415
+            import logging as _lg  # noqa: PLC0415 — 핸들러 안 지역 import logging과 충돌 방지 (v0.90)
             name = str(params.get("name") or "").strip()
             image = str(params.get("image") or "").strip()
             url = str(params.get("url") or "").strip()
@@ -3061,18 +3110,29 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             imgs, previews = [], []
             if image.startswith("http"):
+                from ..tools import naver_shop_api  # noqa: PLC0415
                 token = _hl.sha1((url or name).encode("utf-8")).hexdigest()[:8]
                 dest = Path(workdir) / "weblink" / token
                 dest.mkdir(parents=True, exist_ok=True)
-                try:
-                    raw = fetch_web.fetch_bytes(image)
-                    ext = fetch_web.sniff_image_ext(raw) or "jpg"
-                    p = dest / f"img_01.{ext}"
-                    p.write_bytes(raw)
-                    imgs = [str(p)]
-                    previews = [f"/weblink/{token}/{p.name}"]
-                except Exception as ie:  # noqa: BLE001 — 사진 실패해도 진행
-                    logging.getLogger("cutdaejang").warning("상품 사진 내려받기 실패: %s", ie)
+                # 🔍 고화질 우선 (v0.90) — 492px 썸네일은 영상 배경에서 흐릿함
+                cands = [coupang_api.hi_res_image(image),
+                         naver_shop_api.hi_res_image(image), image]
+                seen = set()
+                for cand in cands:
+                    if not cand or cand in seen:
+                        continue
+                    seen.add(cand)
+                    try:
+                        raw = fetch_web.fetch_bytes(cand)
+                        ext = fetch_web.sniff_image_ext(raw) or "jpg"
+                        p = dest / f"img_01.{ext}"
+                        p.write_bytes(raw)
+                        imgs = [str(p)]
+                        previews = [f"/weblink/{token}/{p.name}"]
+                        break
+                    except Exception as ie:  # noqa: BLE001 — 다음 후보로
+                        _lg.getLogger("cutdaejang").warning(
+                            "상품 사진 내려받기 실패(%s): %s", cand[:60], ie)
             short = ""
             try:
                 if url and "coupang" in url:  # 🟢 네이버 상품은 딥링크 대상 아님 (v0.89)
@@ -3084,6 +3144,10 @@ class _Handler(BaseHTTPRequestHandler):
                 short = ""                    # 딥링크 실패해도 원 링크로 진행
             price = int(params.get("price") or 0)
             text = name + ("\n가격: 약 " + format(price, ",") + "원" if price else "")
+            if params.get("rocket"):
+                text += " · 로켓배송"
+            if params.get("mall"):
+                text += "\n판매처: " + str(params["mall"]).strip()
             if str(params.get("category") or "").strip():
                 text += "\n분류: " + str(params["category"]).strip()
             self._send_json({"ok": True, "paste_text": text, "images": imgs,
@@ -3132,6 +3196,15 @@ class _Handler(BaseHTTPRequestHandler):
             _set_job(job["id"], status="cancelled", stage="cancelled",
                      note="✕ 취소됨 — 시작 전에 대기열에서 뺐어요")
             self._send_json({"ok": True})
+        elif path == "/api/parallel":  # 🔀 동시 작업 개수 조절 (v0.90)
+            try:
+                n = max(1, min(4, int(params.get("n") or 2)))
+            except (TypeError, ValueError):
+                self._send_json({"error": "1~4 사이 숫자를 골라주세요"}, 400)
+                return
+            config.save_settings({"ui": {"parallel_jobs": n}})
+            _PLIMIT_CACHE.update(t=time.time(), n=n)   # 대기 중 작업에 즉시 반영
+            self._send_json({"ok": True, "n": n})
         elif path == "/api/shrink":  # 📦 업로드용 용량 줄이기 (v0.83)
             job_id = str(params.get("job_id") or "")
             job = _get_job(job_id) or {}
@@ -3961,9 +4034,15 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.89.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.90.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
+      <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
+        <option value="1">동시 1개 (순서대로)</option>
+        <option value="2">동시 2개 (추천)</option>
+        <option value="3">동시 3개</option>
+        <option value="4">동시 4개 (고사양)</option>
+      </select>
     </div>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
@@ -5242,6 +5321,8 @@ _HTML = """<!doctype html>
         <pre id="chaptersText" style="margin:6px 0 0;white-space:pre-wrap;font-size:13px;color:#c8cede;font-family:inherit"></pre>
       </div>
       <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
+      <button class="ghost" style="margin-top:10px" onclick="sendDoneToEdit(event,'shorts')" title="완성된 이 영상을 편집 카드로 보내 세로 쇼츠(9:16)로 다시 만들어요 — 핵심만 남겨 60초 쇼츠 여러 개로 나누는 완전 자동을 추천으로 맞춰둬요">📱 쇼츠로 만들기</button>
+      <button class="ghost" style="margin-top:10px" onclick="sendDoneToEdit(event,'keep')" title="완성된 이 영상을 편집 카드로 보내 자르고 다듬어요 — 자막·훅·BGM·배속을 다시 설정할 수 있어요">✂ 이 영상 편집</button>
       <button class="ghost" style="margin-top:10px" onclick="shrinkVideo(event)" title="용량이 커서 업로드가 안 될 때 — 화질 거의 그대로 파일 크기를 크게 줄인 업로드용 mp4를 하나 더 만들어요 (원본은 그대로)">📦 용량 줄이기 (업로드용)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'mix')" title="완성 영상의 소리(목소리+BGM+효과음)를 mp3로 저장">🔊 소리 저장(mp3)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'voice')" title="BGM·원본 소리 없이 내레이션 목소리만 mp3로 저장 — 다른 편집기·팟캐스트에 재사용">🎙 목소리만(mp3)</button>
@@ -5541,7 +5622,7 @@ const $ = id => document.getElementById(id);
 // 🔒 XSS 방어 (v0.70) — 제목·AI응답·경로 등 신뢰할 수 없는 값을 innerHTML에 넣기 전 이스케이프
 const escHtml = s => String(s==null?'':s).replace(/[&<>"']/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const STAGE_KO = {queued:'⏳ 대기 중 (앞 작업이 끝나면 자동 시작)', cancelled:'✕ 취소됨',
+const STAGE_KO = {queued:'⏳ 대기 중 (동시 한도에 자리가 나면 자동 시작)', cancelled:'✕ 취소됨',
                   script:'대본 생성', tts:'목소리 합성(TTS)', background:'배경 준비',
                   timeline:'타임라인 계산', render:'영상 렌더링',
                   review:'대본 검토 대기', done:'완료',
@@ -7852,9 +7933,27 @@ async function saveCoupangKeys(ev){
   alert('저장했어요 — 상품 검색으로 이름·가격·사진·파트너스 링크를 자동으로 채울 수 있어요');
 }
 
+function shopUrlGuard(inpId){
+  // 🔗 검색창에 상품 '링크'를 붙여넣는 실수 방지 (v0.90) — 쿠팡·네이버 API는
+  // 키워드 검색만 지원해서 링크를 넣으면 엉뚱한 인기 상품들이 나온다.
+  const inp = $(inpId); if(!inp) return null;
+  const kw = (inp.value || '').trim();
+  if(/^https?:/i.test(kw) || kw.indexOf('www.') === 0){
+    const link = $('shopLinkInput');
+    if(link && !link.value.trim()){ link.value = kw; }
+    inp.value = '';
+    alert('붙여넣은 링크는 아래 [수익 링크]칸에 옮겨뒀어요!' + String.fromCharCode(10) +
+          '검색창에는 상품 "이름"을 입력해 주세요 (예: 무선 물걸레 청소기)' + String.fromCharCode(10) +
+          '※ 쿠팡·네이버 API는 링크로 상품 1개를 바로 불러오는 기능이 없어요');
+    return null;
+  }
+  return kw;
+}
+
 async function coupangSearch(ev){
   ev.preventDefault();
-  const kw = (($('cpKeyword')||{}).value || '').trim();
+  const kw = shopUrlGuard('cpKeyword');
+  if(kw === null) return;
   if(!kw){ alert('검색어를 입력해 주세요 (예: 무선 선풍기)'); return; }
   if(!window._hasCoupangKey){
     const kb = $('cpKeyBox'); if(kb) kb.open = true;
@@ -7891,14 +7990,17 @@ async function coupangPick(it, card){       // 🛒 쇼핑 카드 공용 상품 
     if(d.error){ alert(d.error); return; }
     if(d.paste_text){
       const ta = $('shopPasteText');
-      ta.value = d.paste_text + '\\n\\n(여기에 상품 상세설명을 붙여넣으면 대본이 더 풍부해져요)';
+      ta.value = d.paste_text + '\\n\\n[▼ 이 아래에 상품 페이지의 상세설명·특징·후기를 복사해 붙여넣어 주세요 — 많이 붙일수록 대본이 좋아져요]\\n';
+      ta.focus();
+      try{ ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_e){}
     }
     if((d.images || []).length){
       window._shopPhotos = d.images;
-      $('shopPhotoCnt').textContent = '📷 상품 사진 1장 자동 저장됨 — 더 넣으면 장면이 다양해져요';
+      $('shopPhotoCnt').textContent = '📷 대표사진 1장(고화질) 자동 저장됨 — [🖼 상품 사진 고르기]로 스크린샷·직접 찍은 사진을 더 넣으면 장면이 다양해져요';
     }
     if(d.link){ $('shopLinkInput').value = d.link; }   // 파트너스 추적 링크
-    uiBanner('🛒 상품 정보를 채웠어요 — 상세설명을 덧붙인 뒤 [🤖 이 상품으로 대본 만들기]를 누르세요' +
+    uiBanner('🛒 기본 정보를 채웠어요 (쿠팡·네이버 API는 대표사진 1장·이름·가격·분류까지만 제공) — ' +
+             '① 상품 페이지의 상세설명을 복사해 덧붙이고 ② 사진을 몇 장 더 넣은 뒤 [🤖 대본 만들기]를 누르세요' +
              (d.link && d.link.indexOf('coupang') >= 0 ? ' (파트너스 링크 자동 ✓)' : ''));
   } catch(e){ alert('상품 채우기 오류: ' + e); }
 }
@@ -7920,7 +8022,8 @@ async function saveNaverKeys(ev){
 
 async function naverSearch(ev){
   ev.preventDefault();
-  const kw = (($('nvKeyword')||{}).value || '').trim();
+  const kw = shopUrlGuard('nvKeyword');
+  if(kw === null) return;
   if(!kw){ alert('검색어를 입력해 주세요 (예: 무선 선풍기)'); return; }
   if(!window._hasNaverKey){
     const kb = $('nvKeyBox'); if(kb) kb.open = true;
@@ -8697,6 +8800,32 @@ async function copyChapters(ev){
 }
 
 // 📦 업로드용 용량 줄이기 (v0.83) — 화질 거의 그대로 파일 크기 대폭 축소
+// ── 📱 완성 영상 → 쇼츠·편집 보내기 (v0.90) — "16:9로 만들었는데 쇼츠도 바로" ──
+function sendDoneToEdit(ev, layout){
+  if(ev) ev.preventDefault();
+  const job = window._lastDoneJob || {};
+  const mp4 = ((job.mp4s && job.mp4s.length) ? job.mp4s[0] : job.mp4) || '';
+  if(!mp4){
+    alert('완성된 영상 경로를 찾지 못했어요 — [📂 폴더 열기]에서 mp4를 확인하고, 편집 카드의 [📁 영상 선택]으로 직접 골라주세요');
+    return;
+  }
+  openMode('edit');
+  window.scrollTo(0, 0);
+  $('editVideo').value = mp4;
+  const r = document.querySelector("input[name=editLayout][value='" + layout + "']");
+  if(r) r.checked = true;
+  if(layout === 'shorts'){
+    // 긴 가로 영상 → 쇼츠: 완전 자동(핵심만) + 60초 여러 개 나누기를 추천 기본으로
+    const auto = document.querySelector("input[name=editFinish][value='auto']");
+    if(auto && !auto.checked){ auto.checked = true; try{ onFinishChange(); }catch(_e){} }
+    if($('autoMultiSel')) $('autoMultiSel').value = 'multi';
+    if($('autoTargetSec') && !(+($('autoTargetSec').value))) $('autoTargetSec').value = 60;
+    uiBanner('📱 완성 영상을 쇼츠로! — 세로(9:16) + 완전 자동(핵심만 남겨 60초 쇼츠 여러 개)로 맞춰뒀어요. 원하면 바꾸고 아래 [시작]을 누르세요');
+  } else {
+    uiBanner('✂ 완성 영상을 편집 카드로 불러왔어요 — 자르기·자막·훅·BGM을 설정하고 [시작]을 누르세요');
+  }
+}
+
 async function shrinkVideo(ev){
   ev.preventDefault();
   if(!currentJob){ alert('완성된 작업이 없어요'); return; }
@@ -8880,6 +9009,7 @@ async function poll(){
   renderHistory(state.history);
   updateLogs(state.logs);
   renderJobsBar(state.jobs || []);   // 📋 진행·대기 목록 (v0.88)
+  syncParallelSel(state);            // 🔀 동시 개수 셀렉트 동기화 (v0.90)
   if(!currentJob) return;
   const job = state.jobs.find(j => j.id === currentJob);
   if(!job) return;
@@ -8893,8 +9023,13 @@ async function poll(){
   $('statusTitle').textContent = job.title || job.id;
   const frac = job.frac || 0;
   $('barFill').style.width = (job.status==='ok'||job.status==='partial' ? 100 : Math.round(frac*100)) + '%';
+  let elaTxt = '';                     // ⏱ 오래 걸릴 때 최소한 경과라도 보이게 (v0.90)
+  if(job.status === 'running' && job.t_start){
+    const es = Math.max(0, Math.floor(Date.now() / 1000 - job.t_start));
+    if(es >= 60) elaTxt = ' · ⏱ ' + Math.floor(es / 60) + '분 경과';
+  }
   $('stageText').textContent = (STAGE_KO[job.stage] || job.stage || '') +
-      (job.status==='running' && job.stage!=='review' ? ` — ${Math.round(frac*100)}%` : '');
+      (job.status==='running' && job.stage!=='review' ? ` — ${Math.round(frac*100)}%` : '') + elaTxt;
   let note = job.status === 'running' ? (job.note || '') : '';
   // 렌더 초반 0%가 '멈춤'으로 보이지 않도록 안내 (배경 줌은 시간이 걸림)
   if(job.status==='running' && job.stage==='render' && frac < 0.02)
@@ -8961,6 +9096,7 @@ async function poll(){
     if(job.bg_source) badge = (badge ? badge + '  ·  ' : '') + '🖼️ 배경: ' + job.bg_source;
     $('providerBadge').textContent = badge;
     if(job.mp4){
+      window._lastDoneJob = job;     // 📱 쇼츠로 만들기·✂ 편집 보내기용 (v0.90)
       $('doneBox').classList.remove('hidden');
       $('player').src = '/video/' + job.id + '?t=' + Date.now() + '#t=0.1';
       if(job.mp4s && job.mp4s.length > 1){
@@ -8989,6 +9125,22 @@ async function poll(){
 }
 
 const PROV_KO = {gemini:'Gemini', openai:'OpenAI', windows:'내장', stub:'톤'};
+// ── 🔀 동시 작업 개수 (v0.90) — "하나 하는 동안 다른 게 멈추면 느리다" ──
+async function setParallel(ev){
+  const n = +ev.target.value || 2;
+  try{
+    const d = await (await fetch('/api/parallel', {method:'POST', body: JSON.stringify({n})})).json();
+    if(d.error){ alert(d.error); return; }
+    uiBanner('🔀 이제 동시에 ' + d.n + '개까지 같이 만들어요' +
+             (d.n === 1 ? ' (순서대로 하나씩)' : ' — PC가 버벅이면 1~2개로 낮추세요'));
+  } catch(e){ alert('설정 저장 실패: ' + e); }
+}
+function syncParallelSel(state){
+  const ps = $('parallelSel');
+  if(!ps || document.activeElement === ps) return;   // 고르는 중엔 건드리지 않음
+  const n = (((state.settings || {}).ui) || {}).parallel_jobs || 2;
+  if(+ps.value !== +n) ps.value = String(n);
+}
 // ── 📋 작업 큐 — 진행·대기 목록 칩 (v0.88) ──
 function renderJobsBar(jobs){
   const bar = $('jobsBar'); if(!bar) return;
@@ -9005,7 +9157,12 @@ function renderJobsBar(jobs){
     const ico = j.status === 'queued' ? '⏳'
       : j.status === 'running' ? '▶' : '📝';
     const pct = j.status === 'running' ? (' ' + Math.round((j.frac || 0) * 100) + '%') : '';
-    chip.textContent = ico + ' ' + ((j.title || j.id).slice(0, 16)) + pct;
+    let ela = '';                       // ⏱ 경과 시간 (v0.90)
+    if(j.status === 'running' && j.t_start){
+      const s = Math.max(0, Math.floor(Date.now() / 1000 - j.t_start));
+      if(s >= 60) ela = ' · ' + Math.floor(s / 60) + '분';
+    }
+    chip.textContent = ico + ' ' + ((j.title || j.id).slice(0, 16)) + pct + ela;
     chip.title = (j.title || j.id) + ' — 눌러서 이 작업 화면 보기';
     chip.onclick = function(){ watchJob(j.id); };
     if(j.status === 'queued'){
