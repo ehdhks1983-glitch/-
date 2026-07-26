@@ -30,6 +30,7 @@ from ..core.tts_engine import GEMINI_VOICES, STYLE_INSTRUCTIONS
 
 _JOBS: dict = {}
 _LOCK = threading.Lock()
+_LOCAL_VIDEOS: dict = {}  # 🎬 풀영상 미리보기 토큰 → 경로 (v0.84 — 임의 경로 GET 방지)
 
 # 편집 폼에서 "기억해 두는" 세팅 키 — 경로·주제·대본·API 키 같은 작업별 입력은 제외
 _EDIT_LAST_KEYS = (
@@ -1739,12 +1740,30 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                     "narr_style": (params.get("narr_style") or "").strip()}
         chain, voice = _narr_tts_pref(ep_voice, settings)
         wrap = int(settings["subtitle"].get("wrap_chars", 16) or 16)
+        # 🎬 풀영상 하나로 (v0.84) — 영상 1개에서 구간별 시간 범위를 잘라 쓴다
+        full_video, full_us = "", 0
+        if str(params.get("full_video") or "").strip():
+            full_video = video_editor.resolve_input_video(str(params["full_video"]).strip())
+            full_us = ff.probe_duration_us(full_video)
         n = len(secs)
         outs, out_titles, errors, notes = [], [], [], []
         for i, sec in enumerate(secs, 1):
             base = (i - 1) / n
             try:
-                video = video_editor.resolve_input_video(str(sec.get("video_path") or ""))
+                if full_video:
+                    try:
+                        s_us, e_us = int(sec.get("start_us")), int(sec.get("end_us"))
+                    except (TypeError, ValueError) as ve:
+                        raise ValueError("풀영상에서 쓸 시간 범위가 없어요 — "
+                                         "[🪄 자동으로 나누기]를 눌러주세요") from ve
+                    s_us = max(0, min(s_us, full_us - 500_000))
+                    e_us = max(s_us + 500_000, min(e_us, full_us))
+                    _set_job(job_id, status="running", stage="cut", frac=base,
+                             note=f"🎞 구간 {i}/{n} — 풀영상 {s_us / 1e6:.0f}~{e_us / 1e6:.0f}초 잘라내는 중…")
+                    video = video_editor.extract_segment(
+                        full_video, s_us, e_us, str(job_dir / f"sec_{i}_src.mp4"))
+                else:
+                    video = video_editor.resolve_input_video(str(sec.get("video_path") or ""))
                 lines = [ln.strip() for ln in str(sec["narration"]).splitlines() if ln.strip()]
                 lines = split_long_sentences(  # 🛡 자막 2줄 안전장치 (v0.77 재사용)
                     Script(title="", sentences=lines), limit=max(8, wrap * 2)).sentences
@@ -2066,6 +2085,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(self._state())
         elif path.startswith("/video/"):
             self._serve_video(path.split("/", 2)[2])
+        elif path.startswith("/localvideo/"):  # 🎬 풀영상 미리보기 (v0.84 — 등록 토큰만)
+            p = _LOCAL_VIDEOS.get(path.split("/", 2)[2] or "")
+            if p and Path(p).is_file():
+                self._serve_file(p)
+            else:
+                self._send_json({"error": "등록된 영상이 없어요 — 다시 선택해 주세요"}, 404)
         elif path.startswith("/cutvideo/"):
             self._serve_cutvideo(path.split("/", 2)[2])
         elif path.startswith("/scene/"):  # 🖼 장면 검토 이미지 (v0.50): /scene/<job>/<n>
@@ -2780,8 +2805,18 @@ class _Handler(BaseHTTPRequestHandler):
             if not secs:
                 self._send_json({"error": "구간이 없습니다 — [➕ 구간 추가]로 구간을 만들어 주세요"}, 400)
                 return
+            full_mode = bool(str(params.get("full_video") or "").strip())  # 🎬 v0.84
             for si, s in enumerate(secs, 1):
-                if not str(s.get("video_path") or "").strip():
+                if full_mode:
+                    try:
+                        ok_rng = int(s.get("start_us")) < int(s.get("end_us"))
+                    except (TypeError, ValueError):
+                        ok_rng = False
+                    if not ok_rng:
+                        self._send_json({"error": f"구간 {si}의 시간 범위를 정해주세요 — "
+                                         "[🪄 자동으로 나누기] 또는 [▶ 여기부터]/[⏹ 여기까지]"}, 400)
+                        return
+                elif not str(s.get("video_path") or "").strip():
                     self._send_json({"error": f"구간 {si}의 클립(영상)을 골라주세요"}, 400)
                     return
             _apply_keys(params)
@@ -2792,6 +2827,42 @@ class _Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_run_sections, args=(job_id, params, workdir),
                              daemon=True).start()
             self._send_json({"job_id": job_id})
+        elif path == "/api/reg_video":  # 🎬 풀영상 등록 → 미리보기 토큰 (v0.84)
+            from ..core import video_editor  # noqa: PLC0415
+            from ..utils import ffmpeg as ff  # noqa: PLC0415
+            try:
+                video = video_editor.resolve_input_video(str(params.get("path") or ""))
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
+            import hashlib as _hl  # noqa: PLC0415
+            token = _hl.sha1(video.encode("utf-8")).hexdigest()[:12]
+            _LOCAL_VIDEOS[token] = video
+            self._send_json({"ok": True, "token": token, "path": video,
+                             "duration_s": round(ff.probe_duration_us(video) / 1e6, 1)})
+        elif path == "/api/suggest_ranges":  # 🪄 풀영상 구간 자동 제안 (v0.84)
+            from ..core import video_editor  # noqa: PLC0415
+            from ..utils import ffmpeg as ff  # noqa: PLC0415
+            try:
+                video = video_editor.resolve_input_video(str(params.get("video_path") or ""))
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
+            total = ff.probe_duration_us(video)
+            weights = [max(1.0, float(w or 1)) for w in (params.get("weights") or [])]
+            if not weights:
+                self._send_json({"error": "구간이 없어요 — 먼저 구간을 만들어 주세요"}, 400)
+                return
+            scenes = []
+            if total < 20 * 60 * 1_000_000:      # 긴 영상은 장면 감지 생략 (시간)
+                try:
+                    scenes = video_editor.detect_scene_changes(video)
+                except Exception:  # noqa: BLE001 — 스냅은 보너스, 실패해도 비율 분할
+                    pass
+            ranges = video_editor.partition_by_weights(total, weights, scenes)
+            self._send_json({"ok": True, "total_us": total,
+                             "ranges": [[s, e] for s, e in ranges],
+                             "snapped": bool(scenes)})
         elif path == "/api/shrink":  # 📦 업로드용 용량 줄이기 (v0.83)
             job_id = str(params.get("job_id") or "")
             job = _get_job(job_id) or {}
@@ -3615,7 +3686,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.83.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.84.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4531,11 +4602,29 @@ _HTML = """<!doctype html>
       <textarea id="secScriptText" style="min-height:140px" placeholder="촬영 대본을 통째로 붙여넣으세요.&#10;[말] 표시가 있는 대본이면 그대로 인식하고, 일반 글이면 문단 단위로 나눠요."></textarea>
       <button class="ghost" style="margin-top:6px" id="secSplitBtn" onclick="splitSections(event)">✂️ 구간 자동 나누기</button>
     </details>
-    <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>구간 만들기 <span class="hint">— 행 순서대로 이어붙어요. 구간마다 클립 1개 + 읽을 내레이션</span></div>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>영상 넣는 방식</div>
+    <div class="chk" style="gap:10px;flex-wrap:wrap">
+      <div class="toggle" style="margin:0">
+        <label><input type="radio" name="secSrcMode" value="full" checked onchange="applySecMode()"><span>🎥 풀영상 하나로 <span class="hint">(길게 찍고 구간만 고르기 — 추천)</span></span></label>
+        <label><input type="radio" name="secSrcMode" value="clips" onchange="applySecMode()"><span>🎬 구간마다 클립 따로</span></label>
+      </div>
+    </div>
+    <div id="secFullBox" style="margin-top:8px;padding:10px;border:1px dashed #3a4157;border-radius:10px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="text" id="secFullPath" placeholder="전체 시연을 처음부터 끝까지 담은 풀영상 파일 경로" style="flex:1;min-width:200px" onchange="loadFullVideo()">
+        <button class="ghost" style="white-space:nowrap" onclick="pickFullVideo(event)">🎥 풀영상 선택</button>
+        <button class="ghost" style="white-space:nowrap" onclick="suggestSecRanges(event)" title="내레이션 분량 비율로 나누고, 화면이 확 바뀌는 지점(장면 전환)에 경계를 맞춰요">🪄 자동으로 나누기</button>
+      </div>
+      <video id="secPlayer" controls playsinline class="hidden" style="margin-top:8px;max-height:280px"></video>
+      <div class="hint" id="secFullDur" style="margin-top:4px">영상을 고르면 여기서 바로 재생하며 구간을 정할 수 있어요.
+        [🪄 자동으로 나누기]가 구간별 시간을 채워주고, 재생 중 각 구간의 [▶ 여기부터]/[⏹ 여기까지]로 손볼 수 있어요.
+        (미리보기가 안 떠도 만들기는 됩니다 — 일부 폰 영상 형식은 브라우저가 재생만 못 해요)</div>
+    </div>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>구간 만들기 <span class="hint">— 행 순서대로 이어붙어요. 구간마다 읽을 내레이션 + (클립 또는 풀영상 범위)</span></div>
     <div id="secRows"></div>
     <button class="ghost" style="margin-top:8px" onclick="addSectionRow()">➕ 구간 추가</button>
     <div class="hint" id="secTotal" style="margin-top:6px"></div>
-    <div class="steplabel" style="margin-top:12px"><span class="stepnum">2</span>공통 설정</div>
+    <div class="steplabel" style="margin-top:12px"><span class="stepnum">3</span>공통 설정</div>
     <div class="chk" style="gap:10px;flex-wrap:wrap">
       <span>화면</span>
       <div class="toggle" style="margin:0">
@@ -7411,6 +7500,7 @@ function initSectionCard(){
   cloneSelect('editSubFontSel', 'secSubFontSel');
   cloneSelect('editToneSel', 'secToneSel');
   if($('secRows') && !$('secRows').children.length) addSectionRow();
+  applySecMode();
 }
 
 function addSectionRow(title, narration){
@@ -7433,6 +7523,7 @@ function addSectionRow(title, narration){
   del.onclick = function(ev){ ev.preventDefault(); div.remove(); renumberSections(); };
   head.appendChild(num); head.appendChild(ti); head.appendChild(tm); head.appendChild(del);
   const vrow = document.createElement('div');
+  vrow.className = 'sec-cliprow';
   vrow.style.cssText = 'display:flex;gap:8px;margin-top:6px;flex-wrap:wrap';
   const vi = document.createElement('input');
   vi.type = 'text'; vi.className = 'sec-video';
@@ -7449,15 +7540,139 @@ function addSectionRow(title, narration){
    ['1.5', '⏩ 1.5배속'], ['2', '⏩ 2배속'], ['3', '⏩ 3배속']
   ].forEach(function(o){ sp.add(new Option(o[1], o[0])); });
   vrow.appendChild(vi); vrow.appendChild(pick); vrow.appendChild(sp);
+  // 🎥 풀영상 모드: 이 구간이 풀영상의 몇 초~몇 초인지 (v0.84)
+  const rrow = document.createElement('div');
+  rrow.className = 'sec-rangebox';
+  rrow.style.cssText = 'display:none;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap';
+  const rl = document.createElement('span');
+  rl.className = 'hint'; rl.textContent = '풀영상에서';
+  const si = document.createElement('input');
+  si.type = 'text'; si.className = 'sec-start'; si.placeholder = '시작 0:00';
+  si.style.cssText = 'width:82px';
+  const dash = document.createElement('span'); dash.textContent = '~';
+  const ei = document.createElement('input');
+  ei.type = 'text'; ei.className = 'sec-end'; ei.placeholder = '끝 0:20';
+  ei.style.cssText = 'width:82px';
+  const bs = document.createElement('button');
+  bs.className = 'ghost'; bs.textContent = '▶ 여기부터'; bs.style.cssText = 'padding:4px 8px';
+  bs.title = '위 플레이어의 현재 위치를 이 구간의 시작으로';
+  bs.onclick = function(ev){ ev.preventDefault(); si.value = fmtMMSS((($('secPlayer')||{}).currentTime)||0); };
+  const be = document.createElement('button');
+  be.className = 'ghost'; be.textContent = '⏹ 여기까지'; be.style.cssText = 'padding:4px 8px';
+  be.title = '위 플레이어의 현재 위치를 이 구간의 끝으로';
+  be.onclick = function(ev){ ev.preventDefault(); ei.value = fmtMMSS((($('secPlayer')||{}).currentTime)||0); };
+  const bp = document.createElement('button');
+  bp.className = 'ghost'; bp.textContent = '👁 이 구간 재생'; bp.style.cssText = 'padding:4px 8px';
+  bp.onclick = function(ev){
+    ev.preventDefault();
+    const p = $('secPlayer'); if(!p || !p.src){ alert('먼저 [🎥 풀영상 선택]으로 영상을 골라주세요'); return; }
+    const s = parseMMSS(si.value), e = parseMMSS(ei.value);
+    if(s == null){ alert('시작 시간을 먼저 넣어주세요 (예: 1:20)'); return; }
+    p.currentTime = s; window._secStopAt = (e != null && e > s) ? e : null; p.play();
+  };
+  // 자동 배속(핵심 몽타주) 셀렉트는 두 모드 공용 — 범위 줄에도 같이 보임
+  rrow.appendChild(rl); rrow.appendChild(si); rrow.appendChild(dash); rrow.appendChild(ei);
+  rrow.appendChild(bs); rrow.appendChild(be); rrow.appendChild(bp);
   const na = document.createElement('textarea');
   na.className = 'sec-narr';
   na.placeholder = '이 구간에서 읽을 내레이션 — 한 줄 = 자막 한 줄. 이 길이만큼 구간이 만들어져요';
   na.style.cssText = 'min-height:64px;margin-top:6px'; na.value = narration || '';
   na.oninput = updateSectionTimes;
-  div.appendChild(head); div.appendChild(vrow); div.appendChild(na);
+  div.appendChild(head); div.appendChild(vrow); div.appendChild(rrow); div.appendChild(na);
   rows.appendChild(div);
   renumberSections();
+  applySecMode();
   return div;
+}
+
+// 🎥 영상 넣는 방식 전환 (v0.84) — 풀영상 하나 vs 구간마다 클립
+function applySecMode(){
+  const full = (pick('secSrcMode') || 'full') === 'full';
+  const fb = $('secFullBox'); if(fb) fb.classList.toggle('hidden', !full);
+  [...(($('secRows')||{}).children || [])].forEach(function(d){
+    const c = d.querySelector('.sec-cliprow');
+    const r = d.querySelector('.sec-rangebox');
+    if(c) c.style.display = full ? 'none' : 'flex';
+    if(r) r.style.display = full ? 'flex' : 'none';
+    if(full && r && c){                      // 배속 셀렉트를 보이는 줄로 옮김
+      const spSel = d.querySelector('.sec-speed');
+      if(spSel && spSel.parentElement !== r) r.appendChild(spSel);
+    } else if(!full && c){
+      const spSel = d.querySelector('.sec-speed');
+      if(spSel && spSel.parentElement !== c) c.appendChild(spSel);
+    }
+  });
+}
+
+function parseMMSS(v){
+  v = String(v || '').trim(); if(!v) return null;
+  const m = v.match(/^(?:(\\d+):)?(\\d+(?:\\.\\d+)?)$/);
+  if(!m) return null;
+  return (m[1] ? parseInt(m[1], 10) * 60 : 0) + parseFloat(m[2]);
+}
+
+async function pickFullVideo(ev){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true; const label = btn.textContent;
+  try{
+    const data = await (await fetch('/api/pick_file', {method:'POST',
+      body: JSON.stringify({kind: 'video'})})).json();
+    if(data.error){ alert(data.error + PASTE_TIP); }
+    else if(data.path){ $('secFullPath').value = data.path; await loadFullVideo(); }
+  } catch(e){ alert('선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
+  finally { btn.disabled = false; btn.textContent = label; }
+}
+
+async function loadFullVideo(){
+  const vp = ($('secFullPath')||{}).value.trim(); if(!vp) return;
+  try{
+    const d = await (await fetch('/api/reg_video', {method:'POST',
+      body: JSON.stringify({path: vp})})).json();
+    if(d.error){ alert(d.error); return; }
+    $('secFullPath').value = d.path;
+    const p = $('secPlayer');
+    p.src = '/localvideo/' + d.token + '?t=' + Date.now();
+    p.classList.remove('hidden');
+    if(!window._secStopHooked){
+      window._secStopHooked = true;         // 👁 구간 재생 — 끝 시각에서 자동 정지
+      p.addEventListener('timeupdate', function(){
+        if(window._secStopAt != null && p.currentTime >= window._secStopAt){
+          p.pause(); window._secStopAt = null;
+        }
+      });
+    }
+    $('secFullDur').textContent = '⏱ 풀영상 길이 ' + fmtMMSS(d.duration_s) +
+      ' — [🪄 자동으로 나누기]를 누르면 구간별 시간이 채워져요. 재생하며 [▶ 여기부터]/[⏹ 여기까지]로 손보세요.';
+  } catch(e){ alert('영상 불러오기 오류: ' + e); }
+}
+
+// 🪄 내레이션 분량 비율 + 장면 전환점 스냅으로 구간 시간 자동 채우기 (v0.84)
+async function suggestSecRanges(ev, silent){
+  if(ev) ev.preventDefault();
+  const vp = ($('secFullPath')||{}).value.trim();
+  if(!vp){ if(!silent) alert('먼저 [🎥 풀영상 선택]으로 영상을 골라주세요'); return false; }
+  const rows = [...(($('secRows')||{}).children || [])];
+  if(!rows.length){ if(!silent) alert('구간이 없어요 — [➕ 구간 추가] 또는 대본 자동 나누기를 먼저 해주세요'); return false; }
+  const btn = ev ? ev.target : null; if(btn){ btn.disabled = true; }
+  try{
+    const weights = rows.map(function(d){
+      return Math.max(1, (((d.querySelector('.sec-narr')||{}).value || '').replace(/\\s/g, '').length));
+    });
+    const d = await (await fetch('/api/suggest_ranges', {method:'POST',
+      body: JSON.stringify({video_path: vp, weights})})).json();
+    if(d.error){ if(!silent) alert(d.error); return false; }
+    (d.ranges || []).forEach(function(r, i){
+      const row = rows[i]; if(!row) return;
+      const si2 = row.querySelector('.sec-start'), ei2 = row.querySelector('.sec-end');
+      if(si2) si2.value = fmtMMSS(r[0] / 1e6);
+      if(ei2) ei2.value = fmtMMSS(r[1] / 1e6);
+    });
+    if(!silent) alert('🪄 구간 ' + (d.ranges || []).length + '개의 시간을 채웠어요' +
+      (d.snapped ? ' (화면이 바뀌는 지점에 맞춤)' : '') +
+      '\\n어긋난 구간은 재생하면서 [▶ 여기부터]/[⏹ 여기까지]로 고치면 돼요');
+    return true;
+  } catch(e){ if(!silent) alert('자동 나누기 오류: ' + e); return false; }
+  finally { if(btn) btn.disabled = false; }
 }
 
 function renumberSections(){
@@ -7524,21 +7739,43 @@ async function splitSections(ev){
 }
 
 async function startSections(){
-  const rows = [...(($('secRows')||{}).children || [])];
-  const sections = rows.map(d => ({
-    title: (d.querySelector('.sec-title')||{}).value || '',
-    video_path: ((d.querySelector('.sec-video')||{}).value || '').trim(),
-    narration: (d.querySelector('.sec-narr')||{}).value || '',
-    speed: (d.querySelector('.sec-speed')||{}).value || '',  // ⏩ 구간별 배속 (v0.82)
-  })).filter(s => s.narration.trim());
+  const full = (pick('secSrcMode') || 'full') === 'full';        // 🎥 v0.84
+  const fullPath = full ? (($('secFullPath')||{}).value || '').trim() : '';
+  if(full && !fullPath){ alert('[🎥 풀영상 선택]으로 영상을 골라주세요 — 구간마다 클립을 따로 넣으려면 위에서 [🎬 구간마다 클립 따로]를 고르세요'); return; }
+  const collect = function(){
+    return [...(($('secRows')||{}).children || [])].map(d => {
+      const s = parseMMSS(((d.querySelector('.sec-start')||{}).value || ''));
+      const e = parseMMSS(((d.querySelector('.sec-end')||{}).value || ''));
+      return {
+        title: (d.querySelector('.sec-title')||{}).value || '',
+        video_path: ((d.querySelector('.sec-video')||{}).value || '').trim(),
+        narration: (d.querySelector('.sec-narr')||{}).value || '',
+        speed: (d.querySelector('.sec-speed')||{}).value || '',  // ⏩ 구간별 배속 (v0.82)
+        start_us: s != null ? Math.round(s * 1e6) : null,
+        end_us: e != null ? Math.round(e * 1e6) : null,
+      };
+    }).filter(s => s.narration.trim());
+  };
+  let sections = collect();
   if(!sections.length){ alert('구간이 없어요 — [➕ 구간 추가]로 구간을 만들고 내레이션을 넣어주세요'); return; }
-  for(let i = 0; i < sections.length; i++){
-    if(!sections[i].video_path){ alert('구간 ' + (i + 1) + '의 클립(영상)을 골라주세요'); return; }
+  if(full){
+    const missing = sections.some(s => s.start_us == null || s.end_us == null || s.end_us <= s.start_us);
+    if(missing){                     // 시간이 빈 구간이 있으면 자동 제안으로 채우고 진행
+      if(!(await suggestSecRanges(null, true))){
+        alert('구간 시간이 비어 있어요 — [🪄 자동으로 나누기]를 먼저 눌러주세요'); return;
+      }
+      sections = collect();
+    }
+  } else {
+    for(let i = 0; i < sections.length; i++){
+      if(!sections[i].video_path){ alert('구간 ' + (i + 1) + '의 클립(영상)을 골라주세요'); return; }
+    }
   }
   let key = '';
   if(!window._hasGeminiKey) key = ensureGeminiKey();  // 보이스 적용용 (없어도 내장 음성)
   const body = {
     sections,
+    full_video: fullPath,                    // 🎥 풀영상 하나로 (v0.84 — 빈 값이면 클립 모드)
     layout: pick('secLayout') || 'wide',
     quality: 'standard',
     narr_voice: ($('secVoiceSel')||{}).value || '',

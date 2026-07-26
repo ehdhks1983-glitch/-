@@ -637,6 +637,58 @@ def shrink_video(video: str, out_path: str, crf: int = 25, max_h: int = 1080) ->
     return str(out_path)
 
 
+def extract_segment(video: str, start_us: int, end_us: int, out_path: str,
+                    fps: int = 30) -> str:
+    """풀영상에서 한 구간을 저손실 추출 (v0.84 — 구간 대본 「풀영상 하나로」 입력).
+
+    입력 시킹(-ss)이라 긴 영상 뒷부분도 빠르다. 소리는 뺀다 — 내레이션이 대체.
+    """
+    dur_s = max(0.05, (end_us - start_us) / 1e6)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+            "-ss", us_to_seconds_str(start_us), "-i", str(video),
+            "-t", f"{dur_s:.6f}", "-vf", "setpts=PTS-STARTPTS",
+            "-r", str(fps), "-c:v", "libx264", "-crf", "16",
+            "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-an",
+            "-movflags", "+faststart", str(out_path)])
+    return str(out_path)
+
+
+def partition_by_weights(total_us: int, weights: List[float],
+                         scenes_us: Optional[List[int]] = None,
+                         min_seg_us: int = 1_000_000) -> List[Tuple[int, int]]:
+    """전체 길이를 가중치 비율로 연속 분할 (v0.84 — 풀영상 구간 자동 제안).
+
+    weights = 구간별 내레이션 분량(글자 수 등). 경계는 가까운 장면 전환점
+    (scenes_us)이 이웃 구간의 30% 안에 있으면 그리로 스냅 — 화면이 바뀌는
+    지점에서 잘리게. 항상 총 n개의 연속·단조 구간을 돌려준다.
+    """
+    n = max(1, len(weights or []))
+    ws = [max(0.001, float(w)) for w in (weights or [1.0])]
+    tot_w = sum(ws)
+    step_min = max(200_000, min(min_seg_us, total_us // (2 * n) or 1))
+    bounds: List[int] = []
+    acc = 0.0
+    for w in ws[:-1]:
+        acc += w
+        bounds.append(int(total_us * acc / tot_w))
+    snapped: List[int] = []
+    prev = 0
+    for j, b in enumerate(bounds):
+        nxt = bounds[j + 1] if j + 1 < len(bounds) else total_us
+        if scenes_us:
+            tol = int(min(b - prev, nxt - b) * 0.3)
+            best = min(scenes_us, key=lambda s, bb=b: abs(s - bb))
+            if abs(best - b) <= tol:
+                b = int(best)
+        b = max(prev + step_min, min(b, total_us - step_min))
+        b = min(b, total_us)                     # 초단편 영상 방어 (테스트·극단값)
+        snapped.append(b)
+        prev = b
+    edges = [0] + snapped + [total_us]
+    return [(edges[k], max(edges[k], edges[k + 1])) for k in range(n)]
+
+
 def attach_branding(video: str, intro: str, outro: str, out_path: str,
                     fps: int = 30, still_s: float = 2.5) -> str:
     """본편 앞뒤에 인트로/아웃트로를 붙인다 (v0.43 채널 브랜딩).
