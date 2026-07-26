@@ -32,6 +32,44 @@ _JOBS: dict = {}
 _LOCK = threading.Lock()
 _LOCAL_VIDEOS: dict = {}  # 🎬 풀영상 미리보기 토큰 → 경로 (v0.84 — 임의 경로 GET 방지)
 
+# 📋 작업 큐 (v0.88) — 무거운 작업(생성·편집 렌더·구간 조립)은 한 번에 하나씩.
+# 여러 작업을 연달아 시작해도 앞 작업이 끝나면 자동으로 다음이 시작된다.
+import queue as _queue_mod  # noqa: E402
+
+_JOB_QUEUE: "_queue_mod.Queue" = _queue_mod.Queue()
+_QUEUE_WORKER_STARTED = threading.Event()
+
+
+def _queue_job(job_id: str, fn, *args) -> None:
+    """무거운 작업을 큐에 넣는다 — 앞 작업이 없으면 워커가 바로 집어간다."""
+    _set_job(job_id, status="queued", stage="queued", frac=0.0,
+             note="⏳ 대기 중 — 앞 작업이 끝나면 자동으로 시작돼요")
+    _JOB_QUEUE.put((job_id, fn, args))
+
+
+def _queue_worker() -> None:
+    while True:
+        job_id, fn, args = _JOB_QUEUE.get()
+        try:
+            if (_get_job(job_id) or {}).get("status") == "cancelled":
+                continue                      # ✕ 대기 중 취소된 작업은 건너뜀
+            fn(*args)
+        except Exception:  # noqa: BLE001 — 워커는 절대 죽으면 안 됨
+            import traceback  # noqa: PLC0415
+
+            logging.getLogger("cutdaejang").error(
+                "큐 작업 실패 %s\n%s", job_id, traceback.format_exc())
+            _set_job(job_id, status="failed",
+                     errors=["작업 실행 중 오류", traceback.format_exc()[-800:]])
+        finally:
+            _JOB_QUEUE.task_done()
+
+
+def _ensure_queue_worker() -> None:
+    if not _QUEUE_WORKER_STARTED.is_set():
+        _QUEUE_WORKER_STARTED.set()
+        threading.Thread(target=_queue_worker, daemon=True).start()
+
 # 편집 폼에서 "기억해 두는" 세팅 키 — 경로·주제·대본·API 키 같은 작업별 입력은 제외
 _EDIT_LAST_KEYS = (
     "layout", "auto_subtitle", "cut_silence", "denoise", "orig_audio",
@@ -2338,9 +2376,7 @@ class _Handler(BaseHTTPRequestHandler):
             _set_job(job_id, status="running", stage="script", frac=0.0,
                      title=topic, params=params,
                      orientation="wide" if params.get("orientation") == "wide" else "shorts")
-            threading.Thread(
-                target=_run_generate, args=(job_id, params, workdir), daemon=True
-            ).start()
+            _queue_job(job_id, _run_generate, job_id, params, workdir)  # 📋 작업 큐 (v0.88)
             self._send_json({"job_id": job_id})
         elif path == "/api/generate_batch":
             topics = [str(t).strip() for t in (params.get("topics") or []) if str(t).strip()]
@@ -2359,9 +2395,7 @@ class _Handler(BaseHTTPRequestHandler):
             job_id = orchestrator.new_job_id(f"배치{len(items)}")
             _set_job(job_id, status="running", stage="script", frac=0.0,
                      title=f"📦 배치 {len(items)}개 — {first}…", params=params)
-            threading.Thread(
-                target=_run_batch, args=(job_id, items, params, workdir), daemon=True
-            ).start()
+            _queue_job(job_id, _run_batch, job_id, items, params, workdir)  # 📋 작업 큐 (v0.88)
             self._send_json({"job_id": job_id, "count": len(items)})
         elif path == "/api/confirm":
             job = _get_job(params.get("job_id", ""))
@@ -2412,12 +2446,8 @@ class _Handler(BaseHTTPRequestHandler):
                     daemon=True,
                 ).start()
             else:
-                _set_job(job["id"], status="running", stage="tts", frac=0.0)
-                threading.Thread(
-                    target=_run_pipeline,
-                    args=(job["id"], script, job.get("params", {}), workdir),
-                    daemon=True,
-                ).start()
+                _queue_job(job["id"], _run_pipeline,
+                           job["id"], script, job.get("params", {}), workdir)  # 📋 v0.88
             self._send_json({"ok": True})
         elif path == "/api/edit":
             video = (params.get("video_path") or "").strip().strip('"')
@@ -2434,9 +2464,7 @@ class _Handler(BaseHTTPRequestHandler):
             job_id = orchestrator.new_job_id(Path(video).stem or "edit")
             _set_job(job_id, status="running", stage="analyze", frac=0.0,
                      title=Path(video).stem, params=params)
-            threading.Thread(
-                target=_run_edit, args=(job_id, params, workdir), daemon=True
-            ).start()
+            _queue_job(job_id, _run_edit, job_id, params, workdir)  # 📋 작업 큐 (v0.88)
             self._send_json({"job_id": job_id})
         elif path == "/api/edit_render":
             job = _get_job(params.get("job_id", ""))
@@ -2481,13 +2509,10 @@ class _Handler(BaseHTTPRequestHandler):
                         int(params.get("trim_end_us") or 0))
             except (TypeError, ValueError):
                 trim = (0, 0)
-            threading.Thread(
-                target=_do_edit_render,
-                args=(job["id"], params.get("subtitles") or [], hook,
-                      ep.get("layout", "shorts"), job.get("cut_video"), workdir,
-                      keep, speed, quality, denoise, trim),
-                daemon=True,
-            ).start()
+            _queue_job(job["id"], _do_edit_render,
+                       job["id"], params.get("subtitles") or [], hook,
+                       ep.get("layout", "shorts"), job.get("cut_video"), workdir,
+                       keep, speed, quality, denoise, trim)  # 📋 작업 큐 (v0.88)
             self._send_json({"ok": True})
         elif path == "/api/refine_subtitles":
             _apply_keys(params)
@@ -2543,15 +2568,12 @@ class _Handler(BaseHTTPRequestHandler):
                         int(params.get("trim_end_us") or 0))
             except (TypeError, ValueError):
                 trim = (0, 0)
-            threading.Thread(
-                target=_do_edit_split,
-                args=(job["id"], params.get("subtitles") or [],
-                      params.get("hook", ep.get("hook", "")),
-                      ep.get("layout", "shorts"), job.get("cut_video"), workdir,
-                      target, speed, params.get("quality") or "standard",
-                      ep.get("denoise") or False, trim),
-                daemon=True,
-            ).start()
+            _queue_job(job["id"], _do_edit_split,
+                       job["id"], params.get("subtitles") or [],
+                       params.get("hook", ep.get("hook", "")),
+                       ep.get("layout", "shorts"), job.get("cut_video"), workdir,
+                       target, speed, params.get("quality") or "standard",
+                       ep.get("denoise") or False, trim)  # 📋 작업 큐 (v0.88)
             self._send_json({"ok": True})
         elif path == "/api/suggest_thumbnail":
             _apply_keys(params)
@@ -2871,12 +2893,8 @@ class _Handler(BaseHTTPRequestHandler):
                 p = scenes_dir / f"scene_{idx + 1:02d}.png"
                 if 0 <= idx < len(imgs) and p.is_file():
                     imgs[idx] = str(p)
-            _set_job(job["id"], status="running", stage="tts", frac=0.0, note="")
-            threading.Thread(
-                target=_run_pipeline,
-                args=(job["id"], script, job.get("params", {}), workdir, imgs),
-                daemon=True,
-            ).start()
+            _queue_job(job["id"], _run_pipeline,
+                       job["id"], script, job.get("params", {}), workdir, imgs)  # 📋 v0.88
             self._send_json({"ok": True})
         elif path == "/api/settings":
             try:
@@ -2959,8 +2977,7 @@ class _Handler(BaseHTTPRequestHandler):
             job_id = orchestrator.new_job_id(title)
             _set_job(job_id, status="running", stage="tts", frac=0.0,
                      title=f"🎞 {title}", params=params)
-            threading.Thread(target=_run_sections, args=(job_id, params, workdir),
-                             daemon=True).start()
+            _queue_job(job_id, _run_sections, job_id, params, workdir)  # 📋 작업 큐 (v0.88)
             self._send_json({"job_id": job_id})
         elif path == "/api/job_params":  # ✏ 다시 편집 — 저장된 입력값 회수 (v0.85)
             from ..db.jobs import JobStore  # noqa: PLC0415
@@ -2991,6 +3008,65 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 config.save_settings({"ui": {"sec_draft": draft}})
                 self._send_json({"ok": True})
+        elif path == "/api/coupang_keys":  # 🛒 파트너스 API 키 저장·확인 (v0.88)
+            ak = str(params.get("access") or "").strip()
+            sk = str(params.get("secret") or "").strip()
+            if ak and sk:
+                config.save_api_key("coupang_access", ak)
+                config.save_api_key("coupang_secret", sk)
+                os.environ["COUPANG_ACCESS_KEY"] = ak
+                os.environ["COUPANG_SECRET_KEY"] = sk
+            self._send_json({"ok": True,
+                             "has": bool(os.environ.get("COUPANG_ACCESS_KEY")
+                                         and os.environ.get("COUPANG_SECRET_KEY"))})
+        elif path == "/api/coupang_search":  # 🛒 파트너스 상품 검색 (v0.88)
+            from ..tools import coupang_api  # noqa: PLC0415
+            try:
+                items = coupang_api.search_products(
+                    str(params.get("keyword") or ""),
+                    os.environ.get("COUPANG_ACCESS_KEY", ""),
+                    os.environ.get("COUPANG_SECRET_KEY", ""))
+                self._send_json({"ok": True, "items": items})
+            except coupang_api.CoupangError as e:
+                self._send_json({"error": str(e)}, 400)
+        elif path == "/api/coupang_pick":  # 🛒 고른 상품 → 사진 내려받기 + 딥링크 (v0.88)
+            from ..tools import coupang_api, fetch_web  # noqa: PLC0415
+            import hashlib as _hl  # noqa: PLC0415
+            name = str(params.get("name") or "").strip()
+            image = str(params.get("image") or "").strip()
+            url = str(params.get("url") or "").strip()
+            if not name:
+                self._send_json({"error": "상품을 먼저 골라주세요"}, 400)
+                return
+            imgs, previews = [], []
+            if image.startswith("http"):
+                token = _hl.sha1((url or name).encode("utf-8")).hexdigest()[:8]
+                dest = Path(workdir) / "weblink" / token
+                dest.mkdir(parents=True, exist_ok=True)
+                try:
+                    raw = fetch_web.fetch_bytes(image)
+                    ext = fetch_web.sniff_image_ext(raw) or "jpg"
+                    p = dest / f"img_01.{ext}"
+                    p.write_bytes(raw)
+                    imgs = [str(p)]
+                    previews = [f"/weblink/{token}/{p.name}"]
+                except Exception as ie:  # noqa: BLE001 — 사진 실패해도 진행
+                    logging.getLogger("cutdaejang").warning("상품 사진 내려받기 실패: %s", ie)
+            short = ""
+            try:
+                if url:
+                    links = coupang_api.deeplink(
+                        [url], os.environ.get("COUPANG_ACCESS_KEY", ""),
+                        os.environ.get("COUPANG_SECRET_KEY", ""))
+                    short = (links[0].get("short") or "") if links else ""
+            except coupang_api.CoupangError:
+                short = ""                    # 딥링크 실패해도 원 링크로 진행
+            price = int(params.get("price") or 0)
+            text = name + ("\n가격: 약 " + format(price, ",") + "원" if price else "")
+            if str(params.get("category") or "").strip():
+                text += "\n분류: " + str(params["category"]).strip()
+            self._send_json({"ok": True, "paste_text": text, "images": imgs,
+                             "previews": previews, "link": short or url})
         elif path == "/api/reg_video":  # 🎬 풀영상 등록 → 미리보기 토큰 (v0.84)
             from ..core import video_editor  # noqa: PLC0415
             from ..utils import ffmpeg as ff  # noqa: PLC0415
@@ -3027,6 +3103,14 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "total_us": total,
                              "ranges": [[s, e] for s, e in ranges],
                              "snapped": bool(scenes)})
+        elif path == "/api/cancel_queued":  # 📋 대기 중 작업 취소 (v0.88)
+            job = _get_job(str(params.get("job_id") or "")) or {}
+            if job.get("status") != "queued":
+                self._send_json({"error": "대기 중인 작업만 취소할 수 있어요 (진행 중인 작업은 끝까지 갑니다)"}, 400)
+                return
+            _set_job(job["id"], status="cancelled", stage="cancelled",
+                     note="✕ 취소됨 — 시작 전에 대기열에서 뺐어요")
+            self._send_json({"ok": True})
         elif path == "/api/shrink":  # 📦 업로드용 용량 줄이기 (v0.83)
             job_id = str(params.get("job_id") or "")
             job = _get_job(job_id) or {}
@@ -3241,7 +3325,7 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 _set_job(new_id, status="failed", errors=[str(e)])
 
-        threading.Thread(target=run, daemon=True).start()
+        _queue_job(new_id, run)  # 📋 작업 큐 (v0.88) — 재생성도 순차
         self._send_json({"job_id": new_id})
 
     # ---------- 📦 업로드 키트 (v0.39) — 유튜브 제목·태그·설명 일괄 생성 ----------
@@ -3559,6 +3643,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
                 "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
+                "coupang": bool(os.environ.get("COUPANG_ACCESS_KEY")
+                                and os.environ.get("COUPANG_SECRET_KEY")),  # 🛒 v0.88
             },
             "platform": sys.platform,
             "env": _env_check(),
@@ -3675,6 +3761,7 @@ def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
     _attach_ui_log()
     for msg in config.migrate_settings():  # 구버전 설정 1회 승격 (v0.50.1)
         logging.getLogger("cutdaejang").info("설정 업데이트: %s", msg)
+    _ensure_queue_worker()   # 📋 작업 큐 워커 (v0.88) — 무거운 작업 순차 실행
     httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     httpd.workdir = str(workdir)  # type: ignore[attr-defined]
     return httpd
@@ -3851,7 +3938,10 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.87.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.88.0)</small></h1>
+    <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
+      <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
+    </div>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4753,7 +4843,26 @@ _HTML = """<!doctype html>
       <div class="hint" style="margin-top:4px">상품 페이지는 프로그램 접근을 막아 자동 수집이 안 돼요.
         대신: ① 상품 페이지의 <b>상세설명 글을 드래그·복사</b>해 아래에 붙여넣고 ② 상품 사진을
         PC에 저장해 [🖼 상품 사진 고르기]로 넣어주세요. 링크는 위 칸에 그대로 두면 출처로 저장돼요.</div>
-      <textarea id="wlPasteText" style="min-height:110px;margin-top:6px" placeholder="상품 상세설명·특징·후기 등을 통째로 붙여넣으세요 — AI가 홍보 대본으로 정리해요"></textarea>
+      <div style="margin-top:8px;padding:8px 10px;border:1px solid #2c3347;border-radius:10px;background:#171a23">
+        <div class="chk" style="gap:8px;flex-wrap:wrap">
+          <b style="font-size:13px">🛒 파트너스 API로 자동 채우기</b>
+          <span class="hint" id="cpKeyState">— 키를 저장하면 상품 검색으로 이름·가격·사진·파트너스 링크가 자동으로 들어와요</span>
+        </div>
+        <details class="opt" id="cpKeyBox" style="margin-top:4px">
+          <summary>🔑 파트너스 API 키 <span class="hint">— 쿠팡 파트너스 → 도구 → Open API에서 발급</span></summary>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+            <input type="password" id="cpAccess" placeholder="Access Key" style="flex:1;min-width:140px">
+            <input type="password" id="cpSecret" placeholder="Secret Key" style="flex:1;min-width:140px">
+            <button class="ghost" onclick="saveCoupangKeys(event)">저장</button>
+          </div>
+        </details>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <input type="text" id="cpKeyword" placeholder="상품 검색어 (예: 무선 선풍기)" style="flex:1;min-width:160px">
+          <button class="ghost" onclick="coupangSearch(event)">🛒 상품 검색</button>
+        </div>
+        <div id="cpResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px"></div>
+      </div>
+      <textarea id="wlPasteText" style="min-height:110px;margin-top:6px" placeholder="상품 상세설명·특징·후기 등을 통째로 붙여넣으세요 — AI가 홍보 대본으로 정리해요 (위 🛒 검색으로 자동 채울 수도 있어요)"></textarea>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
         <button class="ghost" onclick="pickWlPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
         <span class="hint" id="wlPhotoCnt" style="align-self:center"></span>
@@ -5338,7 +5447,8 @@ const $ = id => document.getElementById(id);
 // 🔒 XSS 방어 (v0.70) — 제목·AI응답·경로 등 신뢰할 수 없는 값을 innerHTML에 넣기 전 이스케이프
 const escHtml = s => String(s==null?'':s).replace(/[&<>"']/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const STAGE_KO = {script:'대본 생성', tts:'목소리 합성(TTS)', background:'배경 준비',
+const STAGE_KO = {queued:'⏳ 대기 중 (앞 작업이 끝나면 자동 시작)', cancelled:'✕ 취소됨',
+                  script:'대본 생성', tts:'목소리 합성(TTS)', background:'배경 준비',
                   timeline:'타임라인 계산', render:'영상 렌더링',
                   review:'대본 검토 대기', done:'완료',
                   analyze:'무음 구간 분석', cut:'무음 잘라내기', stt:'음성 인식(자막 만들기)'};
@@ -7628,6 +7738,72 @@ function applyTheme(prefix){
 // ── 🛍 쇼핑 링크 감지 (v0.86) — 상품 페이지는 봇 차단 → 붙여넣기 안내 ──
 const SHOP_HOST_RE = /coupang\\.com|coupa\\.ng|smartstore\\.naver\\.com|shopping\\.naver\\.com|brand\\.naver\\.com|11st\\.co\\.kr|gmarket\\.co\\.kr|auction\\.co\\.kr/i;
 
+// ── 🛒 쿠팡 파트너스 API (v0.88) — 상품 검색으로 붙여넣기 자동 채우기 ──
+async function saveCoupangKeys(ev){
+  ev.preventDefault();
+  const ak = (($('cpAccess')||{}).value || '').trim();
+  const sk = (($('cpSecret')||{}).value || '').trim();
+  if(!ak || !sk){ alert('Access Key와 Secret Key를 모두 붙여넣어 주세요'); return; }
+  const d = await (await fetch('/api/coupang_keys', {method:'POST',
+    body: JSON.stringify({access: ak, secret: sk})})).json();
+  if(d.error){ alert(d.error); return; }
+  window._hasCoupangKey = !!d.has;
+  $('cpAccess').value = ''; $('cpSecret').value = '';
+  $('cpKeyState').textContent = '✅ 키 저장됨 — 이제 상품을 검색해 보세요';
+  alert('저장했어요 — 상품 검색으로 이름·가격·사진·파트너스 링크를 자동으로 채울 수 있어요');
+}
+
+async function coupangSearch(ev){
+  ev.preventDefault();
+  const kw = (($('cpKeyword')||{}).value || '').trim();
+  if(!kw){ alert('검색어를 입력해 주세요 (예: 무선 선풍기)'); return; }
+  if(!window._hasCoupangKey){
+    const kb = $('cpKeyBox'); if(kb) kb.open = true;
+    alert('먼저 파트너스 API 키를 저장해 주세요 — 쿠팡 파트너스 → 도구 → Open API에서 발급'); return;
+  }
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '검색 중…';
+  try{
+    const d = await (await fetch('/api/coupang_search', {method:'POST',
+      body: JSON.stringify({keyword: kw})})).json();
+    if(d.error){ alert(d.error); return; }
+    const grid = $('cpResults'); grid.innerHTML = '';
+    (d.items || []).forEach(function(it){
+      const card = document.createElement('div');
+      card.style.cssText = 'border:1px solid #2c3347;border-radius:10px;padding:8px;cursor:pointer;background:#14161c';
+      card.innerHTML = (it.image ? '<img src="' + escHtml(it.image) + '" style="width:100%;height:96px;object-fit:contain;border-radius:6px;background:#fff">' : '') +
+        '<div style="font-size:12px;margin-top:6px;line-height:1.3;max-height:48px;overflow:hidden">' + escHtml(it.name) + '</div>' +
+        '<div class="hint" style="margin-top:2px">' + (it.price ? (Number(it.price).toLocaleString() + '원') : '') +
+        (it.rocket ? ' 🚀' : '') + '</div>';
+      card.title = '이 상품으로 채우기';
+      card.onclick = function(){ coupangPick(it, card); };
+      grid.appendChild(card);
+    });
+    if(!(d.items || []).length) alert('검색 결과가 없어요 — 다른 검색어로 시도해 보세요');
+  } catch(e){ alert('상품 검색 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+async function coupangPick(it, card){
+  if(card){ card.style.borderColor = '#4266d5'; }
+  try{
+    const d = await (await fetch('/api/coupang_pick', {method:'POST',
+      body: JSON.stringify(it)})).json();
+    if(d.error){ alert(d.error); return; }
+    if(d.paste_text){
+      const ta = $('wlPasteText');
+      ta.value = d.paste_text + (ta.value.trim() ? ('\\n\\n' + ta.value.trim()) : '\\n\\n(여기에 상품 상세설명을 덧붙이면 대본이 더 풍부해져요)');
+    }
+    if((d.images || []).length){
+      window._wlLocalPhotos = d.images;
+      $('wlPhotoCnt').textContent = '📷 상품 사진 1장 자동 저장됨 — [🖼 상품 사진 고르기]로 더 넣을 수 있어요';
+    }
+    if(d.link){ $('weblinkUrl').value = d.link; }   // 파트너스 추적 링크 → 출처로 저장
+    uiBanner('🛒 상품 정보를 채웠어요 — 상세설명을 덧붙인 뒤 [🤖 이 내용으로 대본 만들기]를 누르세요' +
+             (d.link ? ' (파트너스 링크도 준비됨 ✓)' : ''));
+  } catch(e){ alert('상품 채우기 오류: ' + e); }
+}
+
 async function pickWlPhotos(ev){
   ev.preventDefault();
   const btn = ev.target; btn.disabled = true;
@@ -8320,6 +8496,11 @@ async function saveWeblinkProduct(ev){
 async function poll(){
   const state = await (await fetch('/api/state')).json();
   window._hasGeminiKey = state.keys.gemini;
+  window._hasCoupangKey = !!(state.keys || {}).coupang;   // 🛒 파트너스 (v0.88)
+  if(window._hasCoupangKey && $('cpKeyState') && !window._cpStateSet){
+    window._cpStateSet = true;
+    $('cpKeyState').textContent = '✅ 키 저장됨 — 상품을 검색해 보세요';
+  }
 
   window._isWin = (state.platform || '').startsWith('win');
   window._hasElevenKey = !!(state.keys && state.keys.elevenlabs);
@@ -8435,9 +8616,16 @@ async function poll(){
 
   renderHistory(state.history);
   updateLogs(state.logs);
+  renderJobsBar(state.jobs || []);   // 📋 진행·대기 목록 (v0.88)
   if(!currentJob) return;
   const job = state.jobs.find(j => j.id === currentJob);
   if(!job) return;
+  if(job.status === 'cancelled'){
+    clearInterval(timer); timer = null;
+    $('stageText').textContent = '✕ 취소됨 — 대기열에서 뺐어요';
+    $('goBtn').disabled = false; $('editBtn').disabled = false;
+    return;
+  }
 
   $('statusTitle').textContent = job.title || job.id;
   const frac = job.frac || 0;
@@ -8538,6 +8726,56 @@ async function poll(){
 }
 
 const PROV_KO = {gemini:'Gemini', openai:'OpenAI', windows:'내장', stub:'톤'};
+// ── 📋 작업 큐 — 진행·대기 목록 칩 (v0.88) ──
+function renderJobsBar(jobs){
+  const bar = $('jobsBar'); if(!bar) return;
+  const act = (jobs || []).filter(j =>
+    ['queued', 'running', 'review_subtitle', 'review_scenes'].includes(j.status));
+  bar.classList.toggle('hidden', act.length === 0);
+  [...bar.querySelectorAll('.jobchip')].forEach(c => c.remove());
+  act.slice(0, 6).forEach(j => {
+    const chip = document.createElement('span');
+    chip.className = 'jobchip';
+    chip.style.cssText = 'display:inline-flex;gap:6px;align-items:center;padding:4px 10px;' +
+      'border:1px solid ' + (j.id === currentJob ? '#4266d5' : '#2c3347') +
+      ';border-radius:999px;background:#171a23;cursor:pointer;font-size:12.5px';
+    const ico = j.status === 'queued' ? '⏳'
+      : j.status === 'running' ? '▶' : '📝';
+    const pct = j.status === 'running' ? (' ' + Math.round((j.frac || 0) * 100) + '%') : '';
+    chip.textContent = ico + ' ' + ((j.title || j.id).slice(0, 16)) + pct;
+    chip.title = (j.title || j.id) + ' — 눌러서 이 작업 화면 보기';
+    chip.onclick = function(){ watchJob(j.id); };
+    if(j.status === 'queued'){
+      const x = document.createElement('b');
+      x.textContent = '✕'; x.title = '대기 취소';
+      x.style.cssText = 'color:#e46a6a;cursor:pointer';
+      x.onclick = function(ev){ ev.stopPropagation(); cancelQueued(j.id); };
+      chip.appendChild(x);
+    }
+    bar.appendChild(chip);
+  });
+}
+
+function watchJob(id){
+  currentJob = id;
+  window._subLoaded = false; window._kitLoaded = false;
+  ['formCard', 'editCard', 'weblinkCard', 'sectionCard'].forEach(c => {
+    const el = $(c); if(el) el.classList.add('hidden');
+  });
+  $('statusCard').classList.remove('hidden');
+  $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  if(!timer) timer = setInterval(poll, 900);
+  poll();
+}
+
+async function cancelQueued(id){
+  try{
+    const d = await (await fetch('/api/cancel_queued', {method:'POST',
+      body: JSON.stringify({job_id: id})})).json();
+    if(d.error) alert(d.error);
+  } catch(e){ alert('취소 오류: ' + e); }
+}
+
 function renderHistory(rows){
   const tb = $('histTable').querySelector('tbody');
   tb.innerHTML = '';

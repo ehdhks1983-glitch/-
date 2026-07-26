@@ -250,6 +250,18 @@ def _sniff_ext(data: bytes, url: str) -> Optional[str]:
     return None
 
 
+def fetch_bytes(url: str, timeout: float = 20.0, cap: int = 15_000_000) -> bytes:
+    """단일 파일(이미지 등) 내려받기 — 🛒 파트너스 상품 이미지 CDN용 (v0.88)."""
+    data, _final, _ct = _get(url, referer=url, timeout=timeout, cap=cap)
+    return data
+
+
+def sniff_image_ext(data: bytes) -> str:
+    """매직바이트만으로 이미지 확장자(점 없이) — 모르면 빈 문자열 (v0.88)."""
+    ext = _sniff_ext(data, "")
+    return (ext or "").lstrip(".")
+
+
 def fetch_article(url: str, dest_dir, timeout: float = 20.0, max_images: int = 20,
                   progress_cb: Optional[Callable[[str], None]] = None) -> dict:
     """글 1편을 가져와 사진을 dest_dir에 저장.

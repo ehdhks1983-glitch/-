@@ -243,7 +243,10 @@ def save_settings_replace(dotted_key: str, value, path: Optional[str] = None) ->
 # ─────────── API 키 저장 (선택 기능 — 이 PC 파일에 평문 저장) ───────────
 
 _KEY_ENVS = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
-             "elevenlabs": "ELEVENLABS_API_KEY"}
+             "elevenlabs": "ELEVENLABS_API_KEY",
+             # 🛒 쿠팡 파트너스 오픈 API (v0.88 — 상품 검색·딥링크)
+             "coupang_access": "COUPANG_ACCESS_KEY",
+             "coupang_secret": "COUPANG_SECRET_KEY"}
 
 
 def api_keys_path() -> Path:
