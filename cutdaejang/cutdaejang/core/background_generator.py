@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..spec import Canvas
+from . import stage_locks
 from ..utils import ffmpeg as ff
 from ..utils.png import vertical_gradient_png
 from .tts_engine import _http_post_json
@@ -262,6 +263,7 @@ def _is_quota_error(e: Exception) -> bool:
     return "429" in s or "RESOURCE_EXHAUSTED" in s or "credits are depleted" in s
 
 
+@stage_locks.guarded(stage_locks.IMAGE)  # 🚦 동시 작업 시 이미지 생성은 한 작업씩 (v0.93)
 def generate_scene_images(
     prompts: list,
     provider: GeminiImage,

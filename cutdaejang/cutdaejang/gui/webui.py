@@ -4037,8 +4037,8 @@ _HTML = """<!doctype html>
   .hidden { display:none !important; }
   code { background:#0f1117; padding:2px 6px; border-radius:4px; font-size:12px; }
   /* v0.36 초보자 UI — 첫 화면 카드·단계 번호·접는 옵션 그룹 */
-  .topbar { display:flex; align-items:center; gap:8px; }
-  .topbar h1 { flex:1; }
+  .topbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .topbar h1 { flex:1; min-width:240px; }
   .topbar button { width:auto; margin:0; }
   .home-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(216px,1fr));
                 gap:12px; margin-top:14px; }
@@ -4096,8 +4096,8 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.92.0)</small></h1>
-    <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.93.0)</small></h1>
+    <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
         <option value="1">동시 1개 (순서대로)</option>
@@ -9177,6 +9177,9 @@ async function poll(){
   updateLogs(state.logs);
   renderJobsBar(state.jobs || []);   // 📋 진행·대기 목록 (v0.88)
   syncParallelSel(state);            // 🔀 동시 개수 셀렉트 동기화 (v0.90)
+  // 🎙 쇼핑 카드 목소리·BGM — 목록이 늦게 로드돼도 계속 동기화 (v0.93 버그 수정:
+  // 카드를 목록 로드 전에 열면 목소리가 빈 채로 남던 문제. initShopCard는 멱등)
+  if(window._view === 'shop') initShopCard();
   if(!currentJob) return;
   const job = state.jobs.find(j => j.id === currentJob);
   if(!job) return;

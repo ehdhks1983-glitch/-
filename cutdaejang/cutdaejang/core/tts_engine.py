@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Protocol, Tuple
 
 from .. import config
+from . import stage_locks
 from ..utils import ffmpeg as ff
 from ..utils.timefmt import US_PER_SECOND
 
@@ -902,6 +903,7 @@ def make_provider(name: str, settings: dict) -> TTSProvider:
     return PROVIDERS[name]()
 
 
+@stage_locks.guarded(stage_locks.TTS)  # 🚦 동시 작업 시 TTS는 한 작업씩 (v0.93)
 def synth_with_fallback(
     sentences: List[str],
     chain: List[str],

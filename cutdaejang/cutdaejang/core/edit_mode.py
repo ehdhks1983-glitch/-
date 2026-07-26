@@ -20,6 +20,7 @@ from ..spec import Background, Canvas, Style, Subtitle, TimelineSpec
 from ..utils import ffmpeg as ff
 from . import video_editor
 from .render_engine import DEFAULT_FONTS_DIR, ass_writer
+from . import stage_locks
 from .render_engine.ffmpeg_composer import _NVENC_PRESETS, RenderOptions
 from .stt_engine import STTEngine
 from .video_editor import SilenceOptions
@@ -44,6 +45,7 @@ def _fits_us(a: int, b: int, tol: int = 120_000) -> bool:
     return abs(a - b) <= tol
 
 
+@stage_locks.guarded(stage_locks.STT)  # 🚦 음성 인식은 한 작업씩 — CPU 나눠 쓰면 둘 다 기어감 (v0.93)
 def transcribe_segments(
     video_path: str,
     segments: List[tuple],
@@ -77,6 +79,7 @@ def build_subtitles(cut_segments: List[tuple], texts: List[str]) -> List[Subtitl
     return subs
 
 
+@stage_locks.guarded(stage_locks.STT)  # 🚦 음성 인식은 한 작업씩 (v0.93)
 def transcribe_segments_timed(
     video_path: str,
     segments: List[tuple],
@@ -224,6 +227,7 @@ def _quality_canvas(layout: str, src_w: int, src_h: int, quality: str):
     return Canvas(w=w, h=h, fps=30), q["crf"], q["preset"], q["sharpen"]
 
 
+@stage_locks.guarded(stage_locks.RENDER)  # 🚦 최종 인코딩은 한 작업씩 (v0.93)
 def render_edited(
     cut_video: str,
     subtitles: List[Subtitle],
@@ -1056,6 +1060,7 @@ def split_into_clips(subtitles: List[Subtitle], target_sec: float = 30.0,
     return groups
 
 
+@stage_locks.guarded(stage_locks.RENDER)  # 🚦 최종 인코딩은 한 작업씩 (v0.93)
 def render_from_analysis(
     cut_video: str,
     subtitles: List[Subtitle],

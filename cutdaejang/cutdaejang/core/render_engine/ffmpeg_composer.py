@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ... import presets
+from .. import stage_locks
 from ...spec import TimelineSpec
 from ...utils import ffmpeg as ff
 from ...utils.timefmt import US_PER_SECOND, us_to_seconds_str
@@ -256,6 +257,7 @@ def pick_encoder(opts: RenderOptions) -> str:
     return "h264_nvenc" if ff.nvenc_available() else "libx264"
 
 
+@stage_locks.guarded(stage_locks.RENDER)  # 🚦 동시 작업 시 최종 인코딩은 한 작업씩 (v0.93)
 def compose(
     spec: TimelineSpec,
     voice_path: str,
