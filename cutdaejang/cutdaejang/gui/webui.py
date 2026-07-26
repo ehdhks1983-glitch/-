@@ -3115,8 +3115,10 @@ class _Handler(BaseHTTPRequestHandler):
                 dest = Path(workdir) / "weblink" / token
                 dest.mkdir(parents=True, exist_ok=True)
                 # 🔍 고화질 우선 (v0.90) — 492px 썸네일은 영상 배경에서 흐릿함
-                cands = [coupang_api.hi_res_image(image),
-                         naver_shop_api.hi_res_image(image), image]
+                # 실제로 주소가 바뀐 고화질 후보만 앞에, 원본은 폴백으로 마지막 (v0.91)
+                cands = [c for c in (coupang_api.hi_res_image(image),
+                                     naver_shop_api.hi_res_image(image))
+                         if c and c != image] + [image]
                 seen = set()
                 for cand in cands:
                     if not cand or cand in seen:
@@ -3152,6 +3154,72 @@ class _Handler(BaseHTTPRequestHandler):
                 text += "\n분류: " + str(params["category"]).strip()
             self._send_json({"ok": True, "paste_text": text, "images": imgs,
                              "previews": previews, "link": short or url})
+        elif path == "/api/shop_images":  # 📷 복사한 페이지 조각의 사진 URL들 내려받기 (v0.91)
+            # 상품 페이지는 서버가 못 열지만(봇 차단), 사용자가 브라우저에서 복사한
+            # 조각 속 이미지 주소(공개 CDN)는 그대로 받아진다 — 붙여넣기 한 번에 여러 장.
+            from ..tools import coupang_api, fetch_web, naver_shop_api  # noqa: PLC0415
+            import hashlib as _hl  # noqa: PLC0415
+            import logging as _lg  # noqa: PLC0415
+            raw_urls = [str(u).strip() for u in (params.get("urls") or [])
+                        if str(u or "").strip().startswith("http")]
+            uniq = list(dict.fromkeys(raw_urls))[:12]      # 순서 유지 중복 제거, 최대 12장
+            if not uniq:
+                self._send_json({"error": "사진 주소를 찾지 못했어요 — 상품 페이지에서 사진이 있는 부분을 드래그해 복사한 뒤 붙여넣어 주세요"}, 400)
+                return
+            token = _hl.sha1(("shopimgs:" + uniq[0]).encode("utf-8")).hexdigest()[:8]
+            dest = Path(workdir) / "weblink" / token
+            dest.mkdir(parents=True, exist_ok=True)
+            imgs, previews, skipped = [], [], 0
+            for u in uniq:
+                cands = list(dict.fromkeys(
+                    [c for c in (coupang_api.hi_res_image(u),
+                                 naver_shop_api.hi_res_image(u)) if c != u] + [u]))
+                saved = False
+                for cand in cands:
+                    try:
+                        raw = fetch_web.fetch_bytes(cand)
+                    except Exception as ie:  # noqa: BLE001 — 다음 후보로
+                        _lg.getLogger("cutdaejang").warning(
+                            "사진 내려받기 실패(%s): %s", cand[:60], ie)
+                        continue
+                    ext = fetch_web.sniff_image_ext(raw) or ""
+                    if ext not in ("jpg", "jpeg", "png", "webp", "bmp") or len(raw) < 12_000:
+                        break                  # 아이콘·버튼 같은 자잘한 그림은 건너뜀
+                    p = dest / f"img_{len(imgs) + 1:02d}.{ext}"
+                    p.write_bytes(raw)
+                    imgs.append(str(p))
+                    previews.append(f"/weblink/{token}/{p.name}")
+                    saved = True
+                    break
+                if not saved:
+                    skipped += 1
+            self._send_json({"ok": True, "images": imgs, "previews": previews,
+                             "skipped": skipped})
+        elif path == "/api/shop_upload":  # 📸 스크린샷 클립보드 붙여넣기 저장 (v0.91)
+            from ..tools import fetch_web  # noqa: PLC0415
+            import base64 as _b64  # noqa: PLC0415
+            import hashlib as _hl  # noqa: PLC0415
+            data = str(params.get("data") or "")
+            if "," in data and data.startswith("data:"):
+                data = data.split(",", 1)[1]   # dataURL 접두어 제거
+            try:
+                raw = _b64.b64decode(data or "", validate=False)
+            except Exception:  # noqa: BLE001
+                raw = b""
+            if not raw or len(raw) > 15_000_000:
+                self._send_json({"error": "이미지를 읽지 못했어요 — 스크린샷을 복사한 뒤 다시 붙여넣어 주세요"}, 400)
+                return
+            ext = fetch_web.sniff_image_ext(raw) or ""
+            if ext not in ("jpg", "jpeg", "png", "webp", "bmp"):
+                self._send_json({"error": "지원하지 않는 이미지 형식이에요 (jpg·png·webp·bmp)"}, 400)
+                return
+            token = _hl.sha1(b"shoppaste:" + raw[:256] + str(len(raw)).encode()).hexdigest()[:8]
+            dest = Path(workdir) / "weblink" / token
+            dest.mkdir(parents=True, exist_ok=True)
+            p = dest / f"img_01.{ext}"
+            p.write_bytes(raw)
+            self._send_json({"ok": True, "images": [str(p)],
+                             "previews": [f"/weblink/{token}/{p.name}"]})
         elif path == "/api/reg_video":  # 🎬 풀영상 등록 → 미리보기 토큰 (v0.84)
             from ..core import video_editor  # noqa: PLC0415
             from ..utils import ffmpeg as ff  # noqa: PLC0415
@@ -4034,7 +4102,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.90.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.91.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5130,8 +5198,11 @@ _HTML = """<!doctype html>
     <textarea id="shopPasteText" style="min-height:100px" placeholder="상품 이름·특징·후기 등 — 위에서 상품을 고르면 자동으로 채워지고, 상품 페이지의 상세설명을 복사해 덧붙일 수 있어요"></textarea>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
       <button class="ghost" onclick="pickShopPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
+      <button class="ghost" onclick="clearShopPhotos(event)" title="지금까지 모은 상품 사진을 전부 비우고 처음부터 다시">🗑 사진 비우기</button>
       <span class="hint" id="shopPhotoCnt" style="align-self:center"></span>
     </div>
+    <div id="shopPhotoPrev" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
+    <div class="hint" style="margin-top:4px">📋 <b>사진 한꺼번에 넣기</b> — 상품 페이지에서 사진 있는 부분을 마우스로 드래그해 복사(Ctrl+C)한 뒤 이 화면에 붙여넣기(Ctrl+V)하면 사진 여러 장이 자동으로 들어와요. 스크린샷(Win+Shift+S)을 바로 붙여넣어도 됩니다</div>
     <div class="chk" style="gap:8px;margin-top:6px">
       <span style="white-space:nowrap">🔗 내 수익 링크</span>
       <input type="text" id="shopLinkInput" style="flex:1" placeholder="파트너스 링크는 자동, 쇼핑커넥트 링크는 대시보드에서 복사해 붙여넣기 (완성 후 설명란용)">
@@ -7995,8 +8066,10 @@ async function coupangPick(it, card){       // 🛒 쇼핑 카드 공용 상품 
       try{ ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_e){}
     }
     if((d.images || []).length){
-      window._shopPhotos = d.images;
-      $('shopPhotoCnt').textContent = '📷 대표사진 1장(고화질) 자동 저장됨 — [🖼 상품 사진 고르기]로 스크린샷·직접 찍은 사진을 더 넣으면 장면이 다양해져요';
+      window._shopPhotos = d.images.slice();           // 새 상품 = 사진 새로 시작
+      window._shopPrev = (d.previews || []).slice();
+      renderShopPhotoPrev();
+      $('shopPhotoCnt').textContent = '📷 대표사진 1장(고화질) 자동 저장됨 — 상품 페이지를 복사해 붙여넣으면(Ctrl+V) 사진이 한꺼번에 더 들어와요';
     }
     if(d.link){ $('shopLinkInput').value = d.link; }   // 파트너스 추적 링크
     uiBanner('🛒 기본 정보를 채웠어요 (쿠팡·네이버 API는 대표사진 1장·이름·가격·분류까지만 제공) — ' +
@@ -8061,13 +8134,97 @@ async function pickShopPhotos(ev){
       body: JSON.stringify({kind: 'images'})})).json();
     if(data.error){ alert(data.error + PASTE_TIP); return; }
     const paths = (data.path || '').split(';').filter(Boolean);
-    if(paths.length){
-      window._shopPhotos = (window._shopPhotos || []).concat(paths);
-      $('shopPhotoCnt').textContent = '📷 사진 ' + window._shopPhotos.length + '장 준비됨';
-    }
+    if(paths.length){ addShopPhotos(paths, []); }
   } catch(e){ alert('선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
   finally { btn.disabled = false; }
 }
+
+// ── 📷 사진 대량 가져오기 (v0.91) — 페이지 복사·붙여넣기 + 스크린샷 붙여넣기 ──
+// 상품 페이지는 서버가 못 열어도(봇 차단), 사용자가 브라우저에서 복사한 조각의
+// 이미지 주소는 공개 CDN이라 그대로 받아진다 — Ctrl+C → Ctrl+V 한 번에 여러 장.
+function renderShopPhotoPrev(){
+  const box = $('shopPhotoPrev'); if(!box) return;
+  box.innerHTML = (window._shopPrev || []).map(function(u){
+    return '<img src="' + escHtml(u) + '" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid #2c3347">';
+  }).join('');
+}
+function addShopPhotos(paths, previews){
+  window._shopPhotos = window._shopPhotos || [];
+  window._shopPrev = window._shopPrev || [];
+  (paths || []).forEach(function(p, i){
+    if(window._shopPhotos.indexOf(p) >= 0) return;
+    window._shopPhotos.push(p);
+    if((previews || [])[i]) window._shopPrev.push(previews[i]);
+  });
+  $('shopPhotoCnt').textContent = '📷 사진 ' + window._shopPhotos.length + '장 준비됨';
+  renderShopPhotoPrev();
+}
+function clearShopPhotos(ev){
+  if(ev) ev.preventDefault();
+  window._shopPhotos = []; window._shopPrev = [];
+  $('shopPhotoCnt').textContent = '';
+  renderShopPhotoPrev();
+  uiBanner('🗑 상품 사진을 비웠어요 — 다시 붙여넣거나 [🖼 상품 사진 고르기]로 넣어주세요');
+}
+function extractImgUrls(html){
+  const out = [], seen = {};
+  const re = /<img[^>]+?(?:src|data-src|data-original)=["']([^"']+)["']/gi;
+  let m;
+  while((m = re.exec(html)) !== null){
+    let u = m[1];
+    if(u.indexOf('//') === 0) u = 'https:' + u;
+    if(u.indexOf('http') !== 0) continue;          // data: 등 제외
+    if(seen[u]) continue;
+    seen[u] = 1; out.push(u);
+    if(out.length >= 12) break;
+  }
+  return out;
+}
+async function fetchShopImages(urls){
+  uiBanner('📷 붙여넣은 조각에서 사진 ' + urls.length + '장을 가져오는 중…');
+  try{
+    const d = await (await fetch('/api/shop_images', {method:'POST',
+      body: JSON.stringify({urls})})).json();
+    if(d.error){ uiBanner('📷 ' + d.error); return; }
+    addShopPhotos(d.images, d.previews);
+    uiBanner('📷 사진 ' + (d.images || []).length + '장을 가져왔어요' +
+             (d.skipped ? ' (아이콘 같은 자잘한 그림 ' + d.skipped + '장은 뺐어요)' : '') +
+             ' — 아래 미리보기 확인, 잘못 들어갔으면 [🗑 사진 비우기]');
+  } catch(e){ uiBanner('📷 사진 가져오기 오류: ' + e); }
+}
+function uploadPastedImage(file){
+  if(!file) return;
+  const rd = new FileReader();
+  rd.onload = async function(){
+    try{
+      const d = await (await fetch('/api/shop_upload', {method:'POST',
+        body: JSON.stringify({data: rd.result})})).json();
+      if(d.error){ uiBanner('📸 ' + d.error); return; }
+      addShopPhotos(d.images, d.previews);
+      uiBanner('📸 스크린샷을 상품 사진으로 넣었어요 — 지금 ' + (window._shopPhotos || []).length + '장');
+    } catch(e){ uiBanner('📸 스크린샷 업로드 오류: ' + e); }
+  };
+  rd.readAsDataURL(file);
+}
+function shopPasteHandler(e){
+  const cd = e.clipboardData; if(!cd) return;
+  const items = cd.items || [];
+  const files = [];
+  for(let i = 0; i < items.length; i++){
+    if(items[i].kind === 'file' && (items[i].type || '').indexOf('image/') === 0)
+      files.push(items[i].getAsFile());
+  }
+  if(files.length){ e.preventDefault(); files.forEach(uploadPastedImage); return; }
+  const html = cd.getData('text/html') || '';
+  if(html && html.toLowerCase().indexOf('<img') >= 0){
+    const urls = extractImgUrls(html);
+    if(urls.length) fetchShopImages(urls);   // 글자는 평소처럼 붙고, 사진은 덤으로
+  }
+}
+document.addEventListener('paste', function(e){
+  const sc = $('shopCard');
+  if(sc && !sc.classList.contains('hidden')) shopPasteHandler(e);
+});
 
 async function makeShopScript(ev){
   ev.preventDefault();
