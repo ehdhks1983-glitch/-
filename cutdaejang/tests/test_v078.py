@@ -105,20 +105,21 @@ def test_fetch_url_rejects_bad_url(server):
 
 
 def test_weblink_error_reported(server, monkeypatch):
+    # 쇼핑몰 주소는 v0.92부터 상품 자동 수집 분기로 빠지므로 일반 글 URL로 검사
     import cutdaejang.tools.fetch_web as fw
 
     def boom(url, dest_dir, timeout=20.0, max_images=20, progress_cb=None):
-        raise ValueError("쿠팡 상품 페이지는 프로그램 접근을 막고 있어요 — 테스트")
+        raise ValueError("글을 여는 데 실패했어요 — 테스트")
 
     monkeypatch.setattr(fw, "fetch_article", boom)
-    d = _post(server, "/api/fetch_url", {"url": "https://www.coupang.com/vp/1"})
+    d = _post(server, "/api/fetch_url", {"url": "https://blog.example.com/post/1"})
     assert d.get("ok")
     for _ in range(40):
         t = _state(server).get("weblink_fetch") or {}
         if not t.get("running"):
             break
         time.sleep(0.25)
-    assert "쿠팡" in (t.get("error") or ""), t
+    assert "실패했어요" in (t.get("error") or ""), t
 
 
 # ── 폼 요소 존재 (평가된 JS 문법은 test_v0743의 node 검사로 커버) ──
