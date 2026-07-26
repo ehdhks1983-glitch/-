@@ -2017,8 +2017,11 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                             ranges = video_editor.shift_ranges_to_scenes(ranges, scenes, dur)
                     except Exception:  # noqa: BLE001
                         pass
+                    # ✂ 몽타주 조각은 하드컷 (v0.94) — 조각마다 검은 화면을 거치는
+                    # fade가 2~3초 간격 깜빡임으로 보였음 (사용자 리포트, blackdetect 확인).
+                    # 장면 전환점 스냅 덕에 컷만으로도 자연스럽다.
                     cut = video_editor.cut_and_concat(
-                        video, ranges, str(job_dir / f"sec_{i}_cut.mp4"), transition="fade")
+                        video, ranges, str(job_dir / f"sec_{i}_cut.mp4"), transition="none")
                 elif dur < narr_end:                 # 짧으면 마지막 장면 정지로 연장
                     cut = video_editor.extend_video(
                         video, narr_end, str(job_dir / f"sec_{i}_ext.mp4"))
@@ -2058,9 +2061,20 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         fade = video_editor.xfade_clamp(sec_xfade, durs)
         final = outs[0]
         if len(outs) > 1:
+            join_clips = outs
+            if fade > 0:
+                # 🛡 크로스페이드가 말을 깎지 않게 (v0.94) — 겹칠 만큼을 각 구간
+                # 앞뒤에 '정지 화면+무음'으로 덧대 페이드가 패딩만 소모하게 한다.
+                # (기존엔 뒷구간 첫 마디가 볼륨 0에서 차오르며 끊겨 들렸음)
+                join_clips = []
+                for pi, p in enumerate(outs):
+                    join_clips.append(video_editor.pad_video(
+                        p, str(job_dir / f"sec_pad_{pi}.mp4"),
+                        head_s=(fade if pi > 0 else 0.0),
+                        tail_s=(fade if pi < len(outs) - 1 else 0.0)))
             final = video_editor.concat_videos(
-                outs, str(job_dir / "sections_final.mp4"), size=(cw, ch),
-                crossfade_s=sec_xfade, transition=transition)
+                join_clips, str(job_dir / "sections_final.mp4"), size=(cw, ch),
+                crossfade_s=fade, transition=transition)
         if (params.get("bgm") or "").strip():        # 🎵 BGM은 최종 합본에 1회 (덕킹)
             b = resolve_bgm(params["bgm"], settings)
             if b and b.path:
@@ -2077,12 +2091,12 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 except Exception:  # noqa: BLE001 — BGM 실패해도 본편은 산다
                     notes.append("배경음악 입히기에 실패해 없이 완성했어요")
         # ⏱ 유튜브 설명란용 타임라인 (v0.82) — 구간 실제 시작 시각 + 제목
-        # 크로스페이드만큼 뒤 구간이 앞당겨지는 것 반영 (v0.83)
+        # v0.94: 경계마다 패딩+크로스페이드로 순길이 +fade 만큼 늘어나는 것 반영
         chap_lines, cum = [], 0.0
         for k, title_i in enumerate(out_titles):
             mm, ss = int(cum // 60), int(cum % 60)
             chap_lines.append(f"{mm:02d}:{ss:02d} {title_i}")
-            cum += durs[k] - (fade if k < len(outs) - 1 else 0.0)
+            cum += durs[k] + (fade if k < len(outs) - 1 else 0.0)
         total_s = ff.probe_duration_us(final) / 1e6
         msg = f"🎞 구간 {len(outs)}개 · 총 {int(total_s // 60)}분 {int(total_s % 60)}초"
         if reused:
@@ -4096,7 +4110,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.93.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.94.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -9270,9 +9284,14 @@ async function poll(){
       $('doneBox').classList.remove('hidden');
       $('player').src = '/video/' + job.id + '?t=' + Date.now() + '#t=0.1';
       if(job.mp4s && job.mp4s.length > 1){
-        $('outPaths').innerHTML = '🎬 쇼츠 ' + job.mp4s.length + '개 완성:<br>' +
+        const isSec = !!job.chapters;   // 🎞 구간 합본 작업 — 쇼츠 아님 (v0.94 라벨 정리)
+        $('outPaths').innerHTML = (isSec
+            ? '🎬 완성 파일 ' + job.mp4s.length + '개 (1번이 최종 합본, 나머지는 구간별 파일):<br>'
+            : '🎬 쇼츠 ' + job.mp4s.length + '개 완성:<br>') +
           job.mp4s.map((p,i)=>('  '+(i+1)+') '+escHtml(p))).join('<br>') +
-          '<br><span class="hint">(위 플레이어는 1번 쇼츠. 나머지는 [📂 폴더 열기]에서 확인)</span>';
+          '<br><span class="hint">' + (isSec
+            ? '(위 플레이어가 최종 합본이에요. 업로드는 1번 파일 하나면 됩니다)'
+            : '(위 플레이어는 1번 쇼츠. 나머지는 [📂 폴더 열기]에서 확인)') + '</span>';
       } else {
         $('outPaths').textContent = 'mp4: ' + job.mp4;
       }

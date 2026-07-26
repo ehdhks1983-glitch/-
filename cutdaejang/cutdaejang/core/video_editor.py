@@ -511,6 +511,34 @@ def xfade_clamp(crossfade_s: float, durs_s: List[float]) -> float:
 
 
 # 🎬 크로스페이드 전환 종류 (v0.85) — xfade 기본 세트(ffmpeg 4.3+)만 사용해 호환 보장
+def pad_video(src: str, out_path: str, head_s: float = 0.0, tail_s: float = 0.0,
+              fps: int = 30) -> str:
+    """앞뒤에 정지 프레임+무음 패딩 — 크로스페이드가 말을 잡아먹지 않게 (v0.94).
+
+    합본의 xfade/acrossfade는 경계 양쪽을 겹쳐 소모한다. 내레이션이 경계까지
+    차 있으면 뒷구간 첫 마디는 볼륨이 0에서 차오르며 깎여 들리고 앞구간 끝
+    마디도 잘릴 수 있다 (사용자 리포트 "합쳐지는 부분에 말도 끊어지고").
+    겹칠 만큼을 미리 '정지 화면 + 무음'으로 덧대 페이드가 패딩만 먹게 한다.
+    """
+    if head_s <= 0 and tail_s <= 0:
+        return str(src)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    vf = (f"tpad=start_duration={max(0.0, head_s):.3f}:start_mode=clone"
+          f":stop_duration={max(0.0, tail_s):.3f}:stop_mode=clone,fps={fps}")
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(src), "-vf", vf]
+    if ff.has_audio_stream(str(src)):
+        af = []
+        if head_s > 0:
+            af.append(f"adelay={int(head_s * 1000)}:all=1")
+        if tail_s > 0:
+            af.append(f"apad=pad_dur={tail_s:.3f}")
+        args += ["-af", ",".join(af), "-c:a", "aac", "-b:a", "192k"]
+    args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+             "-pix_fmt", "yuv420p", str(out_path)]
+    ff.run(args)
+    return str(out_path)
+
+
 XFADE_POOL = ["dissolve", "slideleft", "circleopen", "wipeleft", "smoothleft", "radial"]
 
 
