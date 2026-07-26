@@ -4,6 +4,6 @@ Timeline Spec(IR) → render_engine(FFmpeg) → mp4 로 무인 대량생산한�
 (CapCut draft 출력은 v0.41에서 제거 — mp4 전용)
 """
 
-__version__ = "0.91.0"
+__version__ = "0.92.0"
 
 from .spec import TimelineSpec  # noqa: F401

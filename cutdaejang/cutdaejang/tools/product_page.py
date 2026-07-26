@@ -1,0 +1,226 @@
+"""상품 페이지(쿠팡·스마트스토어 등) 자동 수집 — 링크 하나로 사진·제목·설명 (v0.92).
+
+수집 경로 3단계:
+  ① 일반 요청 — fetch_web과 같은 브라우저형 UA로 한 번 요청, 열리면 그대로 파싱
+  ② PC에 설치된 엣지/크롬을 헤드리스로 돌려 렌더된 DOM을 파싱
+     (UA를 위장하지 않는다 — 헤드리스임을 그대로 알리고, 차단되면 즉시 포기)
+  ③ 둘 다 막히면 ValueError로 정직하게 안내 → 화면에서는 페이지 복사→붙여넣기 폴백
+
+사진 파일 자체는 공개 CDN(coupangcdn·pstatic)이라 주소만 얻으면 내려받아진다.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Callable, List, Optional, Tuple
+
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+
+_SHOP_HOSTS = ("coupang.com", "coupa.ng", "smartstore.naver.com", "brand.naver.com",
+               "shopping.naver.com", "11st.co.kr", "gmarket.co.kr", "auction.co.kr")
+
+# 상품 사진이 올라가는 공개 CDN — 페이지 어디에 있든 주소 패턴으로 전부 긁는다
+_IMG_RE = re.compile(
+    r"(?:https?:)?//(?:thumbnail|image|static)\d*\.coupangcdn\.com/[^\s\"'<>\\)]+?"
+    r"\.(?:jpg|jpeg|png|webp)|"
+    r"(?:https?:)?//(?:shop-phinf|shopping-phinf|phinf)\.pstatic\.net/[^\s\"'<>\\)]+?"
+    r"\.(?:jpg|jpeg|png|webp)", re.I)
+_JUNK_IMG = ("logo", "icon", "sprite", "banner", "btn_", "/common/", "blank.")
+
+
+class ShopBlockedError(ValueError):
+    """상품 페이지가 프로그램 접속을 차단 — 화면에서 복사→붙여넣기 안내용."""
+
+
+def is_shop_url(url: str) -> bool:
+    try:
+        host = urllib.parse.urlsplit((url or "").strip()).netloc.lower().split(":")[0]
+    except ValueError:
+        return False
+    return bool(host) and host.endswith(_SHOP_HOSTS)
+
+
+def _fetch_html(url: str, timeout: float = 20.0) -> Tuple[str, str]:
+    """일반 요청으로 HTML 받기 → (html, 최종 URL). 단축링크 리다이렉트도 따라간다."""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": _UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        final = r.geturl() or url
+        raw = r.read(3_000_000)
+    return raw.decode("utf-8", errors="replace"), final
+
+
+def _browser_candidates() -> List[str]:
+    import os  # noqa: PLC0415
+
+    cands: List[str] = []
+    if sys.platform == "win32":
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        local = os.environ.get("LOCALAPPDATA", "")
+        for base in (pf, pf86):
+            cands.append(base + r"\Microsoft\Edge\Application\msedge.exe")
+            cands.append(base + r"\Google\Chrome\Application\chrome.exe")
+        if local:
+            cands.append(local + r"\Google\Chrome\Application\chrome.exe")
+    else:
+        import shutil  # noqa: PLC0415
+
+        for name in ("msedge", "google-chrome", "chromium", "chromium-browser", "chrome"):
+            p = shutil.which(name)
+            if p:
+                cands.append(p)
+    return [c for c in cands if Path(c).is_file()]
+
+
+def _browser_dump(url: str, timeout: float = 45.0) -> str:
+    """설치된 엣지/크롬 헤드리스로 렌더된 DOM 받기.
+
+    UA를 바꾸지 않는다(HeadlessChrome으로 자신을 알림) — 사이트가 헤드리스를
+    차단하기로 했다면 그 결정을 존중하고 빈 문자열을 돌려준다.
+    """
+    for exe in _browser_candidates():
+        try:
+            r = subprocess.run(
+                [exe, "--headless=new", "--disable-gpu", "--no-first-run",
+                 "--no-default-browser-check", "--mute-audio",
+                 "--virtual-time-budget=9000", "--timeout=25000", "--dump-dom", url],
+                capture_output=True, timeout=timeout)
+            out = (r.stdout or b"").decode("utf-8", errors="replace")
+            if len(out) > 3000 and "<html" in out.lower():
+                return out
+        except Exception:  # noqa: BLE001 — 다음 브라우저 후보로
+            continue
+    return ""
+
+
+def _meta(html: str, prop: str) -> str:
+    for pat in (
+        r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop)
+        + r'["\'][^>]*?content=["\']([^"\']*)["\']',
+        r'<meta[^>]+content=["\']([^"\']*)["\'][^>]*?(?:property|name)=["\']'
+        + re.escape(prop) + r'["\']',
+    ):
+        m = re.search(pat, html, re.I | re.S)
+        if m and m.group(1).strip():
+            import html as _h  # noqa: PLC0415
+
+            return _h.unescape(m.group(1).strip())
+    return ""
+
+
+def extract_image_urls(html: str, limit: int = 12) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for m in _IMG_RE.finditer(html or ""):
+        u = m.group(0)
+        if u.startswith("//"):
+            u = "https:" + u
+        low = u.lower()
+        if any(j in low for j in _JUNK_IMG):
+            continue
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def parse_product(html: str) -> dict:
+    """렌더된(또는 원본) HTML → {title, text, images(url 목록)}."""
+    title = _meta(html, "og:title")
+    if not title:
+        m = re.search(r"<title[^>]*>([^<]{2,120})</title>", html or "", re.I)
+        title = (m.group(1).strip() if m else "")
+    desc = _meta(html, "og:description") or _meta(html, "description")
+    imgs = extract_image_urls(html)
+    og_img = _meta(html, "og:image")
+    if og_img.startswith("//"):
+        og_img = "https:" + og_img
+    if og_img.startswith("http") and og_img not in imgs:
+        imgs.insert(0, og_img)
+    price = ""
+    pm = re.search(r'"(?:salePrice|discountedPrice|lprice|price)"\s*:\s*"?(\d{3,9})', html or "")
+    if pm:
+        price = format(int(pm.group(1)), ",")
+    text = title
+    if price:
+        text += f"\n가격: 약 {price}원"
+    if desc:
+        text += "\n" + desc
+    return {"title": title[:80], "text": text.strip(), "images": imgs[:12]}
+
+
+def _usable(parsed: dict) -> bool:
+    return bool(parsed.get("title")) and (bool(parsed.get("images"))
+                                          or len(parsed.get("text") or "") >= 30)
+
+
+def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
+    """링크 하나로 상품 정보 수집 → {title, text, images, final_url, via}."""
+    say = progress_cb or (lambda m: None)
+    say("상품 페이지 여는 중…")
+    html_text, final = "", (url or "").strip()
+    try:
+        html_text, final = _fetch_html(final)
+        via = "직접"
+    except urllib.error.HTTPError as e:
+        final = getattr(e, "url", "") or getattr(e, "filename", "") or final
+        via = ""
+    except Exception:  # noqa: BLE001 — 브라우저 경로로 넘어감
+        via = ""
+    parsed = parse_product(html_text) if html_text else {}
+    if not (parsed and _usable(parsed)):
+        say("자동 접속이 막혔어요 — PC의 엣지/크롬으로 페이지 읽는 중… (최대 30초)")
+        dumped = _browser_dump(final)
+        if dumped:
+            parsed = parse_product(dumped)
+            via = "브라우저"
+    if not (parsed and _usable(parsed)):
+        raise ShopBlockedError(
+            "쇼핑몰이 프로그램의 자동 접속을 차단했어요. 상품 페이지를 브라우저로 "
+            "열어뒀으니 Ctrl+A(전체 선택) → Ctrl+C(복사) 한 뒤, 이 화면에서 "
+            "Ctrl+V(붙여넣기) 하세요 — 사진·설명이 한 번에 들어와요")
+    parsed.update(final_url=final, via=via or "직접")
+    return parsed
+
+
+def download_images(urls: List[str], dest_dir, limit: int = 12,
+                    min_bytes: int = 12_000) -> Tuple[List[str], int]:
+    """사진 URL들을 고화질 우선으로 내려받아 dest/img_NN.ext 로 저장 → (경로들, 스킵 수)."""
+    from . import coupang_api, fetch_web, naver_shop_api  # noqa: PLC0415
+
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    saved: List[str] = []
+    skipped = 0
+    for u in list(dict.fromkeys([x for x in urls if str(x or "").startswith("http")]))[:limit]:
+        cands = [c for c in (coupang_api.hi_res_image(u),
+                             naver_shop_api.hi_res_image(u)) if c != u] + [u]
+        ok = False
+        for cand in dict.fromkeys(cands):
+            try:
+                raw = fetch_web.fetch_bytes(cand)
+            except Exception:  # noqa: BLE001 — 다음 후보로
+                continue
+            ext = fetch_web.sniff_image_ext(raw) or ""
+            if ext not in ("jpg", "jpeg", "png", "webp", "bmp") or len(raw) < min_bytes:
+                break                          # 아이콘·버튼 같은 자잘한 그림
+            p = dest / f"img_{len(saved) + 1:02d}.{ext}"
+            p.write_bytes(raw)
+            saved.append(str(p))
+            ok = True
+            break
+        if not ok:
+            skipped += 1
+    return saved, skipped

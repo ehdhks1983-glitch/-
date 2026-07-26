@@ -1772,7 +1772,7 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
     import hashlib as _hl  # noqa: PLC0415
 
     from ..core import script_generator as sg  # noqa: PLC0415
-    from ..tools import fetch_web  # noqa: PLC0415
+    from ..tools import fetch_web, product_page  # noqa: PLC0415
 
     log = logging.getLogger("cutdaejang")
     try:
@@ -1787,6 +1787,24 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                    "source_url": url or "",
                    "notes": ["📋 붙여넣은 상품 정보로 만들었어요 — 사진은 [🖼 상품 사진 고르기]로 넣어주세요"]}
             dest = Path(workdir) / "weblink" / "pasted"
+        elif product_page.is_shop_url(url):
+            # 🛒 상품 링크 자동 수집 (v0.92) — 직접 요청 → PC 브라우저 헤드리스 → 폴백 안내
+            try:
+                prod = product_page.collect_product(url, progress_cb=say)
+            except product_page.ShopBlockedError:
+                try:                             # 폴백을 바로 할 수 있게 페이지를 열어준다
+                    webbrowser.open(url)
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
+            dest = Path(workdir) / "weblink" / _hl.sha1(url.encode("utf-8")).hexdigest()[:8]
+            say(f"상품 사진 {len(prod['images'])}장 내려받는 중…")
+            local, skipped = product_page.download_images(prod["images"], dest)
+            note = (f"🛒 상품 페이지에서 자동 수집했어요 ({prod['via']} 경로) — "
+                    f"사진 {len(local)}장" + (f", 자잘한 그림 {skipped}장 제외" if skipped else ""))
+            art = {"title": prod["title"] or "상품 소개", "text": prod["text"],
+                   "images": local, "links": [url],
+                   "source_url": prod.get("final_url") or url, "notes": [note]}
         else:
             norm = fetch_web.normalize_url(url)
             dest = Path(workdir) / "weblink" / _hl.sha1(norm.encode("utf-8")).hexdigest()[:8]
@@ -3155,11 +3173,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "paste_text": text, "images": imgs,
                              "previews": previews, "link": short or url})
         elif path == "/api/shop_images":  # 📷 복사한 페이지 조각의 사진 URL들 내려받기 (v0.91)
-            # 상품 페이지는 서버가 못 열지만(봇 차단), 사용자가 브라우저에서 복사한
-            # 조각 속 이미지 주소(공개 CDN)는 그대로 받아진다 — 붙여넣기 한 번에 여러 장.
-            from ..tools import coupang_api, fetch_web, naver_shop_api  # noqa: PLC0415
+            # 상품 페이지는 서버가 못 열어도, 사용자가 브라우저에서 복사한 조각 속
+            # 이미지 주소(공개 CDN)는 그대로 받아진다 — 붙여넣기 한 번에 여러 장.
+            from ..tools import product_page  # noqa: PLC0415
             import hashlib as _hl  # noqa: PLC0415
-            import logging as _lg  # noqa: PLC0415
             raw_urls = [str(u).strip() for u in (params.get("urls") or [])
                         if str(u or "").strip().startswith("http")]
             uniq = list(dict.fromkeys(raw_urls))[:12]      # 순서 유지 중복 제거, 최대 12장
@@ -3168,31 +3185,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             token = _hl.sha1(("shopimgs:" + uniq[0]).encode("utf-8")).hexdigest()[:8]
             dest = Path(workdir) / "weblink" / token
-            dest.mkdir(parents=True, exist_ok=True)
-            imgs, previews, skipped = [], [], 0
-            for u in uniq:
-                cands = list(dict.fromkeys(
-                    [c for c in (coupang_api.hi_res_image(u),
-                                 naver_shop_api.hi_res_image(u)) if c != u] + [u]))
-                saved = False
-                for cand in cands:
-                    try:
-                        raw = fetch_web.fetch_bytes(cand)
-                    except Exception as ie:  # noqa: BLE001 — 다음 후보로
-                        _lg.getLogger("cutdaejang").warning(
-                            "사진 내려받기 실패(%s): %s", cand[:60], ie)
-                        continue
-                    ext = fetch_web.sniff_image_ext(raw) or ""
-                    if ext not in ("jpg", "jpeg", "png", "webp", "bmp") or len(raw) < 12_000:
-                        break                  # 아이콘·버튼 같은 자잘한 그림은 건너뜀
-                    p = dest / f"img_{len(imgs) + 1:02d}.{ext}"
-                    p.write_bytes(raw)
-                    imgs.append(str(p))
-                    previews.append(f"/weblink/{token}/{p.name}")
-                    saved = True
-                    break
-                if not saved:
-                    skipped += 1
+            imgs, skipped = product_page.download_images(uniq, dest)  # v0.92 공용화
+            previews = [f"/weblink/{token}/{Path(p).name}" for p in imgs]
             self._send_json({"ok": True, "images": imgs, "previews": previews,
                              "skipped": skipped})
         elif path == "/api/shop_upload":  # 📸 스크린샷 클립보드 붙여넣기 저장 (v0.91)
@@ -4102,7 +4096,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.91.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.92.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5205,9 +5199,9 @@ _HTML = """<!doctype html>
     <div class="hint" style="margin-top:4px">📋 <b>사진 한꺼번에 넣기</b> — 상품 페이지에서 사진 있는 부분을 마우스로 드래그해 복사(Ctrl+C)한 뒤 이 화면에 붙여넣기(Ctrl+V)하면 사진 여러 장이 자동으로 들어와요. 스크린샷(Win+Shift+S)을 바로 붙여넣어도 됩니다</div>
     <div class="chk" style="gap:8px;margin-top:6px">
       <span style="white-space:nowrap">🔗 내 수익 링크</span>
-      <input type="text" id="shopLinkInput" style="flex:1" placeholder="파트너스 링크는 자동, 쇼핑커넥트 링크는 대시보드에서 복사해 붙여넣기 (완성 후 설명란용)">
+      <input type="text" id="shopLinkInput" style="flex:1" placeholder="상품 링크를 붙여넣고 아래 [🤖 대본 만들기]를 누르면 사진·설명 자동 수집 (파트너스·쇼핑커넥트 링크도 이 칸)">
     </div>
-    <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)">🤖 이 상품으로 대본 만들기</button>
+    <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)" title="상세설명이 비어 있어도 링크가 있으면 상품 페이지에서 사진·설명을 자동으로 수집해요 (안 되면 페이지 복사→붙여넣기 안내)">🤖 이 상품으로 대본 만들기</button>
     <div id="shopPreview" class="hidden">
       <div class="steplabel" style="margin-top:10px"><span class="stepnum">3</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄. AI 목소리가 읽어요</span></div>
       <textarea id="shopScript" style="min-height:110px"></textarea>
@@ -8014,8 +8008,8 @@ function shopUrlGuard(inpId){
     if(link && !link.value.trim()){ link.value = kw; }
     inp.value = '';
     alert('붙여넣은 링크는 아래 [수익 링크]칸에 옮겨뒀어요!' + String.fromCharCode(10) +
-          '검색창에는 상품 "이름"을 입력해 주세요 (예: 무선 물걸레 청소기)' + String.fromCharCode(10) +
-          '※ 쿠팡·네이버 API는 링크로 상품 1개를 바로 불러오는 기능이 없어요');
+          '그대로 [🤖 이 상품으로 대본 만들기]를 누르면 링크에서 사진·설명을 자동 수집해요.' + String.fromCharCode(10) +
+          '(이 검색창은 상품 "이름" 검색용이에요 — 예: 무선 물걸레 청소기)');
     return null;
   }
   return kw;
@@ -8229,13 +8223,17 @@ document.addEventListener('paste', function(e){
 async function makeShopScript(ev){
   ev.preventDefault();
   const text = (($('shopPasteText')||{}).value || '').trim();
-  if(text.length < 20){ alert('상품 정보가 너무 짧아요 — 위에서 상품을 고르거나 상세설명을 붙여넣어 주세요'); return; }
+  const link = (($('shopLinkInput')||{}).value||'').trim();
+  const linkOnly = text.length < 20 && !!link && SHOP_HOST_RE.test(link);   // 🔗 링크 자동 수집 (v0.92)
+  if(text.length < 20 && !linkOnly){
+    alert('상품 정보가 아직 없어요 — 상품 링크를 「내 수익 링크」칸에 붙여넣거나, 위에서 상품을 고르거나, 상세설명을 붙여넣어 주세요'); return;
+  }
   const btn = ev.target; btn.disabled = true; const old = btn.textContent;
-  btn.textContent = 'AI가 대본으로 정리하는 중…';
+  btn.textContent = linkOnly ? '링크에서 자동 수집 중…' : 'AI가 대본으로 정리하는 중…';
   try{
     const key = ensureGeminiKey();
     const d = await (await fetch('/api/fetch_url', {method:'POST',
-      body: JSON.stringify({pasted_text: text, url: (($('shopLinkInput')||{}).value||'').trim(),
+      body: JSON.stringify({pasted_text: linkOnly ? '' : text, url: link,
                             target_sec: 45, gemini_key: key, save_key: true})})).json();
     if(d.error){ alert(d.error); return; }
     while(true){
@@ -8248,7 +8246,18 @@ async function makeShopScript(ev){
       $('shopScript').value = (r.script_lines || []).join('\\n');
       $('shopHook').value = r.hook || r.title || '';
       $('shopPreview').classList.remove('hidden');
-      if(!(window._shopPhotos || []).length)
+      if((r.images || []).length){                       // 🛒 수집된 상품 사진 (v0.92)
+        window._shopPhotos = r.images.slice();
+        window._shopPrev = (r.previews || []).slice();
+        renderShopPhotoPrev();
+        $('shopPhotoCnt').textContent = '📷 상품 사진 ' + r.images.length + '장 자동 수집됨';
+      }
+      if(linkOnly && r.text){                            // 수집한 설명을 눈으로 확인·보강
+        $('shopPasteText').value = r.text;
+      }
+      const note = ((r.notes || [])[0]) || '';
+      if(note) uiBanner(note);
+      else if(!(window._shopPhotos || []).length)
         uiBanner('🖼 대본 준비 완료 — [🖼 상품 사진 고르기]로 사진을 넣으면 [🎬 영상 만들기]가 가능해요');
       break;
     }
@@ -8369,12 +8378,13 @@ async function loadWeblink(ev){
   const url = (($('weblinkUrl')||{}).value||'').trim();
   if(!url){ alert('블로그 글 주소를 먼저 붙여넣어 주세요'); return; }
   if(SHOP_HOST_RE.test(url)){          // 🛍 상품 페이지 → 전용 쇼핑 카드로 안내 (v0.89)
-    if(confirm('쇼핑몰 상품 링크네요! 상품 영상은 [🛒 쇼핑 상품 영상] 카드가 더 편해요 — 상품 검색으로 이름·가격·사진·링크가 자동으로 채워집니다.\\n지금 이동할까요?')){
+    if(confirm('쇼핑몰 상품 링크네요! 상품 영상은 [🛒 쇼핑 상품 영상] 카드가 더 편해요 — 링크에서 사진·설명을 자동 수집해요 (v0.92).\\n지금 이동할까요?')){
       openMode('shop');
       if($('shopLinkInput') && !$('shopLinkInput').value) $('shopLinkInput').value = url;
+      uiBanner('🛒 링크를 넣어뒀어요 — [🤖 이 상품으로 대본 만들기]를 누르면 사진·설명을 자동 수집해요');
     } else {
       const pb = $('wlPasteBox'); if(pb) pb.open = true;
-      uiBanner('🛍 상품 페이지는 자동 수집이 안 돼요 — 아래 붙여넣기에 상세설명을 복사해 넣고 사진을 골라 만들어 주세요.');
+      uiBanner('🛍 여기 블로그 카드에서는 상품 페이지 자동 수집을 지원하지 않아요 — 아래 붙여넣기에 상세설명을 복사해 넣거나, [🛒 쇼핑 상품 영상] 카드를 이용해 주세요.');
     }
     return;
   }
