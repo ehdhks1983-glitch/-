@@ -140,18 +140,28 @@ def test_shop_flow_e2e(server, tmp_path):
     lines = (t.get("result") or {}).get("script_lines") or []
     assert lines, t
     d2 = _post(server, "/api/edit", {
-        "photo_path": str(photo), "photo_sec": 12, "layout": "shorts",
-        "quality": "draft", "script": "\n".join(lines[:4]), "script_tts": True,
+        "photo_path": str(photo), "photo_sec": 8, "layout": "shorts",
+        "quality": "draft", "script": "\n".join(lines[:2]), "script_tts": True,
         "auto_subtitle": False, "cut_silence": False})
     assert d2.get("job_id"), d2
-    t0 = time.time()
-    while time.time() - t0 < 300:
-        with urllib.request.urlopen(server + "/api/state", timeout=30) as r:
-            st = json.loads(r.read())
-        j = next((x for x in st.get("jobs", []) if x.get("id") == d2["job_id"]), {})
-        if j.get("status") in ("ok", "partial", "failed"):
-            assert j["status"] == "ok", j.get("errors")
-            assert j.get("mp4")
-            return
-        time.sleep(1)
-    raise AssertionError("쇼핑 흐름 작업이 끝나지 않음")
+
+    def wait(targets, timeout):
+        t1 = time.time()
+        while time.time() - t1 < timeout:
+            with urllib.request.urlopen(server + "/api/state", timeout=30) as r:
+                st = json.loads(r.read())
+            j = next((x for x in st.get("jobs", []) if x.get("id") == d2["job_id"]), {})
+            if j.get("status") in targets:
+                return j
+            time.sleep(1)
+        raise AssertionError(f"{targets} 도달 실패: {j}")
+
+    # 1단계: 분석 → 자막 검토 대기 (편집·사진·쇼핑 공통 흐름)
+    j = wait({"review_subtitle", "failed"}, 240)
+    assert j["status"] == "review_subtitle", j.get("errors")
+    _post(server, "/api/edit_render", {"job_id": d2["job_id"],
+                                       "subtitles": j["subtitles"], "hook": "여름 꿀템"})
+    # 2단계: 렌더 완료
+    done = wait({"ok", "partial", "failed"}, 420)
+    assert done["status"] == "ok", done.get("errors")
+    assert done.get("mp4")
