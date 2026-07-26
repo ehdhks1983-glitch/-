@@ -209,22 +209,34 @@ def wrap_text(text: str, max_chars: int) -> str:
     return t[:mid] + "\n" + t[mid:]
 
 
-TYPING_CPS = 20  # ⌨ 타이핑 자막(v0.74) 속도 — 초당 글자수 (인스타·틱톡 감성)
+TYPING_CPS = 20        # ⌨ 타이핑 자막(v0.74) 기본 속도 — 초당 글자수 (길이 모를 때 폴백)
+TYPING_FILL = 0.72     # v0.86: 자막 표시 시간 중 타이핑이 차지하는 비율 (내레이션과 맞물림)
 
 
-def _typing_body(text: str, line_color: str, cps: int = TYPING_CPS) -> str:
+def _typing_body(text: str, line_color: str, dur_ms: int = 0,
+                 cps: int = TYPING_CPS) -> str:
     """⌨ 타이핑 등장(v0.74) — 글자를 하나씩 찍어 보여준다 (화면 중앙 인스타·틱톡용).
 
     글자마다 처음엔 투명(\\alpha&HFF&)이었다가 제 차례(t_i)에 \\t로 나타난다.
     줄바꿈(\\N)은 글자수에 안 세고 그대로 둔다. 색은 줄 전체에 한 번만 건다.
+
+    v0.86: dur_ms(자막 표시 시간)를 주면 고정 속도 대신 그 시간의 72% 동안
+    타이핑한다 — 내레이션이 문장을 읽는 동안 글자가 같이 채워지고, 읽기 전에
+    다 떠버리거나 늦게 나오는 "타이핑 안 맞는" 문제 해결 (초당 5~28자 클램프).
     """
+    chars = sum(1 for ch in text if ch != "\n")
+    if dur_ms > 0 and chars:
+        per = (dur_ms * TYPING_FILL) / chars
+        per = max(1000.0 / 28, min(1000.0 / 5, per))
+    else:
+        per = 1000.0 / max(1, cps)
     out = ["{\\1c" + _inline_color(line_color) + "}"] if line_color else []
     i = 0
     for ch in text:
         if ch == "\n":
             out.append("\\N")
             continue
-        t = round(i * 1000.0 / max(1, cps))
+        t = round(i * per)
         out.append("{\\alpha&HFF&\\t(%d,%d,\\alpha&H00&)}" % (t, t + 30))
         out.append(escape_ass_text(ch))
         i += 1
@@ -282,7 +294,9 @@ def dialogue_text(sub, style, pop_color: str = "") -> str:
     if marked is None and getattr(style, "anim", "none") == "type":
         # ⌨ 타이핑 — 마크업 없을 때만 (수동 색은 위에서 존중). 타이핑이 등장연출이라 fade/pop 미적용.
         line_color = pop_color or style.primary_color
-        return _typing_body(wrap_text(sub.text, getattr(style, "wrap_chars", 0)), line_color)
+        dur_ms = max(0, int((getattr(sub, "end_us", 0) - getattr(sub, "start_us", 0)) // 1000))
+        return _typing_body(wrap_text(sub.text, getattr(style, "wrap_chars", 0)),
+                            line_color, dur_ms=dur_ms)
     if marked is not None:
         body = marked
     elif pop_color:  # 🌈 다색 팝 — 문장 전체를 회전색으로 (수동 색·강조는 위에서 우선)

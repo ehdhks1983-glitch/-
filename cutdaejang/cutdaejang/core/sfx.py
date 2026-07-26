@@ -37,6 +37,12 @@ _SYNTH = {
              # 배음 두 개 + 느린 감쇠 = 맑은 '띠링'
              "aevalsrc='0.42*(sin(2*PI*1318*t)+0.55*sin(2*PI*1976*t))*exp(-5.5*t)'"
              ":d=0.8:s=44100"),
+    "key": ("타닥.wav",
+            # ⌨ 타이핑 자막용 (v0.86) — 0.13초 간격 키 두드림 8번 (게이트 잡음)
+            "anoisesrc=d=1.05:c=white:r=44100:a=0.55,"
+            "highpass=f=1700,lowpass=f=6800,"
+            "volume='if(lt(mod(t\\,0.13)\\,0.03)\\,(0.03-mod(t\\,0.13))/0.03\\,0)'"
+            ":eval=frame"),
 }
 
 # wav를 마지막에 — 합성 캐시가 wav라서, 사용자 mp3 등이 있으면 그게 우선되도록
@@ -87,6 +93,11 @@ def build_events(spec: TimelineSpec, paths: dict, cfg: dict,
         for t in scene_starts_us[1:13]:  # 첫 장면 시작은 제외, 최대 12번
             events.append(Sfx(path=paths["whoosh"], start_us=max(0, t - 120_000),
                               gain_db=vol - 3, name="whoosh"))
+    # ⌨ 타이핑 자막이면 문장 시작마다 은은한 '타닥' (v0.86 — 인스타 감성)
+    if getattr(getattr(spec, "style", None), "anim", "none") == "type" and paths.get("key"):
+        for clip in spec.audio[:20]:
+            events.append(Sfx(path=paths["key"], start_us=clip.start_us,
+                              gain_db=vol - 5, name="key"))
     events.sort(key=lambda e: e.start_us)
     return events
 

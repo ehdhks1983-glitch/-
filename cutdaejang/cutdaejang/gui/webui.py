@@ -404,6 +404,8 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
         target_sec=int(params.get("target_sec") or 60),
         orientation=(params.get("orientation")
                      if params.get("orientation") in ("wide", "reels") else "shorts"),  # v0.61·v0.74
+        sub_anim=(params.get("sub_anim")
+                  if params.get("sub_anim") in ("none", "pop", "type", "karaoke") else ""),  # v0.86 테마
         pace_sec=max(0, int(params.get("pace_sec") or 0)),  # ⏱ 내 대본 길이 맞춤 (v0.63)
         render=RenderOptions(use_gpu=params.get("gpu", "auto")),
     )
@@ -1067,6 +1069,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.sub_style = str(ep["sub_style"])
         if ep.get("tone"):  # 🎨 화면 톤 (v0.56)
             style.tone = str(ep["tone"])
+        if ep.get("sub_anim") in ("none", "pop", "type", "karaoke"):  # 🎬 감성 테마 (v0.86)
+            style.anim = str(ep["sub_anim"])
         try:  # 상단 제목 크기 배수 (훅 스튜디오)
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -1425,6 +1429,8 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.sub_style = str(ep["sub_style"])
         if ep.get("tone"):  # 🎨 화면 톤 (v0.56)
             style.tone = str(ep["tone"])
+        if ep.get("sub_anim") in ("none", "pop", "type", "karaoke"):  # 🎬 감성 테마 (v0.86)
+            style.anim = str(ep["sub_anim"])
         try:
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -1665,8 +1671,14 @@ _BGM_TASK = {"running": False, "msg": ""}  # 🎵 무료 BGM 받기 진행 상�
 _WEBLINK_TASK = {"running": False, "msg": "", "result": None, "error": ""}  # 🔗 글 가져오기 (v0.78)
 
 
-def _fetch_weblink_bg(url: str, workdir: str, target_sec: int) -> None:
-    """🔗 블로그 글 수집 → (키 있으면) AI 대본 요약 — 백그라운드 싱글턴 (v0.78)."""
+def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
+                      pasted_text: str = "") -> None:
+    """🔗 블로그 글 수집 → (키 있으면) AI 대본 요약 — 백그라운드 싱글턴 (v0.78).
+
+    pasted_text(v0.86 🛍 상품 정보 직접 붙여넣기)가 있으면 크롤링 없이 그 글로
+    바로 대본을 만든다 — 쿠팡·스마트스토어처럼 프로그램 접근을 막는 상품
+    페이지용 우회 경로 (상세설명을 복사해 붙여넣으면 됨).
+    """
     import hashlib as _hl  # noqa: PLC0415
 
     from ..core import script_generator as sg  # noqa: PLC0415
@@ -1674,13 +1686,21 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int) -> None:
 
     log = logging.getLogger("cutdaejang")
     try:
-        norm = fetch_web.normalize_url(url)
-        dest = Path(workdir) / "weblink" / _hl.sha1(norm.encode("utf-8")).hexdigest()[:8]
-
         def say(msg: str) -> None:
             _WEBLINK_TASK["msg"] = msg
 
-        art = fetch_web.fetch_article(norm, dest, progress_cb=say)
+        if pasted_text.strip():
+            first = next((ln.strip() for ln in pasted_text.splitlines() if ln.strip()), "")
+            art = {"title": first[:60] or "상품 소개",
+                   "text": pasted_text.strip(),
+                   "images": [], "links": ([url] if url else []),
+                   "source_url": url or "",
+                   "notes": ["📋 붙여넣은 상품 정보로 만들었어요 — 사진은 [🖼 상품 사진 고르기]로 넣어주세요"]}
+            dest = Path(workdir) / "weblink" / "pasted"
+        else:
+            norm = fetch_web.normalize_url(url)
+            dest = Path(workdir) / "weblink" / _hl.sha1(norm.encode("utf-8")).hexdigest()[:8]
+            art = fetch_web.fetch_article(norm, dest, progress_cb=say)
         say("대본으로 정리하는 중…")
         try:
             summ = sg.summarize_article(art["title"], art["text"], target_sec=target_sec)
@@ -1776,6 +1796,8 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             style.tone = str(params["tone"])
         if (params.get("sub_font") or "").strip():
             style.font = str(params["sub_font"]).strip()
+        if params.get("sub_anim") in ("none", "pop", "type", "karaoke"):
+            style.anim = str(params["sub_anim"])   # 🎬 감성 테마 (v0.86)
         ep_voice = {"narr_voice": (params.get("narr_voice") or "").strip(),
                     "narr_style": (params.get("narr_style") or "").strip()}
         chain, voice = _narr_tts_pref(ep_voice, settings)
@@ -2858,11 +2880,15 @@ class _Handler(BaseHTTPRequestHandler):
                 _BGM_TASK.update(running=True, msg="무료 BGM 받기 시작…")
             threading.Thread(target=_fetch_bgm_bg, daemon=True).start()
             self._send_json({"ok": True})
-        elif path == "/api/fetch_url":  # 🔗 블로그 글 가져오기 (v0.78)
+        elif path == "/api/fetch_url":  # 🔗 블로그 글 가져오기 (v0.78) / 🛍 붙여넣기 (v0.86)
             _apply_keys(params)  # 제미나이 키 → AI 대본 요약에 사용
             url = (params.get("url") or "").strip()
-            if not url.startswith(("http://", "https://")):
+            pasted = str(params.get("pasted_text") or "").strip()
+            if not pasted and not url.startswith(("http://", "https://")):
                 self._send_json({"error": "글 주소가 올바르지 않아요 — http로 시작하는 주소를 붙여넣어 주세요"}, 400)
+                return
+            if pasted and len(pasted) < 30:
+                self._send_json({"error": "붙여넣은 내용이 너무 짧아요 — 상품 상세설명을 통째로 복사해 넣어주세요"}, 400)
                 return
             try:
                 target_sec = max(15, min(180, int(params.get("target_sec") or 45)))
@@ -2874,7 +2900,7 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 _WEBLINK_TASK.update(running=True, msg="글 여는 중…", result=None, error="")
             threading.Thread(target=_fetch_weblink_bg,
-                             args=(url, self.server.workdir, target_sec),
+                             args=(url, self.server.workdir, target_sec, pasted),
                              daemon=True).start()
             self._send_json({"ok": True})
         elif path == "/api/section_split":  # 🎞 대본 통째 → 구간 나누기 (v0.80)
@@ -3813,7 +3839,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.85.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.86.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4552,7 +4578,17 @@ _HTML = """<!doctype html>
     </details>
 
     <details class="opt">
-      <summary>🎬 자동 연출 <span class="hint">— 효과음·줌·숫자 팝·색감 (전부 자동, 여기서 켜고 끔)</span></summary>
+      <summary>🎬 자동 연출 <span class="hint">— 감성 테마·효과음·줌·숫자 팝·색감 (전부 자동, 여기서 켜고 끔)</span></summary>
+      <div class="chk" style="gap:8px;flex-wrap:wrap">
+        <span>🎨 <b>감성 테마</b></span>
+        <select id="genThemeSel" style="width:auto;padding:6px 8px" onchange="applyTheme('gen')">
+          <option value="">직접 고르기</option>
+          <option value="insta">📸 인스타 감성 (타자기 자막+타닥+화사)</option>
+          <option value="youtube">▶ 유튜브 예능 (노랑 자막 팝+선명)</option>
+          <option value="cinema">🎬 시네마틱 (차분한 영화 색감)</option>
+        </select>
+        <span class="hint" id="genThemeHint">— 한 번에 그 느낌으로 (자막 스타일·색감·자막 등장을 묶어 세팅)</span>
+      </div>
       <div class="chk" style="gap:8px;flex-wrap:wrap">
         <input type="checkbox" id="genSfxChk" checked>
         <span>🔔 <b>효과음 자동</b> — 눌러서 들어보세요 →</span>
@@ -4688,6 +4724,18 @@ _HTML = """<!doctype html>
       <button class="ghost" style="white-space:nowrap;border-color:#4266d5" id="weblinkBtn" onclick="loadWeblink(event)">🔗 글 가져오기</button>
     </div>
     <div class="hint" id="weblinkHint"></div>
+    <details class="opt" id="wlPasteBox">
+      <summary>🛍 쇼핑 링크(쿠팡·스마트스토어)일 때 — 상품 정보 직접 붙여넣기</summary>
+      <div class="hint" style="margin-top:4px">상품 페이지는 프로그램 접근을 막아 자동 수집이 안 돼요.
+        대신: ① 상품 페이지의 <b>상세설명 글을 드래그·복사</b>해 아래에 붙여넣고 ② 상품 사진을
+        PC에 저장해 [🖼 상품 사진 고르기]로 넣어주세요. 링크는 위 칸에 그대로 두면 출처로 저장돼요.</div>
+      <textarea id="wlPasteText" style="min-height:110px;margin-top:6px" placeholder="상품 상세설명·특징·후기 등을 통째로 붙여넣으세요 — AI가 홍보 대본으로 정리해요"></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <button class="ghost" onclick="pickWlPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
+        <span class="hint" id="wlPhotoCnt" style="align-self:center"></span>
+        <button class="ghost" style="border-color:#4266d5" onclick="loadWeblinkPasted(event)">🤖 이 내용으로 대본 만들기</button>
+      </div>
+    </details>
     <div id="wlPreview" class="hidden">
       <div class="steplabel"><span class="stepnum">2</span>사진 확인 <span class="hint">— 체크를 끄면 그 사진은 영상에서 빠져요 (순서 = 문장 순서)</span></div>
       <div id="wlGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px"></div>
@@ -4700,8 +4748,15 @@ _HTML = """<!doctype html>
         <span class="hint">— 🎙 AI 내레이션과 같은 목록 (제미나이 키가 있어야 적용)</span>
       </div>
       <details class="opt" id="wlDecoBox">
-        <summary>🎨 꾸미기 <span class="hint">— 자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
+        <summary>🎨 꾸미기 <span class="hint">— 감성 테마·자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
         <div class="chk" style="gap:10px;flex-wrap:wrap">
+          <span>🎨 감성 테마</span>
+          <select id="wlThemeSel" style="width:auto" onchange="applyTheme('wl')">
+            <option value="">직접 고르기</option>
+            <option value="insta">📸 인스타 감성</option>
+            <option value="youtube">▶ 유튜브 예능</option>
+            <option value="cinema">🎬 시네마틱</option>
+          </select>
           <span>자막 스타일</span><select id="wlSubStyleSel" style="width:auto"></select>
           <span>제목 스타일</span><select id="wlHookStyleSel" style="width:auto"></select>
           <span>자막 글씨체</span><select id="wlSubFontSel" style="width:auto;max-width:180px"></select>
@@ -4783,6 +4838,13 @@ _HTML = """<!doctype html>
     <details class="opt" id="secDecoBox">
       <summary>🎨 꾸미기 <span class="hint">— 자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
       <div class="chk" style="gap:10px;flex-wrap:wrap">
+        <span>🎨 감성 테마</span>
+        <select id="secThemeSel" style="width:auto" onchange="applyTheme('sec')">
+          <option value="">직접 고르기</option>
+          <option value="insta">📸 인스타 감성</option>
+          <option value="youtube">▶ 유튜브 예능</option>
+          <option value="cinema">🎬 시네마틱</option>
+        </select>
         <span>자막 스타일</span><select id="secSubStyleSel" style="width:auto"></select>
         <span>제목 스타일</span><select id="secHookStyleSel" style="width:auto"></select>
         <span>자막 글씨체</span><select id="secSubFontSel" style="width:auto;max-width:180px"></select>
@@ -6424,6 +6486,7 @@ async function generate(){
     target_sec: genTargetSec(),                                    // v0.61 영상 길이 (직접 입력 v0.68)
     script_text: (($('genScript')||{}).value)||'',                 // v0.61 내 대본
     sub_style: (($('genSubStyleSel')||{}).value)||'기본',          // v0.54 자막 프리셋
+    sub_anim: (window._themeAnim||{}).gen || '',                  // 🎨 감성 테마 자막 등장 (v0.86)
     sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
     punch_in: !!(($('genPunchChk')||{}).checked),                  // v0.55 펀치 줌
     tone: (($('genToneSel')||{}).value)||'기본',                    // v0.56 화면 톤
@@ -7493,11 +7556,86 @@ async function fetchBgm(ev){
   finally { btn.disabled = false; btn.textContent = '⬇ 무료 BGM 받기'; }
 }
 
+// ── 🎨 감성 테마 (v0.86) — 자막 스타일·색감·자막 등장을 한 번에 ──
+const THEMES = {
+  insta:   {sub_style: '다색 팝', tone: '화사', anim: 'type'},
+  youtube: {sub_style: '예능 노랑', tone: '선명', anim: 'pop'},
+  cinema:  {sub_style: '기본', tone: '시네마틱', anim: 'none'},
+};
+window._themeAnim = window._themeAnim || {};
+function applyTheme(prefix){
+  const sel = $(prefix + 'ThemeSel'); if(!sel) return;
+  const t = THEMES[sel.value];
+  window._themeAnim[prefix] = t ? t.anim : '';
+  if(!t) return;
+  const map = {gen: ['genSubStyleSel', 'genToneSel'],
+               wl: ['wlSubStyleSel', 'wlToneSel'],
+               sec: ['secSubStyleSel', 'secToneSel']}[prefix] || [];
+  const set = function(id, v){ const el = $(id);
+    if(el && v && [...el.options].some(o => o.value === v)) el.value = v; };
+  set(map[0], t.sub_style); set(map[1], t.tone);
+  if(prefix === 'gen' && typeof syncDecorChips === 'function') syncDecorChips();
+}
+
+// ── 🛍 쇼핑 링크 감지 (v0.86) — 상품 페이지는 봇 차단 → 붙여넣기 안내 ──
+const SHOP_HOST_RE = /coupang\\.com|coupa\\.ng|smartstore\\.naver\\.com|shopping\\.naver\\.com|brand\\.naver\\.com|11st\\.co\\.kr|gmarket\\.co\\.kr|auction\\.co\\.kr/i;
+
+async function pickWlPhotos(ev){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true;
+  try{
+    const data = await (await fetch('/api/pick_file', {method:'POST',
+      body: JSON.stringify({kind: 'images'})})).json();
+    if(data.error){ alert(data.error + PASTE_TIP); return; }
+    const paths = (data.path || '').split(';').filter(Boolean);
+    if(paths.length){
+      window._wlLocalPhotos = paths;
+      $('wlPhotoCnt').textContent = '📷 사진 ' + paths.length + '장 선택됨';
+      if(window._weblink) window._weblink.images = paths;
+    }
+  } catch(e){ alert('선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
+  finally { btn.disabled = false; }
+}
+
+async function loadWeblinkPasted(ev){
+  ev.preventDefault();
+  const text = (($('wlPasteText')||{}).value || '').trim();
+  if(text.length < 30){ alert('상품 상세설명을 통째로 복사해 붙여넣어 주세요 (30자 이상)'); return; }
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent;
+  btn.textContent = 'AI가 대본으로 정리하는 중…';
+  try{
+    const key = ensureGeminiKey();
+    const d = await (await fetch('/api/fetch_url', {method:'POST',
+      body: JSON.stringify({pasted_text: text, url: (($('weblinkUrl')||{}).value||'').trim(),
+                            target_sec: 45, gemini_key: key, save_key: true})})).json();
+    if(d.error){ alert(d.error); return; }
+    while(true){
+      await new Promise(s => setTimeout(s, 1500));
+      const st = await (await fetch('/api/state')).json();
+      const t = st.weblink_fetch || {};
+      if(t.running){ btn.textContent = (t.msg || '정리 중…').slice(0, 22); continue; }
+      if(t.error){ alert(t.error); break; }
+      window._weblink = t.result || {};
+      if((window._wlLocalPhotos || []).length) window._weblink.images = window._wlLocalPhotos;
+      applyWeblink(window._weblink);
+      if(!(window._wlLocalPhotos || []).length)
+        uiBanner('🖼 대본은 준비됐어요 — [🖼 상품 사진 고르기]로 사진을 넣으면 [🎬 영상 만들기]를 누를 수 있어요');
+      break;
+    }
+  } catch(e){ alert('대본 만들기 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
 // ── 🔗 블로그 글로 사진 영상 채우기 (v0.78) ──
 async function loadWeblink(ev){
   ev.preventDefault();
   const url = (($('weblinkUrl')||{}).value||'').trim();
   if(!url){ alert('블로그 글 주소를 먼저 붙여넣어 주세요'); return; }
+  if(SHOP_HOST_RE.test(url)){          // 🛍 상품 페이지 — 크롤링 대신 붙여넣기 유도 (v0.86)
+    const pb = $('wlPasteBox'); if(pb) pb.open = true;
+    uiBanner('🛍 쇼핑몰 상품 페이지는 프로그램 접근을 막고 있어요 — 바로 아래 [🛍 상품 정보 직접 붙여넣기]에 상세설명을 복사해 넣고, 사진을 골라서 만들어 주세요. 링크는 출처로 함께 저장돼요.');
+    return;
+  }
   const btn = $('weblinkBtn'); btn.disabled = true; const old = btn.textContent;
   btn.textContent = '가져오는 중…';
   try{
@@ -7603,6 +7741,7 @@ async function startWeblink(){
     hook_style: ($('wlHookStyleSel')||{}).value || '',
     sub_font: ($('wlSubFontSel')||{}).value || '',
     tone: ($('wlToneSel')||{}).value || '',
+    sub_anim: (window._themeAnim||{}).wl || '',        // 🎨 감성 테마 자막 등장 (v0.86)
     gemini_key: key, save_key: true,
   };
   const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
@@ -8037,6 +8176,7 @@ async function startSections(){
     narr_voice: ($('secVoiceSel')||{}).value || '',
     tempo: ($('secTempoSel')||{}).value || '',
     bgm: ($('secBgmSel')||{}).value || '',
+    sub_anim: (window._themeAnim||{}).sec || '',       // 🎨 감성 테마 자막 등장 (v0.86)
     sub_style: ($('secSubStyleSel')||{}).value || '',  // 🎨 꾸미기 (v0.81)
     hook_style: ($('secHookStyleSel')||{}).value || '',
     sub_font: ($('secSubFontSel')||{}).value || '',
