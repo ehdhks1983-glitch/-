@@ -21,7 +21,7 @@ def test_v087_ui_present_and_wired():
     assert "'제목: ' + nc.title" not in html
     assert "'토픽 태그: '" not in html
     # 테마 4곳 (gen/edit/wl/sec)
-    assert html.count('value="tiktok"') == 4
+    assert html.count('value="tiktok"') == 5  # gen/edit/wl/sec/shop (v0.89)
 
 
 def test_upload_kit_prompt_and_stub_have_clip_categories():

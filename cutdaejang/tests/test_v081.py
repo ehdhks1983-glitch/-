@@ -23,7 +23,7 @@ def test_deco_ui_present_and_wired():
     assert "wlSubStyleSel')||{}).value" in html
     assert "secSubStyleSel')||{}).value" in html
     # 카드 열 때 편집 폼 옵션·기억값 복제
-    assert html.count("cloneSelect('editSubStyleSel'") == 2
+    assert html.count("cloneSelect('editSubStyleSel'") == 3  # wl+sec+shop (v0.89)
 
 
 @pytest.fixture(scope="module")
