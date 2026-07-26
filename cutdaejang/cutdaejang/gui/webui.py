@@ -1941,10 +1941,15 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         fps_meta, reused = {}, 0
         n = len(secs)
         outs, out_titles, errors, notes = [], [], [], []
+        # 🎙 목소리는 전체 대본을 한 번에 (v0.95) — 구간마다 따로 합성하면 경계에서
+        # 톤이 리셋돼 끊겨 들린다(사용자 리포트 "전체 대본 바탕으로 만들어야").
+        # 문장별 클립은 그대로 받아 자막 싱크를 유지하면서, 이어읽기 문맥
+        # (previous_text/next_text)이 구간 경계를 넘어 대본 전체를 관통한다.
+        plan = []
         for i, sec in enumerate(secs, 1):
-            base = (i - 1) / n
+            p = {"i": i, "sec": sec, "rng": "", "fp": "", "reuse": False,
+                 "lines": [], "err": "", "s_us": 0, "e_us": 0}
             try:
-                rng = ""
                 if full_video:
                     try:
                         s_us, e_us = int(sec.get("start_us")), int(sec.get("end_us"))
@@ -1953,13 +1958,51 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                                          "[🪄 자동으로 나누기]를 눌러주세요") from ve
                     s_us = max(0, min(s_us, full_us - 500_000))
                     e_us = max(s_us + 500_000, min(e_us, full_us))
-                    rng = f"{full_video}:{s_us}-{e_us}"
-                fp = _sec_fp(sec, rng)
+                    p["s_us"], p["e_us"] = s_us, e_us
+                    p["rng"] = f"{full_video}:{s_us}-{e_us}"
+                p["fp"] = _sec_fp(sec, p["rng"])
                 prev_file = (prev_dir / f"sec_{i}.mp4") if prev_dir else None
-                if prev_meta.get(str(i)) == fp and prev_file and prev_file.is_file():
+                p["reuse"] = bool(prev_meta.get(str(i)) == p["fp"]
+                                  and prev_file and prev_file.is_file())
+                if not p["reuse"]:
+                    lines = [ln.strip() for ln in str(sec["narration"]).splitlines()
+                             if ln.strip()]
+                    p["lines"] = split_long_sentences(  # 🛡 자막 2줄 안전장치 (v0.77)
+                        Script(title="", sentences=lines),
+                        limit=max(8, wrap * 2)).sentences
+            except Exception as pe:  # noqa: BLE001 — 이 구간만 실패, 나머지는 계속
+                p["err"] = str(pe)[:200]
+            plan.append(p)
+        to_synth = [p for p in plan if not p["err"] and not p["reuse"] and p["lines"]]
+        clip_slices = {}
+        if to_synth:
+            all_lines = [ln for p in to_synth for ln in p["lines"]]
+            _set_job(job_id, status="running", stage="tts", frac=0.0,
+                     note=f"🎙 전체 대본 {len(all_lines)}문장 목소리를 한 번에 합성 중 — "
+                          "구간이 넘어가도 톤이 이어져요")
+            try:
+                clips_all, _used, tnote = tts_engine.synth_with_fallback(
+                    all_lines, list(chain), Path(workdir) / "cache" / "tts",
+                    settings, voice=voice)
+                if tnote and tnote not in notes:
+                    notes.append(tnote)
+                pos = 0
+                for p in to_synth:
+                    clip_slices[p["i"]] = clips_all[pos:pos + len(p["lines"])]
+                    pos += len(p["lines"])
+            except Exception as te:  # noqa: BLE001 — 합성 실패 → 해당 구간들만 실패
+                for p in to_synth:
+                    p["err"] = f"목소리 합성 실패: {str(te)[:160]}"
+        for p in plan:
+            i, sec, fp = p["i"], p["sec"], p["fp"]
+            base = (i - 1) / n
+            try:
+                if p["err"]:
+                    raise RuntimeError(p["err"])
+                if p["reuse"]:
                     job_dir.mkdir(parents=True, exist_ok=True)
                     dst = job_dir / f"sec_{i}.mp4"
-                    shutil.copy2(prev_file, dst)
+                    shutil.copy2(prev_dir / f"sec_{i}.mp4", dst)
                     outs.append(str(dst))
                     out_titles.append((str(sec.get("title") or "").strip() or f"구간 {i}"))
                     fps_meta[str(i)] = fp
@@ -1968,22 +2011,15 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                              note=f"🎞 구간 {i}/{n} — 바뀐 게 없어 이전 결과 재사용 ♻")
                     continue
                 if full_video:
+                    s_us, e_us = p["s_us"], p["e_us"]
                     _set_job(job_id, status="running", stage="cut", frac=base,
                              note=f"🎞 구간 {i}/{n} — 풀영상 {s_us / 1e6:.0f}~{e_us / 1e6:.0f}초 잘라내는 중…")
                     video = video_editor.extract_segment(
                         full_video, s_us, e_us, str(job_dir / f"sec_{i}_src.mp4"))
                 else:
                     video = video_editor.resolve_input_video(str(sec.get("video_path") or ""))
-                lines = [ln.strip() for ln in str(sec["narration"]).splitlines() if ln.strip()]
-                lines = split_long_sentences(  # 🛡 자막 2줄 안전장치 (v0.77 재사용)
-                    Script(title="", sentences=lines), limit=max(8, wrap * 2)).sentences
-                _set_job(job_id, status="running", stage="tts", frac=base,
-                         note=f"🎞 구간 {i}/{n} — 목소리 만드는 중…")
-                clips, _used, tnote = tts_engine.synth_with_fallback(
-                    lines, list(chain), Path(workdir) / "cache" / "tts",
-                    settings, voice=voice)
-                if tnote and tnote not in notes:
-                    notes.append(tnote)
+                lines = p["lines"]
+                clips = clip_slices.get(i) or []
                 subs0 = edit_mode.dicts_to_subtitles(
                     [{"text": t, "start_us": 0, "end_us": 1_000} for t in lines])
                 subs, clips2, _ = edit_mode.retime_narration(
@@ -4110,7 +4146,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.94.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.95.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6163,6 +6199,34 @@ async function startEdit(){
   const wantAnalyze = !narrFileMode && !!(($('narrAnalyzeChk')||{}).checked);
   const wantScriptTts = !narrFileMode && !!(($('scriptTtsChk')||{}).checked)
     && !!(($('editScript')||{}).value||'').trim();   // 🔊 대본 읽어주기 (v0.78)
+  // 🛡 완성본 재편집 + 무음 결과 가드 (v0.95) — "글씨 겹침·내레이션 사라짐" 방지
+  const newVoice = (narrFileMode && !!narrFileVal) || wantScriptTts ||
+    (!narrFileMode && !!((($('narrTopic')||{}).value||'').trim()) && !subsOnly);
+  const vpath = (video || '').toLowerCase().replace(/\\\\/g, '/');
+  const isCutOutput = kind !== 'photo' && video &&
+    (/\\/(edited(_\\d+)?|sections(_bgm|_final)?|short_\\d+)\\.mp4$/.test(vpath) ||
+     vpath.indexOf('/jobs/') >= 0);
+  const NL10 = String.fromCharCode(10);
+  if(isCutOutput){
+    if(!confirm('⚠ 컷대장이 이미 완성한 영상(자막·제목이 새겨진 파일)을 다시 편집하려는 것 같아요.' + NL10 +
+        '· 새 자막·제목이 기존 글씨 위에 겹쳐 보일 수 있어요' + NL10 +
+        '· 소리 설정에 따라 기존 내레이션이 사라질 수 있어요' + NL10 + NL10 +
+        '웬만하면 "원본 영상"을 골라 편집하는 걸 추천해요. 그래도 계속할까요?')){
+      uiBanner('편집을 시작하지 않았어요 — [📁 영상 선택]으로 원본 영상을 골라주세요');
+      return;
+    }
+    if($('origAudioSel').value === 'mute' && !newVoice){
+      $('origAudioSel').value = 'keep';   // 완성본의 기존 목소리 보존
+      uiBanner('🔊 완성본의 목소리가 사라지지 않게 [원본 소리]를 켬으로 바꿨어요 — 원하면 소리 옵션에서 다시 끄세요');
+    }
+  } else if(kind !== 'photo' && $('origAudioSel').value === 'mute' && !newVoice
+            && !((($('bgmEditSel')||{}).value)||'')){
+    if(!confirm('지금 설정이면 소리가 하나도 없는 영상이 됩니다.' + NL10 +
+        '(원본 소리 끄기 + 내레이션 없음 + BGM 없음)' + NL10 + '그래도 진행할까요?')){
+      uiBanner('편집을 시작하지 않았어요 — [소리] 옵션에서 원본 소리를 켜거나 내레이션·BGM을 넣어주세요');
+      return;
+    }
+  }
   if(!narrFileMode && ((($('narrTopic')||{}).value||'').trim() || wantAnalyze || wantScriptTts) && !window._hasGeminiKey && !editKey){
     editKey = ensureGeminiKey();   // 대본 품질(+목소리)에 필요 — 화면 분석은 키 필수
     if(wantAnalyze && !editKey){ alert('🧠 화면 보고 대본 자동은 제미나이 키가 꼭 필요해요 (무료 발급: aistudio.google.com/apikey)'); return; }
