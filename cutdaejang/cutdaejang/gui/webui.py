@@ -1071,6 +1071,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.tone = str(ep["tone"])
         if ep.get("sub_anim") in ("none", "pop", "type", "karaoke"):  # 🎬 감성 테마 (v0.86)
             style.anim = str(ep["sub_anim"])
+        if ep.get("sub_pos") in ("center", "bottom"):  # 🎨 자막 위치 — 릴스 가운데 (v0.87)
+            style.position = str(ep["sub_pos"])
         try:  # 상단 제목 크기 배수 (훅 스튜디오)
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -1431,6 +1433,8 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.tone = str(ep["tone"])
         if ep.get("sub_anim") in ("none", "pop", "type", "karaoke"):  # 🎬 감성 테마 (v0.86)
             style.anim = str(ep["sub_anim"])
+        if ep.get("sub_pos") in ("center", "bottom"):  # 🎨 자막 위치 — 릴스 가운데 (v0.87)
+            style.position = str(ep["sub_pos"])
         try:
             style.hook_scale = float(ep.get("hook_scale") or 1.0)
         except (TypeError, ValueError):
@@ -1798,6 +1802,8 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             style.font = str(params["sub_font"]).strip()
         if params.get("sub_anim") in ("none", "pop", "type", "karaoke"):
             style.anim = str(params["sub_anim"])   # 🎬 감성 테마 (v0.86)
+        if params.get("sub_pos") in ("center", "bottom"):
+            style.position = str(params["sub_pos"])  # 🎨 자막 위치 (v0.87)
         ep_voice = {"narr_voice": (params.get("narr_voice") or "").strip(),
                     "narr_style": (params.get("narr_style") or "").strip()}
         chain, voice = _narr_tts_pref(ep_voice, settings)
@@ -2449,6 +2455,12 @@ class _Handler(BaseHTTPRequestHandler):
                 _set_job(job["id"], edit_params=ep)
             if params.get("tone"):  # 🎨 화면 톤 (v0.56)
                 ep["tone"] = params.get("tone")
+                _set_job(job["id"], edit_params=ep)
+            if params.get("sub_anim"):  # 🎬 감성 테마 자막 등장 (v0.87)
+                ep["sub_anim"] = params.get("sub_anim")
+                _set_job(job["id"], edit_params=ep)
+            if params.get("sub_pos"):   # 🎨 자막 위치 — 릴스 가운데 (v0.87)
+                ep["sub_pos"] = params.get("sub_pos")
                 _set_job(job["id"], edit_params=ep)
             if params.get("margin_v"):  # ↕ 검토 화면에서 드래그한 자막 위치 (v0.49)
                 ep["margin_v"] = params.get("margin_v")
@@ -3839,7 +3851,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.86.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.87.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4200,6 +4212,17 @@ _HTML = """<!doctype html>
 
     <details class="opt" id="optAdv">
       <summary>⚙️ 세부 설정 <span class="hint">— 화면 비율 · 자동 자막/무음 컷 · 음성 인식 엔진</span></summary>
+      <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:6px">
+        <span>🎨 감성 테마</span>
+        <select id="editThemeSel" style="width:auto;padding:6px 8px" onchange="applyTheme('edit')">
+          <option value="">직접 고르기</option>
+          <option value="insta">📸 인스타 감성</option>
+          <option value="tiktok">🎵 틱톡 감성</option>
+          <option value="youtube">▶ 유튜브 예능</option>
+          <option value="cinema">🎬 시네마틱</option>
+        </select>
+        <span class="hint">— 자막 스타일·색감·등장·위치를 한 번에 (틱톡은 말하는 단어가 차오르는 하이라이트)</span>
+      </div>
       <div style="margin-top:6px">
         <span>💬 자막 글씨 스타일 <span class="hint">— 보이는 그대로 들어가요 (강조색 자동 조정, 기억됨)</span></span>
         <select id="editSubStyleSel" class="hidden">
@@ -4583,7 +4606,8 @@ _HTML = """<!doctype html>
         <span>🎨 <b>감성 테마</b></span>
         <select id="genThemeSel" style="width:auto;padding:6px 8px" onchange="applyTheme('gen')">
           <option value="">직접 고르기</option>
-          <option value="insta">📸 인스타 감성 (타자기 자막+타닥+화사)</option>
+          <option value="insta">📸 인스타 감성 (타자기 자막+타닥+화사, 자막 가운데)</option>
+          <option value="tiktok">🎵 틱톡 감성 (단어 하이라이트+블랙 박스+쨍한 색)</option>
           <option value="youtube">▶ 유튜브 예능 (노랑 자막 팝+선명)</option>
           <option value="cinema">🎬 시네마틱 (차분한 영화 색감)</option>
         </select>
@@ -4754,6 +4778,7 @@ _HTML = """<!doctype html>
           <select id="wlThemeSel" style="width:auto" onchange="applyTheme('wl')">
             <option value="">직접 고르기</option>
             <option value="insta">📸 인스타 감성</option>
+            <option value="tiktok">🎵 틱톡 감성</option>
             <option value="youtube">▶ 유튜브 예능</option>
             <option value="cinema">🎬 시네마틱</option>
           </select>
@@ -4842,6 +4867,7 @@ _HTML = """<!doctype html>
         <select id="secThemeSel" style="width:auto" onchange="applyTheme('sec')">
           <option value="">직접 고르기</option>
           <option value="insta">📸 인스타 감성</option>
+          <option value="tiktok">🎵 틱톡 감성</option>
           <option value="youtube">▶ 유튜브 예능</option>
           <option value="cinema">🎬 시네마틱</option>
         </select>
@@ -5061,10 +5087,17 @@ _HTML = """<!doctype html>
               프로필·피드 <b>썸네일이 위아래로 잘려 보이는 건 정상</b>(인스타가 4:5로 미리보기 crop). 릴스로 재생하면 제목까지 다 나와요.</div>
           </details>
           <details class="opt">
-            <summary>🟢 네이버 클립 <span class="hint">— 검색형 제목 + 태그 10~12개</span>
-              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitNaver')">📋 복사</button>
+            <summary>🟢 네이버 클립 <span class="hint">— 제목·태그 각각 복사 + 카테고리 추천</span>
               <a href="https://clipcreators.naver.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none" onclick="event.stopPropagation()">↗ 클립 열기</a></summary>
-            <textarea id="kitNaver" style="min-height:72px;margin-top:4px"></textarea>
+            <div class="chk" style="gap:8px;margin-top:4px"><b style="font-size:13px">제목</b>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitNaverTitle')">📋 복사</button>
+              <span class="hint">— 제목란에 그대로 (라벨 없이 붙어요)</span></div>
+            <input type="text" id="kitNaverTitle" style="margin-top:2px">
+            <div class="chk" style="gap:8px;margin-top:6px"><b style="font-size:13px">태그</b>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitNaverTags')">📋 복사</button>
+              <span class="hint">— 쉼표로 구분돼 태그란에 그대로</span></div>
+            <textarea id="kitNaverTags" style="min-height:48px;margin-top:2px"></textarea>
+            <div class="hint" id="kitNaverCat" style="margin-top:6px"></div>
           </details>
           <details class="opt">
             <summary>🧵 스레드 <span class="hint">— 짧은 반말 + 토픽 태그 1개만</span>
@@ -6403,7 +6436,7 @@ async function renderEdited(){
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
   const quality=($('outQuality')||{}).value || 'standard';
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', sub_style:(($('editSubStyleSel')||{}).value)||'기본', tone:(($('editToneSel')||{}).value)||'기본', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', sub_style:(($('editSubStyleSel')||{}).value)||'기본', tone:(($('editToneSel')||{}).value)||'기본', sub_anim:(window._themeAnim||{}).edit||'', sub_pos:(window._themePos||{}).edit||'', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -6875,12 +6908,17 @@ function renderKit(data){
   $('kitTiktok').value = tk.caption ? (tk.caption + NL + NL + hash(tk.hashtags)) : '';
   const ig = kit.instagram || {};
   $('kitInsta').value = ig.caption ? (ig.caption + NL + NL + hash(ig.hashtags)) : '';
+  // 🟢 네이버 클립 (v0.87) — "제목:"/"태그:" 라벨 없이 각 입력란에 그대로 붙는 형식
   const nc = kit.naver_clip || {};
-  $('kitNaver').value = nc.title
-    ? ('제목: ' + nc.title + NL + '태그: ' + hash(nc.tags)) : '';
+  if($('kitNaverTitle')) $('kitNaverTitle').value = nc.title || '';
+  if($('kitNaverTags')) $('kitNaverTags').value = (nc.tags || []).join(', ');
+  if($('kitNaverCat')) $('kitNaverCat').innerHTML = nc.category1
+    ? ('📂 카테고리 추천: <b>1차 — ' + escHtml(nc.category1) + '</b> · <b>2차 — ' +
+       escHtml(nc.category2 || '자유 선택') + '</b> <span class="hint">(업로드 화면에서 가장 비슷한 항목을 고르세요)</span>')
+    : '';
   const th = kit.threads || {};
   $('kitThreads').value = th.post
-    ? (th.post + (th.topic ? (NL + NL + '토픽 태그: ' + th.topic) : '')) : '';
+    ? (th.post + (th.topic ? (NL + NL + th.topic) : '')) : '';   // 토픽은 맨 아랫줄 (라벨 없음)
   $('kitKeywords').innerHTML = '<b>🔑 키워드 10:</b> ' + escHtml((kit.keywords || []).join(' · '));
   $('kitCategory').innerHTML = '<b>📂 카테고리:</b> ' + escHtml(kit.category || '') +
     (kit.category_reason ? (' — ' + escHtml(kit.category_reason)) : '');
@@ -7556,25 +7594,35 @@ async function fetchBgm(ev){
   finally { btn.disabled = false; btn.textContent = '⬇ 무료 BGM 받기'; }
 }
 
-// ── 🎨 감성 테마 (v0.86) — 자막 스타일·색감·자막 등장을 한 번에 ──
+// ── 🎨 감성 테마 (v0.86 → v0.87 틱톡·자막 위치) — 스타일·색감·등장·위치를 한 번에 ──
 const THEMES = {
-  insta:   {sub_style: '다색 팝', tone: '화사', anim: 'type'},
-  youtube: {sub_style: '예능 노랑', tone: '선명', anim: 'pop'},
-  cinema:  {sub_style: '기본', tone: '시네마틱', anim: 'none'},
+  insta:   {sub_style: '다색 팝', tone: '화사', anim: 'type', pos: 'center'},
+  tiktok:  {sub_style: '블랙 박스', tone: '선명', anim: 'karaoke', pos: 'center'},
+  youtube: {sub_style: '예능 노랑', tone: '선명', anim: 'pop', pos: ''},
+  cinema:  {sub_style: '기본', tone: '시네마틱', anim: 'none', pos: ''},
 };
 window._themeAnim = window._themeAnim || {};
+window._themePos = window._themePos || {};
 function applyTheme(prefix){
   const sel = $(prefix + 'ThemeSel'); if(!sel) return;
   const t = THEMES[sel.value];
   window._themeAnim[prefix] = t ? t.anim : '';
+  window._themePos[prefix] = t ? (t.pos || '') : '';
   if(!t) return;
   const map = {gen: ['genSubStyleSel', 'genToneSel'],
                wl: ['wlSubStyleSel', 'wlToneSel'],
-               sec: ['secSubStyleSel', 'secToneSel']}[prefix] || [];
+               sec: ['secSubStyleSel', 'secToneSel'],
+               edit: ['editSubStyleSel', 'editToneSel']}[prefix] || [];
   const set = function(id, v){ const el = $(id);
     if(el && v && [...el.options].some(o => o.value === v)) el.value = v; };
   set(map[0], t.sub_style); set(map[1], t.tone);
-  if(prefix === 'gen' && typeof syncDecorChips === 'function') syncDecorChips();
+  if(prefix === 'gen'){
+    if(typeof syncDecorChips === 'function') syncDecorChips();
+    if(t.pos === 'center'){   // 인스타·틱톡 감성 → 화면 형태도 릴스(자막 가운데)로
+      const r = document.querySelector("input[name=genOrient][value='reels']");
+      if(r && !r.checked) r.checked = true;
+    }
+  }
 }
 
 // ── 🛍 쇼핑 링크 감지 (v0.86) — 상품 페이지는 봇 차단 → 붙여넣기 안내 ──
@@ -7742,6 +7790,7 @@ async function startWeblink(){
     sub_font: ($('wlSubFontSel')||{}).value || '',
     tone: ($('wlToneSel')||{}).value || '',
     sub_anim: (window._themeAnim||{}).wl || '',        // 🎨 감성 테마 자막 등장 (v0.86)
+    sub_pos: (window._themePos||{}).wl || '',          // 🎨 자막 위치 — 인스타·틱톡 가운데 (v0.87)
     gemini_key: key, save_key: true,
   };
   const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
@@ -8177,6 +8226,7 @@ async function startSections(){
     tempo: ($('secTempoSel')||{}).value || '',
     bgm: ($('secBgmSel')||{}).value || '',
     sub_anim: (window._themeAnim||{}).sec || '',       // 🎨 감성 테마 자막 등장 (v0.86)
+    sub_pos: (window._themePos||{}).sec || '',         // 🎨 자막 위치 — 인스타·틱톡 가운데 (v0.87)
     sub_style: ($('secSubStyleSel')||{}).value || '',  // 🎨 꾸미기 (v0.81)
     hook_style: ($('secHookStyleSel')||{}).value || '',
     sub_font: ($('secSubFontSel')||{}).value || '',

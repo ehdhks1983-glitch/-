@@ -923,6 +923,9 @@ UPLOAD_KIT_PROMPT = """너는 한국 숏폼 SEO·업로드 전문가다. 아래 
   instagram.hashtags: 3~5개(＃ 없이)
 [네이버 클립] naver_clip.title: 검색형 제목 30자 이내(핵심 키워드를 맨 앞에).
   naver_clip.tags: 10~12개(대중 태그 + 틈새 태그 조합, ＃ 없이)
+  naver_clip.category1: 영상에 가장 맞는 1차 카테고리 1개 — 라이프, 뷰티, 패션, 푸드,
+  여행, 건강/운동, 스포츠, 게임, 테크, 자동차, 동물, 육아, 지식/교육, 엔터테인먼트, 음악, 유머 중에서
+  naver_clip.category2: 그 1차 안의 세부 주제(2차 카테고리)를 짧게 — 예: 라이프→직장인 일상, 푸드→집밥 레시피
 [스레드] threads.post: 80~150자, 친구에게 다정하게 말하는 부드러운 반말 (예: "~했어?", "~인 것 같아", "~해보자").
   절대 금지: "야"·"어이"·"다들" 같은 부름말로 시작, "~했냐"·"~냐"·"~지?" 같은 거칠거나 따지는 어미, 시비조·명령조·훈계조. 존댓말·격식체도 금지.
   내 경험을 나누듯 자연스러운 첫 문장으로 시작하고, 마지막은 부드러운 반말 질문으로 답글 유도 (예: "너희는 어떻게 해?"). 이모지 0~1개. 본문에 해시태그 금지(토픽으로 대신).
@@ -932,7 +935,7 @@ JSON만 출력:
   "keywords": ["..."], "hashtags": ["..."], "category": "...", "category_reason": "한 문장",
   "tiktok": {{"caption": "...", "hashtags": ["..."]}},
   "instagram": {{"caption": "...", "hashtags": ["..."]}},
-  "naver_clip": {{"title": "...", "tags": ["..."]}},
+  "naver_clip": {{"title": "...", "tags": ["..."], "category1": "...", "category2": "..."}},
   "threads": {{"post": "...", "topic": "..."}}}}"""
 
 
@@ -1006,7 +1009,10 @@ def normalize_kit(out: dict) -> dict:
         "instagram": {"caption": str(ig.get("caption", ""))[:1000],
                       "hashtags": _norm_words(ig.get("hashtags"), 5)},
         "naver_clip": {"title": str(nc.get("title", ""))[:40],
-                       "tags": _norm_words(nc.get("tags"), 12)},
+                       "tags": _norm_words(nc.get("tags"), 12),
+                       # 📂 1차/2차 카테고리 추천 (v0.87) — 업로드 화면에서 고르는 용
+                       "category1": str(nc.get("category1", "")).strip()[:20],
+                       "category2": str(nc.get("category2", "")).strip()[:30]},
         "threads": {"post": str(th.get("post", ""))[:500],
                     "topic": str(th.get("topic", "")).lstrip("#").strip()[:30]},
     }
@@ -1038,7 +1044,8 @@ def suggest_upload_kit_stub(transcript: str = "", hook: str = "",
                           "hashtags": ["꿀팁", "가이드", "정리", "자동화"]},
             "naver_clip": {"title": f"{base} 하는 법 총정리",
                            "tags": ["꿀팁", "가이드", "정리", "하는법", "초보", "설명",
-                                    "추천", "자동화", "튜토리얼", "노하우"]},
+                                    "추천", "자동화", "튜토리얼", "노하우"],
+                           "category1": "지식/교육", "category2": "노하우"},
             "threads": {"post": f"{base}, 이거 생각보다 별거 아니더라. 너넨 어떻게 함?",
                         "topic": "꿀팁"},
         }
@@ -1063,7 +1070,8 @@ def suggest_upload_kit_stub(transcript: str = "", hook: str = "",
                       "hashtags": ["릴스", "꿀팁", "자기계발", "정리"]},
         "naver_clip": {"title": f"{base} 핵심 정리",
                        "tags": ["꿀팁", "정리", "하는법", "노하우", "자기계발",
-                                "일상꿀팁", "생활정보", "초보가이드", "요약", "튜토리얼"]},
+                                "일상꿀팁", "생활정보", "초보가이드", "요약", "튜토리얼"],
+                       "category1": "라이프", "category2": "생활 꿀팁"},
         "threads": {"post": (f"{base}, 다들 어렵게 생각하는데 핵심은 딱 하나임. "
                              "너넨 어떻게 함?"),
                     "topic": "꿀팁"},
