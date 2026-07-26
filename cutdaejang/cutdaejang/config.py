@@ -246,7 +246,10 @@ _KEY_ENVS = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
              "elevenlabs": "ELEVENLABS_API_KEY",
              # 🛒 쿠팡 파트너스 오픈 API (v0.88 — 상품 검색·딥링크)
              "coupang_access": "COUPANG_ACCESS_KEY",
-             "coupang_secret": "COUPANG_SECRET_KEY"}
+             "coupang_secret": "COUPANG_SECRET_KEY",
+             # 🟢 네이버 검색(쇼핑) API (v0.89 — 쇼핑커넥트 상품 검색)
+             "naver_client_id": "NAVER_CLIENT_ID",
+             "naver_client_secret": "NAVER_CLIENT_SECRET"}
 
 
 def api_keys_path() -> Path:

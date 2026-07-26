@@ -3008,6 +3008,27 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 config.save_settings({"ui": {"sec_draft": draft}})
                 self._send_json({"ok": True})
+        elif path == "/api/naver_keys":  # 🟢 네이버 검색 API 키 저장·확인 (v0.89)
+            cid = str(params.get("client_id") or "").strip()
+            csec = str(params.get("client_secret") or "").strip()
+            if cid and csec:
+                config.save_api_key("naver_client_id", cid)
+                config.save_api_key("naver_client_secret", csec)
+                os.environ["NAVER_CLIENT_ID"] = cid
+                os.environ["NAVER_CLIENT_SECRET"] = csec
+            self._send_json({"ok": True,
+                             "has": bool(os.environ.get("NAVER_CLIENT_ID")
+                                         and os.environ.get("NAVER_CLIENT_SECRET"))})
+        elif path == "/api/naver_search":  # 🟢 네이버 쇼핑 상품 검색 (v0.89)
+            from ..tools import naver_shop_api  # noqa: PLC0415
+            try:
+                items = naver_shop_api.search_shop(
+                    str(params.get("keyword") or ""),
+                    os.environ.get("NAVER_CLIENT_ID", ""),
+                    os.environ.get("NAVER_CLIENT_SECRET", ""))
+                self._send_json({"ok": True, "items": items})
+            except naver_shop_api.NaverShopError as e:
+                self._send_json({"error": str(e)}, 400)
         elif path == "/api/coupang_keys":  # 🛒 파트너스 API 키 저장·확인 (v0.88)
             ak = str(params.get("access") or "").strip()
             sk = str(params.get("secret") or "").strip()
@@ -3054,7 +3075,7 @@ class _Handler(BaseHTTPRequestHandler):
                     logging.getLogger("cutdaejang").warning("상품 사진 내려받기 실패: %s", ie)
             short = ""
             try:
-                if url:
+                if url and "coupang" in url:  # 🟢 네이버 상품은 딥링크 대상 아님 (v0.89)
                     links = coupang_api.deeplink(
                         [url], os.environ.get("COUPANG_ACCESS_KEY", ""),
                         os.environ.get("COUPANG_SECRET_KEY", ""))
@@ -3645,6 +3666,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
                 "coupang": bool(os.environ.get("COUPANG_ACCESS_KEY")
                                 and os.environ.get("COUPANG_SECRET_KEY")),  # 🛒 v0.88
+                "naver": bool(os.environ.get("NAVER_CLIENT_ID")
+                              and os.environ.get("NAVER_CLIENT_SECRET")),   # 🟢 v0.89
             },
             "platform": sys.platform,
             "env": _env_check(),
@@ -3938,7 +3961,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.88.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.89.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
     </div>
@@ -3971,6 +3994,10 @@ _HTML = """<!doctype html>
       <button class="modecard" onclick="openMode('sections')">
         <span class="mc-emoji">🎞</span><span class="mc-title">구간 대본 영상</span>
         <span class="mc-desc">대본 구간마다 클립을 넣으면<br>압축·내레이션·이어붙이기 자동</span>
+      </button>
+      <button class="modecard" onclick="openMode('shop')">
+        <span class="mc-emoji">🛒</span><span class="mc-title">쇼핑 상품 영상</span>
+        <span class="mc-desc">쿠팡 파트너스 · 네이버 쇼핑커넥트<br>상품 검색 → 홍보 영상 자동</span>
       </button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
@@ -4843,26 +4870,9 @@ _HTML = """<!doctype html>
       <div class="hint" style="margin-top:4px">상품 페이지는 프로그램 접근을 막아 자동 수집이 안 돼요.
         대신: ① 상품 페이지의 <b>상세설명 글을 드래그·복사</b>해 아래에 붙여넣고 ② 상품 사진을
         PC에 저장해 [🖼 상품 사진 고르기]로 넣어주세요. 링크는 위 칸에 그대로 두면 출처로 저장돼요.</div>
-      <div style="margin-top:8px;padding:8px 10px;border:1px solid #2c3347;border-radius:10px;background:#171a23">
-        <div class="chk" style="gap:8px;flex-wrap:wrap">
-          <b style="font-size:13px">🛒 파트너스 API로 자동 채우기</b>
-          <span class="hint" id="cpKeyState">— 키를 저장하면 상품 검색으로 이름·가격·사진·파트너스 링크가 자동으로 들어와요</span>
-        </div>
-        <details class="opt" id="cpKeyBox" style="margin-top:4px">
-          <summary>🔑 파트너스 API 키 <span class="hint">— 쿠팡 파트너스 → 도구 → Open API에서 발급</span></summary>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
-            <input type="password" id="cpAccess" placeholder="Access Key" style="flex:1;min-width:140px">
-            <input type="password" id="cpSecret" placeholder="Secret Key" style="flex:1;min-width:140px">
-            <button class="ghost" onclick="saveCoupangKeys(event)">저장</button>
-          </div>
-        </details>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-          <input type="text" id="cpKeyword" placeholder="상품 검색어 (예: 무선 선풍기)" style="flex:1;min-width:160px">
-          <button class="ghost" onclick="coupangSearch(event)">🛒 상품 검색</button>
-        </div>
-        <div id="cpResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px"></div>
-      </div>
-      <textarea id="wlPasteText" style="min-height:110px;margin-top:6px" placeholder="상품 상세설명·특징·후기 등을 통째로 붙여넣으세요 — AI가 홍보 대본으로 정리해요 (위 🛒 검색으로 자동 채울 수도 있어요)"></textarea>
+      <div class="hint" style="margin-top:6px;color:#7fd18a">💡 쿠팡 파트너스·네이버 쇼핑커넥트 상품은 홈의
+        <b>[🛒 쇼핑 상품 영상]</b> 카드가 더 편해요 — 상품 검색으로 이름·가격·사진·링크가 자동으로 채워집니다.</div>
+      <textarea id="wlPasteText" style="min-height:110px;margin-top:6px" placeholder="상품 상세설명·특징·후기 등을 통째로 붙여넣으세요 — AI가 홍보 대본으로 정리해요"></textarea>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
         <button class="ghost" onclick="pickWlPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
         <span class="hint" id="wlPhotoCnt" style="align-self:center"></span>
@@ -4994,6 +5004,90 @@ _HTML = """<!doctype html>
     </div>
     <div class="hint">구간이 많으면 시간이 걸려요 (구간당 보통 1~2분). 진행 상황에 구간 번호가 표시됩니다.
       완성 후 히스토리의 [✏ 다시 편집]으로 불러오면 <b>바뀐 구간만 다시 만들어</b> 빨라요.</div>
+  </div>
+
+  <div id="shopCard" class="hidden">
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="ghost" onclick="showHome()">← 처음으로</button>
+      <h2 style="margin:0">🛒 쇼핑 상품 영상 <span class="hint">— 쿠팡 파트너스 · 네이버 쇼핑커넥트</span></h2>
+    </div>
+    <div class="hint">상품을 검색해 고르면 이름·가격·대표 사진이 자동으로 채워지고,
+      AI가 홍보 대본을 써서 <b>사진+내레이션 영상</b>으로 완성해요. 수익 링크는 영상 설명란에 붙여넣으면 됩니다.</div>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>상품 고르기 <span class="hint">— 두 방법 중 편한 쪽 (검색 또는 직접 붙여넣기)</span></div>
+    <details class="opt" open>
+      <summary>🛒 쿠팡 파트너스 <span class="hint" id="cpKeyState">— API 키를 저장하면 상품 검색·파트너스 링크 자동</span></summary>
+      <details class="opt" id="cpKeyBox" style="margin-top:4px">
+        <summary>🔑 파트너스 API 키 <span class="hint">— 쿠팡 파트너스 → 도구 → Open API에서 발급</span></summary>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+          <input type="password" id="cpAccess" placeholder="Access Key" style="flex:1;min-width:140px">
+          <input type="password" id="cpSecret" placeholder="Secret Key" style="flex:1;min-width:140px">
+          <button class="ghost" onclick="saveCoupangKeys(event)">저장</button>
+        </div>
+      </details>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <input type="text" id="cpKeyword" placeholder="상품 검색어 (예: 무선 선풍기)" style="flex:1;min-width:160px">
+        <button class="ghost" onclick="coupangSearch(event)">🛒 상품 검색</button>
+      </div>
+      <div id="cpResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px"></div>
+    </details>
+    <details class="opt">
+      <summary>🟢 네이버 쇼핑커넥트 <span class="hint" id="nvKeyState">— 무료 검색 API 키를 저장하면 상품 검색 자동</span></summary>
+      <details class="opt" id="nvKeyBox" style="margin-top:4px">
+        <summary>🔑 네이버 검색 API 키 <span class="hint">— developers.naver.com에서 앱 등록(무료) 후 발급</span></summary>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+          <input type="password" id="nvClientId" placeholder="Client ID" style="flex:1;min-width:140px">
+          <input type="password" id="nvClientSecret" placeholder="Client Secret" style="flex:1;min-width:140px">
+          <button class="ghost" onclick="saveNaverKeys(event)">저장</button>
+        </div>
+      </details>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <input type="text" id="nvKeyword" placeholder="상품 검색어 (예: 무선 선풍기)" style="flex:1;min-width:160px">
+        <button class="ghost" onclick="naverSearch(event)">🟢 상품 검색</button>
+      </div>
+      <div id="nvResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px"></div>
+      <div class="hint" style="margin-top:4px">쇼핑커넥트 수익 링크는 커넥트 대시보드에서 만들어 아래 「내 수익 링크」에 붙여넣어 주세요 (API로는 발급이 안 돼요)</div>
+    </details>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>상품 정보 확인 <span class="hint">— 자동으로 채워져요. 상세설명을 덧붙이면 대본이 풍부해져요</span></div>
+    <textarea id="shopPasteText" style="min-height:100px" placeholder="상품 이름·특징·후기 등 — 위에서 상품을 고르면 자동으로 채워지고, 상품 페이지의 상세설명을 복사해 덧붙일 수 있어요"></textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+      <button class="ghost" onclick="pickShopPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
+      <span class="hint" id="shopPhotoCnt" style="align-self:center"></span>
+    </div>
+    <div class="chk" style="gap:8px;margin-top:6px">
+      <span style="white-space:nowrap">🔗 내 수익 링크</span>
+      <input type="text" id="shopLinkInput" style="flex:1" placeholder="파트너스 링크는 자동, 쇼핑커넥트 링크는 대시보드에서 복사해 붙여넣기 (완성 후 설명란용)">
+    </div>
+    <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)">🤖 이 상품으로 대본 만들기</button>
+    <div id="shopPreview" class="hidden">
+      <div class="steplabel" style="margin-top:10px"><span class="stepnum">3</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄. AI 목소리가 읽어요</span></div>
+      <textarea id="shopScript" style="min-height:110px"></textarea>
+      <div class="chk" style="gap:8px"><span>훅 제목</span><input type="text" id="shopHook" style="flex:1" placeholder="영상 상단에 크게 붙는 제목"></div>
+      <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:4px">
+        <span>목소리</span><select id="shopVoiceSel" style="width:auto;min-width:180px"></select>
+        <span>배경음악</span><select id="shopBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
+      </div>
+      <details class="opt" id="shopDecoBox">
+        <summary>🎨 꾸미기 <span class="hint">— 감성 테마·자막·제목 스타일·화면 톤</span></summary>
+        <div class="chk" style="gap:10px;flex-wrap:wrap">
+          <span>🎨 감성 테마</span>
+          <select id="shopThemeSel" style="width:auto" onchange="applyTheme('shop')">
+            <option value="">직접 고르기</option>
+            <option value="insta">📸 인스타 감성</option>
+            <option value="tiktok">🎵 틱톡 감성</option>
+            <option value="youtube">▶ 유튜브 예능</option>
+            <option value="cinema">🎬 시네마틱</option>
+          </select>
+          <span>자막 스타일</span><select id="shopSubStyleSel" style="width:auto"></select>
+          <span>제목 스타일</span><select id="shopHookStyleSel" style="width:auto"></select>
+          <span>자막 글씨체</span><select id="shopSubFontSel" style="width:auto;max-width:180px"></select>
+          <span>화면 톤</span><select id="shopToneSel" style="width:auto"></select>
+        </div>
+      </details>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button id="shopGoBtn" style="flex:1" onclick="startShopSafe()">🎬 영상 만들기</button>
+      </div>
+      <div class="hint">완성되면 [📦 업로드 키트]로 제목·태그·설명을 만들고, 위의 수익 링크를 설명란에 붙여넣으세요.</div>
+    </div>
   </div>
 
   <div class="card hidden" id="statusCard">
@@ -5662,15 +5756,17 @@ function pick(name){ return document.querySelector(`input[name=${name}]:checked`
 
 // ── 첫 화면(홈) ↔ 만들기 폼 전환 (v0.36 초보자 UI) ──
 function openMode(kind){
-  window._view = kind;                       // 'gen' | 'edit' | 'photo' | 'weblink' | 'sections'
+  window._view = kind;                       // 'gen'|'edit'|'photo'|'weblink'|'sections'|'shop'
   $('homeCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
   $('weblinkCard').classList.toggle('hidden', kind !== 'weblink');  // 🔗 전용 탭 (v0.79)
   $('sectionCard').classList.toggle('hidden', kind !== 'sections'); // 🎞 구간 대본 (v0.80)
+  $('shopCard').classList.toggle('hidden', kind !== 'shop');        // 🛒 쇼핑 상품 (v0.89)
   $('formCard').classList.toggle('hidden', kind !== 'gen');
-  $('editCard').classList.toggle('hidden', kind === 'gen' || kind === 'weblink' || kind === 'sections');
+  $('editCard').classList.toggle('hidden', kind === 'gen' || kind === 'weblink' || kind === 'sections' || kind === 'shop');
   if(kind === 'weblink'){ initWeblinkCard(); return; }
   if(kind === 'sections'){ initSectionCard(); return; }
+  if(kind === 'shop'){ initShopCard(); return; }
   if(kind !== 'gen'){
     window._editKind = kind;
     $('videoBlock').classList.toggle('hidden', kind === 'photo');
@@ -5690,6 +5786,7 @@ function showHome(ev){
   $('voiceCard').classList.add('hidden');
   $('weblinkCard').classList.add('hidden');
   $('sectionCard').classList.add('hidden');
+  $('shopCard').classList.add('hidden');
 }
 // ── 🎤 내 목소리 등록 전용 화면 (v0.37) — 어디서 열었든 [← 돌아가기]로 복귀 ──
 function openVoice(ev){
@@ -5700,6 +5797,7 @@ function openVoice(ev){
   $('editCard').classList.add('hidden');
   $('weblinkCard').classList.add('hidden');
   $('sectionCard').classList.add('hidden');
+  $('shopCard').classList.add('hidden');
   $('voiceCard').classList.remove('hidden');
   window._view = 'voice';
 }
@@ -7722,6 +7820,7 @@ function applyTheme(prefix){
   const map = {gen: ['genSubStyleSel', 'genToneSel'],
                wl: ['wlSubStyleSel', 'wlToneSel'],
                sec: ['secSubStyleSel', 'secToneSel'],
+               shop: ['shopSubStyleSel', 'shopToneSel'],
                edit: ['editSubStyleSel', 'editToneSel']}[prefix] || [];
   const set = function(id, v){ const el = $(id);
     if(el && v && [...el.options].some(o => o.value === v)) el.value = v; };
@@ -7784,25 +7883,179 @@ async function coupangSearch(ev){
   finally { btn.disabled = false; btn.textContent = old; }
 }
 
-async function coupangPick(it, card){
+async function coupangPick(it, card){       // 🛒 쇼핑 카드 공용 상품 채우기 (v0.89)
   if(card){ card.style.borderColor = '#4266d5'; }
   try{
     const d = await (await fetch('/api/coupang_pick', {method:'POST',
       body: JSON.stringify(it)})).json();
     if(d.error){ alert(d.error); return; }
     if(d.paste_text){
-      const ta = $('wlPasteText');
-      ta.value = d.paste_text + (ta.value.trim() ? ('\\n\\n' + ta.value.trim()) : '\\n\\n(여기에 상품 상세설명을 덧붙이면 대본이 더 풍부해져요)');
+      const ta = $('shopPasteText');
+      ta.value = d.paste_text + '\\n\\n(여기에 상품 상세설명을 붙여넣으면 대본이 더 풍부해져요)';
     }
     if((d.images || []).length){
-      window._wlLocalPhotos = d.images;
-      $('wlPhotoCnt').textContent = '📷 상품 사진 1장 자동 저장됨 — [🖼 상품 사진 고르기]로 더 넣을 수 있어요';
+      window._shopPhotos = d.images;
+      $('shopPhotoCnt').textContent = '📷 상품 사진 1장 자동 저장됨 — 더 넣으면 장면이 다양해져요';
     }
-    if(d.link){ $('weblinkUrl').value = d.link; }   // 파트너스 추적 링크 → 출처로 저장
-    uiBanner('🛒 상품 정보를 채웠어요 — 상세설명을 덧붙인 뒤 [🤖 이 내용으로 대본 만들기]를 누르세요' +
-             (d.link ? ' (파트너스 링크도 준비됨 ✓)' : ''));
+    if(d.link){ $('shopLinkInput').value = d.link; }   // 파트너스 추적 링크
+    uiBanner('🛒 상품 정보를 채웠어요 — 상세설명을 덧붙인 뒤 [🤖 이 상품으로 대본 만들기]를 누르세요' +
+             (d.link && d.link.indexOf('coupang') >= 0 ? ' (파트너스 링크 자동 ✓)' : ''));
   } catch(e){ alert('상품 채우기 오류: ' + e); }
 }
+
+// ── 🟢 네이버 쇼핑커넥트 (v0.89) — 검색 API로 상품 정보 ──
+async function saveNaverKeys(ev){
+  ev.preventDefault();
+  const cid = (($('nvClientId')||{}).value || '').trim();
+  const cs = (($('nvClientSecret')||{}).value || '').trim();
+  if(!cid || !cs){ alert('Client ID와 Client Secret을 모두 붙여넣어 주세요'); return; }
+  const d = await (await fetch('/api/naver_keys', {method:'POST',
+    body: JSON.stringify({client_id: cid, client_secret: cs})})).json();
+  if(d.error){ alert(d.error); return; }
+  window._hasNaverKey = !!d.has;
+  $('nvClientId').value = ''; $('nvClientSecret').value = '';
+  $('nvKeyState').textContent = '✅ 키 저장됨 — 상품을 검색해 보세요';
+  alert('저장했어요 — 이제 네이버 쇼핑 상품을 검색할 수 있어요');
+}
+
+async function naverSearch(ev){
+  ev.preventDefault();
+  const kw = (($('nvKeyword')||{}).value || '').trim();
+  if(!kw){ alert('검색어를 입력해 주세요 (예: 무선 선풍기)'); return; }
+  if(!window._hasNaverKey){
+    const kb = $('nvKeyBox'); if(kb) kb.open = true;
+    alert('먼저 네이버 검색 API 키를 저장해 주세요 — developers.naver.com에서 앱 등록(무료) 후 발급'); return;
+  }
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '검색 중…';
+  try{
+    const d = await (await fetch('/api/naver_search', {method:'POST',
+      body: JSON.stringify({keyword: kw})})).json();
+    if(d.error){ alert(d.error); return; }
+    const grid = $('nvResults'); grid.innerHTML = '';
+    (d.items || []).forEach(function(it){
+      const card = document.createElement('div');
+      card.style.cssText = 'border:1px solid #2c3347;border-radius:10px;padding:8px;cursor:pointer;background:#14161c';
+      card.innerHTML = (it.image ? '<img src="' + escHtml(it.image) + '" style="width:100%;height:96px;object-fit:contain;border-radius:6px;background:#fff">' : '') +
+        '<div style="font-size:12px;margin-top:6px;line-height:1.3;max-height:48px;overflow:hidden">' + escHtml(it.name) + '</div>' +
+        '<div class="hint" style="margin-top:2px">' + (it.price ? (Number(it.price).toLocaleString() + '원~') : '') +
+        (it.mall ? (' · ' + escHtml(it.mall)) : '') + '</div>';
+      card.title = '이 상품으로 채우기';
+      card.onclick = function(){ coupangPick(it, card); };   // 채우기 로직 공용 (딥링크는 쿠팡만)
+      grid.appendChild(card);
+    });
+    if(!(d.items || []).length) alert('검색 결과가 없어요 — 다른 검색어로 시도해 보세요');
+  } catch(e){ alert('상품 검색 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+// ── 🛒 쇼핑 카드 공통 (v0.89) — 사진·대본·시작 ──
+async function pickShopPhotos(ev){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true;
+  try{
+    const data = await (await fetch('/api/pick_file', {method:'POST',
+      body: JSON.stringify({kind: 'images'})})).json();
+    if(data.error){ alert(data.error + PASTE_TIP); return; }
+    const paths = (data.path || '').split(';').filter(Boolean);
+    if(paths.length){
+      window._shopPhotos = (window._shopPhotos || []).concat(paths);
+      $('shopPhotoCnt').textContent = '📷 사진 ' + window._shopPhotos.length + '장 준비됨';
+    }
+  } catch(e){ alert('선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
+  finally { btn.disabled = false; }
+}
+
+async function makeShopScript(ev){
+  ev.preventDefault();
+  const text = (($('shopPasteText')||{}).value || '').trim();
+  if(text.length < 20){ alert('상품 정보가 너무 짧아요 — 위에서 상품을 고르거나 상세설명을 붙여넣어 주세요'); return; }
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent;
+  btn.textContent = 'AI가 대본으로 정리하는 중…';
+  try{
+    const key = ensureGeminiKey();
+    const d = await (await fetch('/api/fetch_url', {method:'POST',
+      body: JSON.stringify({pasted_text: text, url: (($('shopLinkInput')||{}).value||'').trim(),
+                            target_sec: 45, gemini_key: key, save_key: true})})).json();
+    if(d.error){ alert(d.error); return; }
+    while(true){
+      await new Promise(s => setTimeout(s, 1500));
+      const st = await (await fetch('/api/state')).json();
+      const t = st.weblink_fetch || {};
+      if(t.running){ btn.textContent = (t.msg || '정리 중…').slice(0, 22); continue; }
+      if(t.error){ alert(t.error); break; }
+      const r = t.result || {};
+      $('shopScript').value = (r.script_lines || []).join('\\n');
+      $('shopHook').value = r.hook || r.title || '';
+      $('shopPreview').classList.remove('hidden');
+      if(!(window._shopPhotos || []).length)
+        uiBanner('🖼 대본 준비 완료 — [🖼 상품 사진 고르기]로 사진을 넣으면 [🎬 영상 만들기]가 가능해요');
+      break;
+    }
+  } catch(e){ alert('대본 만들기 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+function initShopCard(){
+  const nv = $('narrVoiceSel'), sv = $('shopVoiceSel');
+  if(nv && sv && nv.options.length && sv.options.length !== nv.options.length){
+    const cur = sv.value;
+    sv.innerHTML = nv.innerHTML;
+    sv.value = [...sv.options].some(o => o.value === cur) && cur ? cur : nv.value;
+  }
+  const bg = $('bgmEditSel'), sb = $('shopBgmSel');
+  if(bg && sb && bg.options.length && sb.options.length !== bg.options.length){
+    const cur = sb.value;
+    sb.innerHTML = bg.innerHTML;
+    sb.value = [...sb.options].some(o => o.value === cur) ? cur : '';
+  }
+  cloneSelect('editSubStyleSel', 'shopSubStyleSel');
+  cloneSelect('hookStyleSel', 'shopHookStyleSel');
+  cloneSelect('editSubFontSel', 'shopSubFontSel');
+  cloneSelect('editToneSel', 'shopToneSel');
+}
+
+async function startShop(){
+  const imgs = window._shopPhotos || [];
+  if(!imgs.length){ alert('상품 사진을 1장 이상 넣어주세요 — [🖼 상품 사진 고르기]'); return; }
+  const NL = String.fromCharCode(10);
+  const lines = ($('shopScript').value || '').split(NL).map(s => s.trim()).filter(Boolean);
+  if(!lines.length){ alert('대본이 비어 있어요 — [🤖 이 상품으로 대본 만들기]를 먼저 눌러주세요'); return; }
+  let key = '';
+  if(!window._hasGeminiKey) key = ensureGeminiKey();
+  const body = {
+    photo_path: imgs.join(';'),
+    photo_sec: Math.max(10, Math.min(180, Math.round(lines.length * 4))),
+    layout: 'shorts', quality: 'standard',
+    script: lines.join(NL), script_tts: true,
+    hook: ($('shopHook')||{}).value || '',
+    narr_voice: ($('shopVoiceSel')||{}).value || '',
+    auto_subtitle: false, cut_silence: false,
+    bgm: ($('shopBgmSel')||{}).value || '',
+    sub_style: ($('shopSubStyleSel')||{}).value || '',
+    hook_style: ($('shopHookStyleSel')||{}).value || '',
+    sub_font: ($('shopSubFontSel')||{}).value || '',
+    tone: ($('shopToneSel')||{}).value || '',
+    sub_anim: (window._themeAnim||{}).shop || '',
+    sub_pos: (window._themePos||{}).shop || '',
+    gemini_key: key, save_key: true,
+  };
+  const res = await fetch('/api/edit', {method:'POST', body: JSON.stringify(body)});
+  const data = await res.json();
+  if(data.error){ alert(data.error); return; }
+  currentJob = data.job_id;
+  window._jobMode = 'edit';
+  window._subLoaded = false; window._kitLoaded = false;
+  $('kitBox').classList.add('hidden'); $('kitBody').classList.add('hidden');
+  $('shopCard').classList.add('hidden');
+  $('statusCard').classList.remove('hidden');
+  $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  $('subEditBox').classList.add('hidden');
+  $('rawErr').classList.add('hidden'); $('noteText').textContent = '';
+  poll();
+  timer = setInterval(poll, 900);
+}
+async function startShopSafe(){ try{ await startShop(); }catch(e){ reportUiError('영상 만들기', e); } }
 
 async function pickWlPhotos(ev){
   ev.preventDefault();
@@ -7855,9 +8108,14 @@ async function loadWeblink(ev){
   ev.preventDefault();
   const url = (($('weblinkUrl')||{}).value||'').trim();
   if(!url){ alert('블로그 글 주소를 먼저 붙여넣어 주세요'); return; }
-  if(SHOP_HOST_RE.test(url)){          // 🛍 상품 페이지 — 크롤링 대신 붙여넣기 유도 (v0.86)
-    const pb = $('wlPasteBox'); if(pb) pb.open = true;
-    uiBanner('🛍 쇼핑몰 상품 페이지는 프로그램 접근을 막고 있어요 — 바로 아래 [🛍 상품 정보 직접 붙여넣기]에 상세설명을 복사해 넣고, 사진을 골라서 만들어 주세요. 링크는 출처로 함께 저장돼요.');
+  if(SHOP_HOST_RE.test(url)){          // 🛍 상품 페이지 → 전용 쇼핑 카드로 안내 (v0.89)
+    if(confirm('쇼핑몰 상품 링크네요! 상품 영상은 [🛒 쇼핑 상품 영상] 카드가 더 편해요 — 상품 검색으로 이름·가격·사진·링크가 자동으로 채워집니다.\\n지금 이동할까요?')){
+      openMode('shop');
+      if($('shopLinkInput') && !$('shopLinkInput').value) $('shopLinkInput').value = url;
+    } else {
+      const pb = $('wlPasteBox'); if(pb) pb.open = true;
+      uiBanner('🛍 상품 페이지는 자동 수집이 안 돼요 — 아래 붙여넣기에 상세설명을 복사해 넣고 사진을 골라 만들어 주세요.');
+    }
     return;
   }
   const btn = $('weblinkBtn'); btn.disabled = true; const old = btn.textContent;
@@ -8499,7 +8757,12 @@ async function poll(){
   window._hasCoupangKey = !!(state.keys || {}).coupang;   // 🛒 파트너스 (v0.88)
   if(window._hasCoupangKey && $('cpKeyState') && !window._cpStateSet){
     window._cpStateSet = true;
-    $('cpKeyState').textContent = '✅ 키 저장됨 — 상품을 검색해 보세요';
+    $('cpKeyState').textContent = '— ✅ 키 저장됨, 상품을 검색해 보세요';
+  }
+  window._hasNaverKey = !!(state.keys || {}).naver;       // 🟢 쇼핑커넥트 (v0.89)
+  if(window._hasNaverKey && $('nvKeyState') && !window._nvStateSet){
+    window._nvStateSet = true;
+    $('nvKeyState').textContent = '— ✅ 키 저장됨, 상품을 검색해 보세요';
   }
 
   window._isWin = (state.platform || '').startsWith('win');
@@ -8759,7 +9022,7 @@ function renderJobsBar(jobs){
 function watchJob(id){
   currentJob = id;
   window._subLoaded = false; window._kitLoaded = false;
-  ['formCard', 'editCard', 'weblinkCard', 'sectionCard'].forEach(c => {
+  ['formCard', 'editCard', 'weblinkCard', 'sectionCard', 'shopCard'].forEach(c => {
     const el = $(c); if(el) el.classList.add('hidden');
   });
   $('statusCard').classList.remove('hidden');

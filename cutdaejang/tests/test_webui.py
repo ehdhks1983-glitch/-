@@ -80,7 +80,7 @@ def test_beginner_ui_structure(server):
     """v0.36 초보자 UI: 홈 모드 카드 + 단계형 폼 + 접는 옵션 그룹 (옛 토글 잔재 없음)."""
     html = _get(server, "/").read().decode("utf-8")
     assert 'id="homeCard"' in html
-    assert html.count('class="modecard"') == 5  # AI/편집/사진/🔗블로그(v0.79)/🎞구간(v0.80)
+    assert html.count('class="modecard"') == 6  # AI/편집/사진/🔗블로그/🎞구간/🛒쇼핑(v0.89)
     # 완전 자동은 이제 라디오(editFinish) + 길이 프리셋으로
     assert 'name="editFinish"' in html and 'id="autoTargetPreset"' in html
     # 꾸미기 그룹: 훅·내레이션·소리·워터마크·대본·세부설정
