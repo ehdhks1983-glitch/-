@@ -510,9 +510,13 @@ def xfade_clamp(crossfade_s: float, durs_s: List[float]) -> float:
     return fade if fade >= 0.05 else 0.0
 
 
+# 🎬 크로스페이드 전환 종류 (v0.85) — xfade 기본 세트(ffmpeg 4.3+)만 사용해 호환 보장
+XFADE_POOL = ["dissolve", "slideleft", "circleopen", "wipeleft", "smoothleft", "radial"]
+
+
 def concat_videos(clips: List[str], out_path: str, size=None,
                   fps: int = 30, still_s: float = 2.5,
-                  crossfade_s: float = 0.0) -> str:
+                  crossfade_s: float = 0.0, transition: str = "fade") -> str:
     """여러 클립(영상/사진 혼합)을 순서대로 이어붙인다 (v0.80 구간 조립 공용).
 
     - 해상도가 제각각이어도 size(기본: 첫 영상 클립 크기)에 맞춰 축소+패딩.
@@ -558,12 +562,15 @@ def concat_videos(clips: List[str], out_path: str, size=None,
         args += ["-f", "lavfi", "-t", f"{_dur:.3f}", "-i", "anullsrc=r=44100:cl=stereo"]
     fade = xfade_clamp(crossfade_s, durs)
     if fade > 0:
-        # 🎬 크로스페이드 체인 — 입력을 순서대로 소비하므로 긴 영상도 메모리 안전
+        # 🎬 크로스페이드 체인 — 입력을 순서대로 소비하므로 긴 영상도 메모리 안전.
+        # transition="varied" (v0.85): 경계마다 다른 전환을 돌아가며 써 다양하게.
         chain, vcur, acur, t = [], "[v0]", "[a0]", durs[0]
         for i in range(1, len(clips)):
             off = max(0.0, t - fade)
+            tname = (XFADE_POOL[(i - 1) % len(XFADE_POOL)]
+                     if transition == "varied" else (transition or "fade"))
             vn, an = f"[vx{i}]", f"[ax{i}]"
-            chain.append(f"{vcur}[v{i}]xfade=transition=fade:"
+            chain.append(f"{vcur}[v{i}]xfade=transition={tname}:"
                          f"duration={fade:.3f}:offset={off:.3f}{vn}")
             chain.append(f"{acur}[a{i}]acrossfade=d={fade:.3f}{an}")
             vcur, acur = vn, an

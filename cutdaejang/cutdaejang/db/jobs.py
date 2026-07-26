@@ -40,6 +40,9 @@ class JobStore:
         if "tts_provider" not in cols:  # v0.3: 폴백 추적용 (지시서 1-4)
             self._conn.execute("ALTER TABLE jobs ADD COLUMN tts_provider TEXT")
             self._conn.commit()
+        if "params_json" not in cols:  # v0.85: 구간 대본 재편집용 입력값 보존
+            self._conn.execute("ALTER TABLE jobs ADD COLUMN params_json TEXT")
+            self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -58,12 +61,14 @@ class JobStore:
         out_draft: Optional[str] = None,
         error: Optional[str] = None,
         tts_provider: Optional[str] = None,
+        params_json: Optional[str] = None,
     ) -> None:
         self._conn.execute(
             """
             INSERT INTO jobs (id, created_at, title, mode, outputs, status,
-                              duration_us, spec_json, out_mp4, out_draft, error, tts_provider)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              duration_us, spec_json, out_mp4, out_draft, error,
+                              tts_provider, params_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title, mode=excluded.mode, outputs=excluded.outputs,
                 status=excluded.status, duration_us=excluded.duration_us,
@@ -71,13 +76,14 @@ class JobStore:
                 out_mp4=COALESCE(excluded.out_mp4, jobs.out_mp4),
                 out_draft=COALESCE(excluded.out_draft, jobs.out_draft),
                 error=excluded.error,
-                tts_provider=COALESCE(excluded.tts_provider, jobs.tts_provider)
+                tts_provider=COALESCE(excluded.tts_provider, jobs.tts_provider),
+                params_json=COALESCE(excluded.params_json, jobs.params_json)
             """,
             (
                 job_id,
                 _dt.datetime.now().isoformat(timespec="seconds"),
                 title, mode, outputs, status, duration_us,
-                spec_json, out_mp4, out_draft, error, tts_provider,
+                spec_json, out_mp4, out_draft, error, tts_provider, params_json,
             ),
         )
         self._conn.commit()

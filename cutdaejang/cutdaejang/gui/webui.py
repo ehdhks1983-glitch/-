@@ -434,6 +434,34 @@ def _record_history(workdir: str, result, opts: JobOptions) -> None:
         pass  # 히스토리 기록 실패는 UI 동작에 영향 없음
 
 
+_PARAM_SECRET_KEYS = ("gemini_key", "openai_key", "eleven_key", "elevenlabs_key", "save_key")
+
+
+def _record_simple_history(workdir: str, job_id: str, *, title: str, mode: str,
+                           status: str, mp4: Optional[str],
+                           params: Optional[dict] = None,
+                           duration_us: int = 0) -> None:
+    """편집·사진·블로그·구간 대본 작업도 히스토리에 남긴다 (v0.85).
+
+    지금까지는 AI 생성만 history.db에 기록돼, 프로그램을 껐다 켜면 최근 작업이
+    히스토리에서 사라졌다 (사용자 리포트). params는 재편집용 — API 키는 뺀다.
+    """
+    try:
+        from ..db.jobs import JobStore  # noqa: PLC0415
+
+        safe = None
+        if params is not None:
+            safe = {k: v for k, v in params.items() if k not in _PARAM_SECRET_KEYS}
+        store = JobStore(Path(workdir) / "history.db")
+        store.upsert(job_id, title=title, mode=mode, outputs="mp4", status=status,
+                     duration_us=duration_us, out_mp4=mp4,
+                     params_json=(json.dumps(safe, ensure_ascii=False)
+                                  if safe is not None else None))
+        store.close()
+    except Exception:
+        pass  # 히스토리 기록 실패는 UI 동작에 영향 없음
+
+
 def _ai_image_setup(params: dict, settings: dict):
     """AI 배경 제공자 결정 + (미사용이면) 사유 — 완료 화면에 그대로 보여줌 (v0.40).
 
@@ -1300,6 +1328,12 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             mp4=out if Path(out).exists() else None,
             errors=result.errors,
         )
+        _record_simple_history(   # 📜 편집·사진·블로그 영상도 히스토리에 (v0.85)
+            workdir, job_id,
+            title=(_get_job(job_id) or {}).get("title") or "✂️ 내 영상 편집",
+            mode="edit",
+            status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
+            mp4=out if Path(out).exists() else None)
     except Exception as e:
         import traceback  # noqa: PLC0415
 
@@ -1437,6 +1471,12 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             note=f"쇼츠 {len(outs)}개 완성{note_extra}" if outs else "",
             mp4=outs[0] if outs else None, mp4s=outs, errors=errors,
         )
+        _record_simple_history(   # 📜 분할 쇼츠도 히스토리에 (v0.85)
+            workdir, job_id,
+            title=(_get_job(job_id) or {}).get("title") or "✂️ 쇼츠 나누기",
+            mode="edit",
+            status="ok" if outs and not errors else "partial" if outs else "failed",
+            mp4=outs[0] if outs else None)
     except Exception as e:
         import traceback  # noqa: PLC0415
 
@@ -1745,11 +1785,34 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         if str(params.get("full_video") or "").strip():
             full_video = video_editor.resolve_input_video(str(params["full_video"]).strip())
             full_us = ff.probe_duration_us(full_video)
+        # ♻ 부분 수정 (v0.85) — 이전 작업(reuse_job)과 지문이 같은 구간은 다시 만들지
+        # 않고 결과를 복사. "다시 편집"에서 한 구간만 고치면 그 구간만 재제작된다.
+        import hashlib as _hl  # noqa: PLC0415
+        import shutil  # noqa: PLC0415
+        common_fp = f"{style!r}|{layout}|{quality}|{voice}|{list(chain)}|{piece_us}"
+
+        def _sec_fp(sec_d: dict, rng: str) -> str:
+            key = json.dumps({"n": sec_d.get("narration"),
+                              "v": rng or str(sec_d.get("video_path") or ""),
+                              "sp": str(sec_d.get("speed") or "")},
+                             ensure_ascii=False, sort_keys=True)
+            return _hl.sha1((common_fp + key).encode("utf-8")).hexdigest()
+
+        prev_meta, prev_dir = {}, None
+        if str(params.get("reuse_job") or "").strip():
+            prev_dir = Path(workdir) / str(params["reuse_job"]).strip()
+            try:
+                prev_meta = json.loads(
+                    (prev_dir / "sections_meta.json").read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001 — 메타 없으면 전부 새로 제작
+                prev_meta = {}
+        fps_meta, reused = {}, 0
         n = len(secs)
         outs, out_titles, errors, notes = [], [], [], []
         for i, sec in enumerate(secs, 1):
             base = (i - 1) / n
             try:
+                rng = ""
                 if full_video:
                     try:
                         s_us, e_us = int(sec.get("start_us")), int(sec.get("end_us"))
@@ -1758,6 +1821,21 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                                          "[🪄 자동으로 나누기]를 눌러주세요") from ve
                     s_us = max(0, min(s_us, full_us - 500_000))
                     e_us = max(s_us + 500_000, min(e_us, full_us))
+                    rng = f"{full_video}:{s_us}-{e_us}"
+                fp = _sec_fp(sec, rng)
+                prev_file = (prev_dir / f"sec_{i}.mp4") if prev_dir else None
+                if prev_meta.get(str(i)) == fp and prev_file and prev_file.is_file():
+                    job_dir.mkdir(parents=True, exist_ok=True)
+                    dst = job_dir / f"sec_{i}.mp4"
+                    shutil.copy2(prev_file, dst)
+                    outs.append(str(dst))
+                    out_titles.append((str(sec.get("title") or "").strip() or f"구간 {i}"))
+                    fps_meta[str(i)] = fp
+                    reused += 1
+                    _set_job(job_id, status="running", stage="render", frac=base,
+                             note=f"🎞 구간 {i}/{n} — 바뀐 게 없어 이전 결과 재사용 ♻")
+                    continue
+                if full_video:
                     _set_job(job_id, status="running", stage="cut", frac=base,
                              note=f"🎞 구간 {i}/{n} — 풀영상 {s_us / 1e6:.0f}~{e_us / 1e6:.0f}초 잘라내는 중…")
                     video = video_editor.extract_segment(
@@ -1827,22 +1905,30 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                     raise RuntimeError("; ".join(r.errors) or "렌더 실패")
                 outs.append(str(job_dir / f"sec_{i}.mp4"))
                 out_titles.append((str(sec.get("title") or "").strip() or f"구간 {i}"))
+                fps_meta[str(i)] = fp     # ♻ 다음 "다시 편집" 때 재사용 판별용 (v0.85)
             except Exception as se:  # noqa: BLE001 — 한 구간 실패해도 나머지는 계속
                 logging.getLogger("cutdaejang").error("구간 %d 실패: %s", i, se)
                 errors.append(f"구간 {i}: {str(se)[:200]}")
         if not outs:
             _set_job(job_id, status="failed", errors=errors or ["완성된 구간이 없습니다"])
             return
+        try:  # ♻ 재사용 지문 저장 — 다음 "다시 편집"이 바뀐 구간만 새로 만들게
+            (job_dir / "sections_meta.json").write_text(
+                json.dumps(fps_meta, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
         _set_job(job_id, stage="render", frac=0.97, note="🎞 구간들을 이어붙이는 중…")
         cw, ch = (1080, 1920) if layout == "shorts" else (1920, 1080)
-        sec_xfade = 0.45          # 🎬 구간 사이 크로스페이드 (v0.83) — "뚝" 끊김 제거
+        # 🎬 구간 전환 (v0.83 크로스페이드 → v0.85 종류 선택: 디졸브/다양하게/밀기/컷…)
+        transition = str(params.get("transition") or "fade").strip() or "fade"
+        sec_xfade = 0.0 if transition == "none" else 0.45
         durs = [ff.probe_duration_us(p) / 1e6 for p in outs]
         fade = video_editor.xfade_clamp(sec_xfade, durs)
         final = outs[0]
         if len(outs) > 1:
             final = video_editor.concat_videos(
                 outs, str(job_dir / "sections_final.mp4"), size=(cw, ch),
-                crossfade_s=sec_xfade)
+                crossfade_s=sec_xfade, transition=transition)
         if (params.get("bgm") or "").strip():        # 🎵 BGM은 최종 합본에 1회 (덕킹)
             b = resolve_bgm(params["bgm"], settings)
             if b and b.path:
@@ -1867,10 +1953,17 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             cum += durs[k] - (fade if k < len(outs) - 1 else 0.0)
         total_s = ff.probe_duration_us(final) / 1e6
         msg = f"🎞 구간 {len(outs)}개 · 총 {int(total_s // 60)}분 {int(total_s % 60)}초"
+        if reused:
+            msg += f" · ♻ 안 바뀐 {reused}구간은 이전 결과 재사용"
         _set_job(job_id, status=("ok" if not errors else "partial"), stage="done",
                  frac=1.0, mp4=final, mp4s=[final] + (outs if len(outs) > 1 else []),
                  chapters=("\n".join(chap_lines) if len(chap_lines) > 1 else ""),
                  note="", tts_warn=" · ".join([msg] + notes + errors))
+        _record_simple_history(   # 📜 재시작해도 히스토리에 남게 (v0.85)
+            workdir, job_id,
+            title=(_get_job(job_id) or {}).get("title") or "🎞 구간 대본 영상",
+            mode="sections", status=("ok" if not errors else "partial"),
+            mp4=final, params=params, duration_us=int(total_s * 1e6))
     except Exception as e:
         import traceback  # noqa: PLC0415
 
@@ -1878,6 +1971,10 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             "구간 대본 영상 실패 %s\n%s", job_id, traceback.format_exc())
         _set_job(job_id, status="failed",
                  errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+        _record_simple_history(
+            workdir, job_id,
+            title=(_get_job(job_id) or {}).get("title") or "🎞 구간 대본 영상",
+            mode="sections", status="failed", mp4=None, params=params)
 
 
 def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
@@ -2827,6 +2924,35 @@ class _Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_run_sections, args=(job_id, params, workdir),
                              daemon=True).start()
             self._send_json({"job_id": job_id})
+        elif path == "/api/job_params":  # ✏ 다시 편집 — 저장된 입력값 회수 (v0.85)
+            from ..db.jobs import JobStore  # noqa: PLC0415
+            try:
+                store = JobStore(Path(workdir) / "history.db")
+                row = store.get(str(params.get("job_id") or ""))
+                store.close()
+            except Exception:  # noqa: BLE001
+                row = None
+            pj = (row or {}).get("params_json")
+            if not pj:
+                self._send_json({"error": "이 작업은 다시 편집할 입력값이 저장돼 있지 않아요 "
+                                 "(이 업데이트 이후에 만든 작업부터 가능해요)"}, 404)
+                return
+            try:
+                self._send_json({"ok": True, "mode": (row or {}).get("mode") or "",
+                                 "params": json.loads(pj)})
+            except json.JSONDecodeError:
+                self._send_json({"error": "저장된 입력값이 손상됐어요"}, 500)
+        elif path == "/api/sec_draft":  # 💾 구간 작성 임시 저장 (v0.85)
+            if params.get("clear"):
+                config.save_settings({"ui": {"sec_draft": None}})
+                self._send_json({"ok": True, "cleared": True})
+            else:
+                draft = params.get("draft")
+                if not isinstance(draft, dict):
+                    self._send_json({"error": "저장할 내용이 없어요"}, 400)
+                    return
+                config.save_settings({"ui": {"sec_draft": draft}})
+                self._send_json({"ok": True})
         elif path == "/api/reg_video":  # 🎬 풀영상 등록 → 미리보기 토큰 (v0.84)
             from ..core import video_editor  # noqa: PLC0415
             from ..utils import ffmpeg as ff  # noqa: PLC0415
@@ -3378,6 +3504,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "status": r["status"], "created_at": r["created_at"],
                     "has_mp4": bool(r["out_mp4"] and Path(r["out_mp4"]).exists()),
                     "has_spec": bool(r["spec_json"]),
+                    "has_params": bool(r.get("params_json")),  # ✏ 다시 편집 가능 (v0.85)
                     "tts_provider": r["tts_provider"] or "",
                 }
                 for r in store.list(limit=30)
@@ -3686,7 +3813,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.84.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.85.0)</small></h1>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
@@ -4641,6 +4768,17 @@ _HTML = """<!doctype html>
       </select>
       <span style="margin-left:6px">배경음악</span>
       <select id="secBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
+      <span style="margin-left:6px">구간 전환</span>
+      <select id="secXfadeSel" style="width:auto;padding:6px 8px" title="구간과 구간이 이어지는 방식">
+        <option value="">스르륵 (디졸브)</option>
+        <option value="varied">🎲 다양하게 (구간마다 다른 효과)</option>
+        <option value="slideleft">밀어내기</option>
+        <option value="wipeleft">닦아내기</option>
+        <option value="circleopen">원형 열기</option>
+        <option value="smoothleft">부드러운 밀기</option>
+        <option value="fadeblack">암전 (어두워졌다 밝게)</option>
+        <option value="none">컷 (전환 없음)</option>
+      </select>
     </div>
     <details class="opt" id="secDecoBox">
       <summary>🎨 꾸미기 <span class="hint">— 자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
@@ -4651,10 +4789,14 @@ _HTML = """<!doctype html>
         <span>화면 톤</span><select id="secToneSel" style="width:auto"></select>
       </div>
     </details>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button id="secGoBtn" style="flex:1" onclick="startSectionsSafe()">🎬 영상 만들기</button>
+    <div class="hint hidden" id="secDraftHint" style="margin-top:6px;color:#7fd18a">💾 지난 임시 저장을 불러왔어요 — 이어서 작성하시면 돼요. 새로 시작하려면 [🗑 임시 저장 지우기]</div>
+    <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+      <button id="secGoBtn" style="flex:1;min-width:180px" onclick="startSectionsSafe()">🎬 영상 만들기</button>
+      <button class="ghost" onclick="saveSecDraft(event)" title="지금 작성 중인 구간·내레이션·설정을 저장해 두고, 나중에 이 카드를 열면 이어서 작성할 수 있어요">💾 임시 저장</button>
+      <button class="ghost" onclick="clearSecDraft(event)" title="저장해 둔 임시 저장을 지워요">🗑</button>
     </div>
-    <div class="hint">구간이 많으면 시간이 걸려요 (구간당 보통 1~2분). 진행 상황에 구간 번호가 표시됩니다.</div>
+    <div class="hint">구간이 많으면 시간이 걸려요 (구간당 보통 1~2분). 진행 상황에 구간 번호가 표시됩니다.
+      완성 후 히스토리의 [✏ 다시 편집]으로 불러오면 <b>바뀐 구간만 다시 만들어</b> 빨라요.</div>
   </div>
 
   <div class="card hidden" id="statusCard">
@@ -4804,6 +4946,7 @@ _HTML = """<!doctype html>
           <b style="font-size:13px">⏱ 구간 타임라인</b>
           <span class="hint">— 유튜브 설명란에 그대로 붙여넣으면 영상에 챕터(구간 이동 바)가 생겨요</span>
           <button class="ghost" style="padding:2px 8px" onclick="copyChapters(event)">📋 복사</button>
+          <button class="ghost" style="padding:2px 8px" onclick="reEditSections(currentJob)" title="이 영상의 구간·내레이션을 폼으로 불러와 일부만 고쳐 다시 만들어요 — 바뀐 구간만 재제작돼 빨라요">✏ 다시 편집</button>
         </div>
         <pre id="chaptersText" style="margin:6px 0 0;white-space:pre-wrap;font-size:13px;color:#c8cede;font-family:inherit"></pre>
       </div>
@@ -7500,6 +7643,18 @@ function initSectionCard(){
   cloneSelect('editSubFontSel', 'secSubFontSel');
   cloneSelect('editToneSel', 'secToneSel');
   if($('secRows') && !$('secRows').children.length) addSectionRow();
+  // 💾 임시 저장 자동 복원 (v0.85) — 비어 있을 때만, 한 번만
+  const draft = ((window._settings || {}).ui || {}).sec_draft;
+  if(draft && !window._secDraftLoaded && $('secRows')){
+    const rs = $('secRows').children;
+    const empty = !rs.length ||
+      (rs.length === 1 && !(((rs[0].querySelector('.sec-narr')||{}).value || '').trim()));
+    if(empty){
+      fillSectionsForm(draft);
+      window._secDraftLoaded = true;
+      const h = $('secDraftHint'); if(h) h.classList.remove('hidden');
+    }
+  }
   applySecMode();
 }
 
@@ -7646,6 +7801,105 @@ async function loadFullVideo(){
   } catch(e){ alert('영상 불러오기 오류: ' + e); }
 }
 
+// 💾 구간 작성 임시 저장 (v0.85) — 피곤할 때 저장해 두고 다음에 이어서
+function collectSecDraft(){
+  return {
+    src_mode: pick('secSrcMode') || 'full',
+    full_video: (($('secFullPath')||{}).value || '').trim(),
+    layout: pick('secLayout') || 'wide',
+    narr_voice: (($('secVoiceSel')||{}).value || ''),
+    tempo: (($('secTempoSel')||{}).value || ''),
+    bgm: (($('secBgmSel')||{}).value || ''),
+    transition: (($('secXfadeSel')||{}).value || ''),
+    sub_style: (($('secSubStyleSel')||{}).value || ''),
+    hook_style: (($('secHookStyleSel')||{}).value || ''),
+    sub_font: (($('secSubFontSel')||{}).value || ''),
+    tone: (($('secToneSel')||{}).value || ''),
+    sections: [...(($('secRows')||{}).children || [])].map(d => ({
+      title: (d.querySelector('.sec-title')||{}).value || '',
+      narration: (d.querySelector('.sec-narr')||{}).value || '',
+      video_path: ((d.querySelector('.sec-video')||{}).value || '').trim(),
+      speed: (d.querySelector('.sec-speed')||{}).value || '',
+      start: ((d.querySelector('.sec-start')||{}).value || '').trim(),
+      end: ((d.querySelector('.sec-end')||{}).value || '').trim(),
+    })),
+  };
+}
+
+async function saveSecDraft(ev){
+  ev.preventDefault();
+  const btn = ev.target;
+  try{
+    const draft = collectSecDraft();
+    const d = await (await fetch('/api/sec_draft', {method:'POST',
+      body: JSON.stringify({draft})})).json();
+    if(d.error){ alert(d.error); return; }
+    if(window._settings){ (window._settings.ui = window._settings.ui || {}).sec_draft = draft; }
+    btn.textContent = '✓ 저장됨';
+    setTimeout(() => { btn.textContent = '💾 임시 저장'; }, 1500);
+  } catch(e){ alert('임시 저장 오류: ' + e); }
+}
+
+async function clearSecDraft(ev){
+  ev.preventDefault();
+  try{
+    await (await fetch('/api/sec_draft', {method:'POST', body: JSON.stringify({clear: true})})).json();
+    if(window._settings && window._settings.ui) window._settings.ui.sec_draft = null;
+    window._secDraftLoaded = false;
+    const h = $('secDraftHint'); if(h) h.classList.add('hidden');
+    ev.target.textContent = '✓'; setTimeout(() => { ev.target.textContent = '🗑'; }, 1200);
+  } catch(e){ alert('지우기 오류: ' + e); }
+}
+
+// ✏ 폼 채우기 — 임시 저장(문자 시간) / 다시 편집(㎲ 시간) 양쪽 지원 (v0.85)
+function fillSectionsForm(d){
+  d = d || {};
+  const rows = $('secRows'); if(!rows) return;
+  const mode = d.src_mode || (d.full_video ? 'full' : 'clips');
+  const mr = document.querySelector('input[name="secSrcMode"][value="' + mode + '"]');
+  if(mr) mr.checked = true;
+  if($('secFullPath')){
+    $('secFullPath').value = d.full_video || '';
+    if(d.full_video) loadFullVideo();
+  }
+  const lr = document.querySelector('input[name="secLayout"][value="' + (d.layout || 'wide') + '"]');
+  if(lr) lr.checked = true;
+  const setSel = function(id, v){
+    const el = $(id);
+    if(el && v != null && v !== '' && [...el.options].some(o => o.value === String(v))) el.value = String(v);
+  };
+  setSel('secVoiceSel', d.narr_voice); setSel('secTempoSel', d.tempo);
+  setSel('secBgmSel', d.bgm); setSel('secXfadeSel', d.transition);
+  setSel('secSubStyleSel', d.sub_style); setSel('secHookStyleSel', d.hook_style);
+  setSel('secSubFontSel', d.sub_font); setSel('secToneSel', d.tone);
+  rows.innerHTML = '';
+  (d.sections || []).forEach(function(s){
+    const div = addSectionRow(s.title || '', s.narration || '');
+    if(!div) return;
+    const set = function(cls, v){ const el = div.querySelector(cls); if(el && v != null && v !== '') el.value = v; };
+    set('.sec-video', s.video_path);
+    set('.sec-speed', s.speed);
+    set('.sec-start', s.start_us != null ? fmtMMSS(s.start_us / 1e6) : (s.start || ''));
+    set('.sec-end', s.end_us != null ? fmtMMSS(s.end_us / 1e6) : (s.end || ''));
+  });
+  if(!(d.sections || []).length) addSectionRow();
+  applySecMode(); updateSectionTimes();
+}
+
+// ✏ 완성한 구간 영상을 폼으로 불러와 일부만 고쳐 다시 만들기 (v0.85)
+async function reEditSections(id){
+  if(!id){ alert('불러올 작업이 없어요'); return; }
+  try{
+    const d = await (await fetch('/api/job_params', {method:'POST',
+      body: JSON.stringify({job_id: id})})).json();
+    if(d.error){ alert(d.error); return; }
+    showHome(); openMode('sections');
+    fillSectionsForm(d.params || {});
+    window._secReuseJob = id;
+    uiBanner('✏ 이전 작업을 불러왔어요 — 고칠 구간만 수정하고 [🎬 영상 만들기]를 누르세요. 바뀐 구간만 다시 만들어 훨씬 빨라요 ♻');
+  } catch(e){ alert('다시 편집 불러오기 오류: ' + e); }
+}
+
 // 🪄 내레이션 분량 비율 + 장면 전환점 스냅으로 구간 시간 자동 채우기 (v0.84)
 async function suggestSecRanges(ev, silent){
   if(ev) ev.preventDefault();
@@ -7776,6 +8030,8 @@ async function startSections(){
   const body = {
     sections,
     full_video: fullPath,                    // 🎥 풀영상 하나로 (v0.84 — 빈 값이면 클립 모드)
+    transition: ($('secXfadeSel')||{}).value || '',   // 🎬 구간 전환 종류 (v0.85)
+    reuse_job: window._secReuseJob || '',             // ♻ 바뀐 구간만 재제작 (v0.85)
     layout: pick('secLayout') || 'wide',
     quality: 'standard',
     narr_voice: ($('secVoiceSel')||{}).value || '',
@@ -7791,6 +8047,7 @@ async function startSections(){
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
   currentJob = data.job_id;
+  window._secReuseJob = data.job_id;   // ♻ 다음 "다시 편집"은 방금 작업 기준으로 이어짐
   window._jobMode = 'edit';
   window._subLoaded = false;
   window._kitLoaded = false;
@@ -8100,6 +8357,8 @@ function renderHistory(rows){
       r.has_mp4 ? `<button class="ghost" onclick="playHist('${r.id}')">▶ 재생</button>` : '',
       r.has_mp4 ? `<button class="ghost" onclick="kitHist('${r.id}')" title="유튜브 업로드 문구(제목·태그·설명) 만들기">📦 업로드 키트</button>` : '',
       r.has_spec ? `<button class="ghost" onclick="regen('${r.id}')" title="저장된 설계로 mp4 재렌더">♻ 재생성</button>` : '',
+      (r.has_params && r.mode === 'sections')
+        ? `<button class="ghost" onclick="reEditSections('${r.id}')" title="구간·내레이션을 폼으로 불러와 일부만 고쳐 다시 만들기 — 바뀐 구간만 재제작">✏ 다시 편집</button>` : '',
     ].join(' ');
     tr.innerHTML = `<td>${escHtml((r.created_at||'').replace('T',' ').slice(5,16))}</td>
       <td>${escHtml(r.title||r.id)}</td><td>${escHtml(PROV_KO[r.tts_provider]||'-')}</td>
