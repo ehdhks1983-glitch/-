@@ -30,8 +30,15 @@ CREATE TABLE IF NOT EXISTS jobs (
 class JobStore:
     def __init__(self, db_path):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path))
+        # ⏱ timeout + WAL (v0.98) — 동시 작업 2개가 같이 끝나면 쓰기가 잠금 충돌로
+        # 조용히 실패해 히스토리에 안 남던 문제 (사용자 리포트 "완료됐는데 안 보여")
+        self._conn = sqlite3.connect(str(db_path), timeout=15)
         self._conn.row_factory = sqlite3.Row
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=15000")
+        except sqlite3.Error:
+            pass                              # 오래된 sqlite여도 기본 잠금으로 동작
         self._conn.executescript(_SCHEMA)
         self._migrate()
 

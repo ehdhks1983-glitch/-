@@ -1411,6 +1411,12 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     _set_job(job_id, tts_warn=f"{prev} · {w4}" if prev else w4)
         if Path(out).exists():  # 🎬 인트로/아웃트로 (설정에 있으면, v0.43)
             _attach_branding(job_id, out, Path(workdir) / job_id)
+        _record_simple_history(   # 📜 완료 표시보다 먼저 기록 (v0.98 레이스 제거)
+            workdir, job_id,
+            title=(_get_job(job_id) or {}).get("title") or "✂️ 내 영상 편집",
+            mode="edit",
+            status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
+            mp4=out if Path(out).exists() else None)
         _set_job(
             job_id,
             status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
@@ -1420,12 +1426,6 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             mp4=out if Path(out).exists() else None,
             errors=result.errors,
         )
-        _record_simple_history(   # 📜 편집·사진·블로그 영상도 히스토리에 (v0.85)
-            workdir, job_id,
-            title=(_get_job(job_id) or {}).get("title") or "✂️ 내 영상 편집",
-            mode="edit",
-            status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
-            mp4=out if Path(out).exists() else None)
     except Exception as e:
         import traceback  # noqa: PLC0415
 
@@ -1560,6 +1560,12 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 errors += r.errors
             except Exception as ce:  # 한 클립 실패해도 나머지는 계속
                 errors.append(f"쇼츠 {gi} 실패: {ce}")
+        _record_simple_history(   # 📜 완료 표시보다 먼저 기록 (v0.98 레이스 제거)
+            workdir, job_id,
+            title=(_get_job(job_id) or {}).get("title") or "✂️ 쇼츠 나누기",
+            mode="edit",
+            status="ok" if outs and not errors else "partial" if outs else "failed",
+            mp4=outs[0] if outs else None)
         _set_job(
             job_id,
             status="ok" if outs and not errors else "partial" if outs else "failed",
@@ -1567,12 +1573,6 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             note=f"쇼츠 {len(outs)}개 완성{note_extra}" if outs else "",
             mp4=outs[0] if outs else None, mp4s=outs, errors=errors,
         )
-        _record_simple_history(   # 📜 분할 쇼츠도 히스토리에 (v0.85)
-            workdir, job_id,
-            title=(_get_job(job_id) or {}).get("title") or "✂️ 쇼츠 나누기",
-            mode="edit",
-            status="ok" if outs and not errors else "partial" if outs else "failed",
-            mp4=outs[0] if outs else None)
     except Exception as e:
         import traceback  # noqa: PLC0415
 
@@ -1932,6 +1932,24 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         # 않고 결과를 복사. "다시 편집"에서 한 구간만 고치면 그 구간만 재제작된다.
         import hashlib as _hl  # noqa: PLC0415
         import shutil  # noqa: PLC0415
+        # 🪝 훅 제목 (v0.98) — 비우면 AI가 전체 대본을 보고 자동으로, '없음'이면 훅 없이
+        hook_txt = str(params.get("hook") or "").strip()
+        auto_hook = ""
+        if hook_txt in ("없음", "-", "x", "X"):
+            hook_txt = ""
+        elif not hook_txt and os.environ.get("GEMINI_API_KEY"):
+            try:
+                from ..core import script_generator as sg  # noqa: PLC0415
+
+                _set_job(job_id, note="🪝 훅 제목을 AI가 대본으로 짓는 중…")
+                ctx = " ".join(str(s.get("narration") or "") for s in secs)[:900]
+                cands = sg.suggest_hooks(ctx)
+                hook_txt = str(cands[0] if cands else "").strip()[:40]
+                auto_hook = hook_txt
+            except Exception:  # noqa: BLE001 — 추천 실패해도 훅 없이 진행
+                hook_txt = ""
+        params = dict(params)
+        params["hook"] = hook_txt          # 렌더·재사용 지문·재편집 모두 확정값 사용
         common_fp = (f"{style!r}|{layout}|{quality}|{voice}|{list(chain)}|{piece_us}"
                      f"|{params.get('hook') or ''}")   # 🪝 훅 바뀌면 재사용 안 함 (v0.96)
 
@@ -1953,6 +1971,8 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         fps_meta, reused = {}, 0
         n = len(secs)
         outs, out_titles, errors, notes = [], [], [], []
+        if auto_hook:
+            notes.append(f"🪝 훅 제목을 AI가 지었어요: “{auto_hook}” — 다음엔 직접 넣거나 '없음'으로 끌 수 있어요")
         # 🎙 목소리는 전체 대본을 한 번에 (v0.95) — 구간마다 따로 합성하면 경계에서
         # 톤이 리셋돼 끊겨 들린다(사용자 리포트 "전체 대본 바탕으로 만들어야").
         # 문장별 클립은 그대로 받아 자막 싱크를 유지하면서, 이어읽기 문맥
@@ -2150,15 +2170,16 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         msg = f"🎞 구간 {len(outs)}개 · 총 {int(total_s // 60)}분 {int(total_s % 60)}초"
         if reused:
             msg += f" · ♻ 안 바뀐 {reused}구간은 이전 결과 재사용"
-        _set_job(job_id, status=("ok" if not errors else "partial"), stage="done",
-                 frac=1.0, mp4=final, mp4s=[final] + (outs if len(outs) > 1 else []),
-                 chapters=("\n".join(chap_lines) if len(chap_lines) > 1 else ""),
-                 note="", tts_warn=" · ".join([msg] + notes + errors))
-        _record_simple_history(   # 📜 재시작해도 히스토리에 남게 (v0.85)
+        _record_simple_history(   # 📜 완료 표시보다 먼저 기록 (v0.98 — 완료 직후
+            # 히스토리를 읽으면 아직 안 보이던 찰나의 레이스 제거)
             workdir, job_id,
             title=(_get_job(job_id) or {}).get("title") or "🎞 구간 대본 영상",
             mode="sections", status=("ok" if not errors else "partial"),
             mp4=final, params=params, duration_us=int(total_s * 1e6))
+        _set_job(job_id, status=("ok" if not errors else "partial"), stage="done",
+                 frac=1.0, mp4=final, mp4s=[final] + (outs if len(outs) > 1 else []),
+                 chapters=("\n".join(chap_lines) if len(chap_lines) > 1 else ""),
+                 note="", tts_warn=" · ".join([msg] + notes + errors))
     except Exception as e:
         import traceback  # noqa: PLC0415
 
@@ -3838,7 +3859,10 @@ class _Handler(BaseHTTPRequestHandler):
             from ..db.jobs import JobStore  # noqa: PLC0415
 
             store = JobStore(Path(self.server.workdir) / "history.db")  # type: ignore[attr-defined]
-            active_ids = {j["id"] for j in jobs}
+            # 완료된 작업은 히스토리에 바로 보이게 — 진행 중인 것만 제외 (v0.98:
+            # 동시 2개가 끝나면 화면엔 하나만 남아 나머지가 안 보이던 문제)
+            _act = {"queued", "running", "awaiting_review", "review_subtitle", "review_scenes"}
+            active_ids = {j["id"] for j in jobs if j.get("status") in _act}
             history = [
                 {
                     "id": r["id"], "title": r["title"], "mode": r["mode"],
@@ -4159,7 +4183,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.97.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.98.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5094,6 +5118,7 @@ _HTML = """<!doctype html>
         <select id="wlVoiceSel" style="width:auto;min-width:200px"></select>
         <span>배경음악</span>
         <select id="wlBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
+        <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'wlBgmSel','')">▶</button>
         <span class="hint">— 🎙 AI 내레이션과 같은 목록 (제미나이 키가 있어야 목소리 적용)</span>
       </div>
       <div class="chk" style="gap:10px;flex-wrap:wrap">
@@ -5179,14 +5204,15 @@ _HTML = """<!doctype html>
       </div>
       <span style="margin-left:6px">목소리</span>
       <select id="secVoiceSel" style="width:auto;min-width:180px"></select>
-      <span style="margin-left:6px">압축 템포</span>
-      <select id="secTempoSel" style="width:auto;padding:6px 8px">
-        <option value="">보통 (3.5초 조각)</option>
-        <option value="빠르게">빠르게 (2.4초 조각)</option>
-        <option value="아주 빠르게">아주 빠르게 (1.7초 조각)</option>
+      <span style="margin-left:6px" title="구간 클립이 내레이션보다 길면 핵심 장면만 골라 압축해요 — 그때 한 장면(조각)을 몇 초씩 보여줄지예요. 짧을수록 컷이 잦은 빠른 편집 느낌">압축 템포 ⓘ</span>
+      <select id="secTempoSel" style="width:auto;padding:6px 8px" title="영상이 대본보다 길 때만 작동 — 핵심 장면 조각 하나의 길이">
+        <option value="">보통 — 한 장면 3.5초</option>
+        <option value="빠르게">빠르게 — 한 장면 2.4초</option>
+        <option value="아주 빠르게">아주 빠르게 — 한 장면 1.7초</option>
       </select>
       <span style="margin-left:6px">배경음악</span>
       <select id="secBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
+      <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'secBgmSel','')">▶</button>
       <span style="margin-left:6px">구간 전환</span>
       <select id="secXfadeSel" style="width:auto;padding:6px 8px" title="구간과 구간이 이어지는 방식">
         <option value="">스르륵 (디졸브)</option>
@@ -5208,8 +5234,10 @@ _HTML = """<!doctype html>
     </div>
     <div class="chk" style="gap:8px">
       <span>훅 제목</span>
-      <input type="text" id="secHook" style="flex:1" placeholder="(선택) 영상 상단에 계속 크게 붙는 제목 — 비우면 없음">
+      <input type="text" id="secHook" style="flex:1" placeholder="비우면 AI가 대본을 보고 자동으로 지어요 · 훅을 빼려면 '없음' 입력">
+      <button class="ghost" style="padding:6px 10px" onclick="suggestSecHooks(event)" title="전체 대본을 바탕으로 후킹 제목 후보를 AI가 뽑아줘요 (클릭해서 고르기)">🪄 AI 추천</button>
     </div>
+    <div id="secHookCands" class="hookcands"></div>
     <details class="opt" id="secDecoBox">
       <summary>🎨 꾸미기 <span class="hint">— 자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
       <div class="chk" style="gap:10px;flex-wrap:wrap">
@@ -5299,6 +5327,7 @@ _HTML = """<!doctype html>
       <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:4px">
         <span>목소리</span><select id="shopVoiceSel" style="width:auto;min-width:180px"></select>
         <span>배경음악</span><select id="shopBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
+        <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'shopBgmSel','')">▶</button>
         <span>비율</span><select id="shopOrientSel" style="width:auto">
           <option value="shorts">📱 쇼츠 (9:16)</option>
           <option value="wide">🖥 가로 (16:9)</option>
@@ -6338,6 +6367,32 @@ async function startEdit(){
   $('rawErr').classList.add('hidden'); $('noteText').textContent='';
   poll();
   timer = setInterval(poll, 900);
+}
+
+// ── 🎞 구간 카드 훅 추천 (v0.98) — 전체 대본을 근거로 후킹 제목 후보 ──
+async function suggestSecHooks(ev){
+  ev.preventDefault();
+  const txts = [...document.querySelectorAll('#secRows .sec-narr')]
+    .map(t => (t.value || '').trim()).filter(Boolean);
+  if(!txts.length){ alert('구간 대본을 먼저 넣어주세요 — 대본을 바탕으로 후킹 제목을 뽑아요'); return; }
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '추천 중…';
+  const cands = $('secHookCands'); cands.innerHTML = '';
+  try{
+    const key = ensureGeminiKey();
+    const data = await (await fetch('/api/suggest_hooks', {method:'POST',
+      body: JSON.stringify({context: txts.join(' ').slice(0, 900),
+                            gemini_key: key, save_key: true})})).json();
+    if(data.error){ alert(data.error); return; }
+    (data.hooks || []).forEach(h => {
+      const b = document.createElement('button');
+      b.textContent = h;
+      b.onclick = (e) => { e.preventDefault(); $('secHook').value = h; cands.innerHTML = ''; };
+      cands.appendChild(b);
+    });
+    if(!(data.hooks || []).length) alert('추천을 만들지 못했어요 — 잠시 후 다시 시도해 주세요');
+  } catch(e){ alert('훅 추천 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
 }
 
 // ── 훅 제목 AI 추천 (v0.8) ──
@@ -9462,18 +9517,24 @@ function syncParallelSel(state){
 // ── 📋 작업 큐 — 진행·대기 목록 칩 (v0.88) ──
 function renderJobsBar(jobs){
   const bar = $('jobsBar'); if(!bar) return;
-  const act = (jobs || []).filter(j =>
+  const running = (jobs || []).filter(j =>
     ['queued', 'running', 'review_subtitle', 'review_scenes'].includes(j.status));
+  // ✅ 완료 칩 (v0.98) — 동시 작업 중 하나가 끝나도 사라지지 않고 눌러서 돌아감
+  const done = (jobs || []).filter(j =>
+    ['ok', 'partial', 'failed'].includes(j.status)).slice(0, 4);
+  const act = running.concat(done);
   bar.classList.toggle('hidden', act.length === 0);
   [...bar.querySelectorAll('.jobchip')].forEach(c => c.remove());
-  act.slice(0, 6).forEach(j => {
+  act.slice(0, 8).forEach(j => {
     const chip = document.createElement('span');
     chip.className = 'jobchip';
     chip.style.cssText = 'display:inline-flex;gap:6px;align-items:center;padding:4px 10px;' +
       'border:1px solid ' + (j.id === currentJob ? '#4266d5' : '#2c3347') +
       ';border-radius:999px;background:#171a23;cursor:pointer;font-size:12.5px';
     const ico = j.status === 'queued' ? '⏳'
-      : j.status === 'running' ? '▶' : '📝';
+      : j.status === 'running' ? '▶'
+      : j.status === 'ok' ? '✅'
+      : j.status === 'partial' ? '⚠' : j.status === 'failed' ? '✘' : '📝';
     const pct = j.status === 'running' ? (' ' + Math.round((j.frac || 0) * 100) + '%') : '';
     let ela = '';                       // ⏱ 경과 시간 (v0.90)
     if(j.status === 'running' && j.t_start){
