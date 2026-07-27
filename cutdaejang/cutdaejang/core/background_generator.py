@@ -359,6 +359,20 @@ def fill_scene_gaps(paths: list, base: Optional[str] = None) -> list:
     return [p or base for p in out]
 
 
+def _mismatched_aspect(img: str, w: int, h: int) -> bool:
+    """사진과 캔버스의 비율이 크게 다른지 — 크롭하면 너무 잘리는 조합 (v0.99).
+
+    AI 장면 그림은 캔버스 비율로 생성돼 False(기존 꽉 채움 유지),
+    블로그·상품 가로 사진을 세로 쇼츠에 얹을 때만 True(블러 패드로 전환).
+    """
+    try:
+        iw, ih = ff.probe_video_size(str(img))
+        r = (iw / max(1, ih)) / (w / max(1, h))
+        return r > 1.35 or r < 1 / 1.35
+    except Exception:  # noqa: BLE001 — 크기를 모르면 기존 방식(꽉 채움)
+        return False
+
+
 def scene_slideshow(
     images_spans: list,
     out_path: str,
@@ -383,8 +397,20 @@ def scene_slideshow(
         # -framerate 필수: 이미지 loop 기본은 25fps라 캔버스 fps와 어긋나 길이가 줄어든다
         args += ["-framerate", str(fps), "-loop", "1", "-t", f"{dur_s:.3f}", "-i", str(img)]
         frames = max(1, int(dur_s * fps))
-        chain = (f"[{i}:v]scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
-                 f"crop={up_w}:{up_h}")
+        if _mismatched_aspect(str(img), w, h):
+            # 🖼 가로 사진을 세로 캔버스에(또는 반대) — 꽉 채우면 대부분이 잘려
+            # 글자가 반토막 나던 문제 (v0.99, 사용자 리포트: 블로그 16:9 썸네일).
+            # 원본을 통째로 보여주고 빈 곳은 블러 배경으로 채운다.
+            chain = (
+                f"[{i}:v]split=2[bgs{i}][fgs{i}];"
+                f"[bgs{i}]scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
+                f"crop={up_w}:{up_h},boxblur=24:2,eq=brightness=-0.1[bgb{i}];"
+                f"[fgs{i}]scale={up_w}:{up_h}:force_original_aspect_ratio=decrease[fgf{i}];"
+                f"[bgb{i}][fgf{i}]overlay=(W-w)/2:(H-h)/2"
+            )
+        else:
+            chain = (f"[{i}:v]scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
+                     f"crop={up_w}:{up_h}")
         if motion in ("zoom_in", "zoom_out"):
             amt = max(0.02, min(0.2, motion_amount))
             if motion == "zoom_in":

@@ -592,19 +592,33 @@ def concat_videos(clips: List[str], out_path: str, size=None,
     if fade > 0:
         # 🎬 크로스페이드 체인 — 입력을 순서대로 소비하므로 긴 영상도 메모리 안전.
         # transition="varied" (v0.85): 경계마다 다른 전환을 돌아가며 써 다양하게.
-        chain, vcur, acur, t = [], "[v0]", "[a0]", durs[0]
+        chain, vcur, t = [], "[v0]", durs[0]
+        offs = [0.0]
         for i in range(1, len(clips)):
             off = max(0.0, t - fade)
+            offs.append(off)
             tname = (XFADE_POOL[(i - 1) % len(XFADE_POOL)]
                      if transition == "varied" else (transition or "fade"))
-            vn, an = f"[vx{i}]", f"[ax{i}]"
+            vn = f"[vx{i}]"
             chain.append(f"{vcur}[v{i}]xfade=transition={tname}:"
                          f"duration={fade:.3f}:offset={off:.3f}{vn}")
-            chain.append(f"{acur}[a{i}]acrossfade=d={fade:.3f}{an}")
-            vcur, acur = vn, an
+            vcur = vn
             t = off + durs[i]
+        # 🔊 소리는 페이드 없이 그대로 이어붙임 (v0.99) — acrossfade가 뒷클립
+        # 첫마디를 0볼륨에서 서서히 키워 '말이 끊겨' 들리던 문제의 종결.
+        # 각 클립 소리를 다음 클립이 시작하는 지점까지만 쓰고(잘리는 건 화면
+        # 겹침 구간의 무음 꼬리뿐) 무편집 concat — 볼륨 변화가 전혀 없어
+        # 경계의 쉼이 문장 사이 쉼과 같은 리듬이 된다. (amix는 빌드에 따라
+        # 균일 감쇠가 생겨 배제)
+        acat = ""
+        for i in range(len(clips)):
+            seg = (offs[i + 1] - offs[i]) if i + 1 < len(clips) else durs[i]
+            chain.append(f"[a{i}]atrim=0:{max(0.05, seg):.3f},"
+                         f"asetpts=PTS-STARTPTS[ac{i}]")
+            acat += f"[ac{i}]"
+        chain.append(acat + f"concat=n={len(clips)}:v=0:a=1[a]")
         fc = ";".join(parts + chain)
-        vmap, amap = vcur, acur
+        vmap, amap = vcur, "[a]"
     else:
         fc = (";".join(parts) + ";" + "".join(labels)
               + f"concat=n={len(clips)}:v=1:a=1[v][a]")

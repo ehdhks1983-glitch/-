@@ -68,9 +68,9 @@ def test_sections_pipeline_wiring():
     src = open(webui.__file__, encoding="utf-8").read()
     # 몽타주는 하드컷 — 검은 깜빡임 원인 제거
     assert 'str(job_dir / f"sec_{i}_cut.mp4"), transition="none")' in src
-    # 합본 전 구간별 정지+무음 패딩 (첫 구간 head 없음 / 마지막 tail 없음)
-    assert 'sec_pad_' in src and "pad_video(" in src
-    # 챕터는 경계당 +fade (패딩으로 순길이가 늘어남)
-    assert "cum += durs[k] + (fade if k < len(outs) - 1 else 0.0)" in src
+    # v0.99: 패딩 제거 (이음새 1.5초 죽은 공백의 원인) — amix가 말을 보호한다
+    assert "sec_pad_" not in src
+    # 챕터는 경계당 −fade (패딩 없이 크로스페이드만큼 앞당겨짐)
+    assert "cum += durs[k] - (fade if k < len(outs) - 1 else 0.0)" in src
     # 완료 화면 라벨 — 구간 합본은 쇼츠가 아니라 합본+구간 파일
     assert "최종 합본, 나머지는 구간별 파일" in webui._HTML

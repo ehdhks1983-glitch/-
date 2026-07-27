@@ -2130,19 +2130,12 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         fade = video_editor.xfade_clamp(sec_xfade, durs)
         final = outs[0]
         if len(outs) > 1:
-            join_clips = outs
-            if fade > 0:
-                # 🛡 크로스페이드가 말을 깎지 않게 (v0.94) — 겹칠 만큼을 각 구간
-                # 앞뒤에 '정지 화면+무음'으로 덧대 페이드가 패딩만 소모하게 한다.
-                # (기존엔 뒷구간 첫 마디가 볼륨 0에서 차오르며 끊겨 들렸음)
-                join_clips = []
-                for pi, p in enumerate(outs):
-                    join_clips.append(video_editor.pad_video(
-                        p, str(job_dir / f"sec_pad_{pi}.mp4"),
-                        head_s=(fade if pi > 0 else 0.0),
-                        tail_s=(fade if pi < len(outs) - 1 else 0.0)))
+            # 🔊 v0.99: 패딩(v0.94) 제거 — 이음새마다 1.5초 죽은 공백을 만들었다
+            # (사용자 영상 실측: 문장 쉼 0.45초의 3배). concat_videos가 소리를
+            # 페이드 없이 제자리 겹침(amix)하므로 말이 깎일 일 자체가 없어졌고,
+            # 경계 쉼은 구간 꼬리 여백(0.7초)−겹침(0.45초)≈문장 쉼 수준이 된다.
             final = video_editor.concat_videos(
-                join_clips, str(job_dir / "sections_final.mp4"), size=(cw, ch),
+                outs, str(job_dir / "sections_final.mp4"), size=(cw, ch),
                 crossfade_s=fade, transition=transition)
         if (params.get("bgm") or "").strip():        # 🎵 BGM은 최종 합본에 1회 (덕킹)
             b = resolve_bgm(params["bgm"], settings)
@@ -2160,12 +2153,12 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 except Exception:  # noqa: BLE001 — BGM 실패해도 본편은 산다
                     notes.append("배경음악 입히기에 실패해 없이 완성했어요")
         # ⏱ 유튜브 설명란용 타임라인 (v0.82) — 구간 실제 시작 시각 + 제목
-        # v0.94: 경계마다 패딩+크로스페이드로 순길이 +fade 만큼 늘어나는 것 반영
+        # v0.99: 패딩 제거로 다시 경계마다 크로스페이드만큼 앞당겨짐 (−fade)
         chap_lines, cum = [], 0.0
         for k, title_i in enumerate(out_titles):
             mm, ss = int(cum // 60), int(cum % 60)
             chap_lines.append(f"{mm:02d}:{ss:02d} {title_i}")
-            cum += durs[k] + (fade if k < len(outs) - 1 else 0.0)
+            cum += durs[k] - (fade if k < len(outs) - 1 else 0.0)
         total_s = ff.probe_duration_us(final) / 1e6
         msg = f"🎞 구간 {len(outs)}개 · 총 {int(total_s // 60)}분 {int(total_s % 60)}초"
         if reused:
@@ -4183,7 +4176,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.98.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.99.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -7448,7 +7441,8 @@ function renderKit(data){
   // 🟢 네이버 클립 (v0.87) — "제목:"/"태그:" 라벨 없이 각 입력란에 그대로 붙는 형식
   const nc = kit.naver_clip || {};
   if($('kitNaverTitle')) $('kitNaverTitle').value = nc.title || '';
-  if($('kitNaverTags')) $('kitNaverTags').value = (nc.tags || []).join(', ');
+  if($('kitNaverTags')) $('kitNaverTags').value =
+    (nc.tags || []).map(t => '#' + String(t).replace(/^#/, '')).join(' ');  // 🟢 클립은 # 필수 (v0.99)
   if($('kitNaverCat')) $('kitNaverCat').innerHTML = nc.category1
     ? ('📂 카테고리 추천: <b>1차 — ' + escHtml(nc.category1) + '</b> · <b>2차 — ' +
        escHtml(nc.category2 || '자유 선택') + '</b> <span class="hint">(업로드 화면에서 가장 비슷한 항목을 고르세요)</span>')
