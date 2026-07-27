@@ -51,15 +51,31 @@ def is_shop_url(url: str) -> bool:
     return bool(host) and host.endswith(_SHOP_HOSTS)
 
 
-def _fetch_html(url: str, timeout: float = 20.0) -> Tuple[str, str]:
+def _fetch_html(url: str, timeout: float = 20.0, ua: str = "",
+                referer: str = "") -> Tuple[str, str]:
     """일반 요청으로 HTML 받기 → (html, 최종 URL). 단축링크 리다이렉트도 따라간다."""
-    req = urllib.request.Request(url, headers={
-        "User-Agent": _UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
+    headers = {
+        "User-Agent": ua or _UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+    if referer:
+        headers["Referer"] = referer
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         final = r.geturl() or url
         raw = r.read(3_000_000)
     return raw.decode("utf-8", errors="replace"), final
+
+
+def _mobile_variant(url: str) -> str:
+    """쿠팡 데스크톱 상품 주소 → 모바일 페이지 주소 (해당 없으면 빈 문자열)."""
+    try:
+        sp = urllib.parse.urlsplit(url)
+    except ValueError:
+        return ""
+    if sp.netloc.lower() in ("www.coupang.com", "coupang.com"):
+        return urllib.parse.urlunsplit((sp.scheme or "https", "m.coupang.com",
+                                        sp.path, sp.query, ""))
+    return ""
 
 
 def _browser_candidates() -> List[str]:
@@ -204,6 +220,27 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
     except Exception:  # noqa: BLE001 — 브라우저 경로로 넘어감
         via = ""
     parsed = parse_product(html_text) if html_text else {}
+    # 📱 블로그 수집과 같은 요청 레시피로 모바일 페이지도 시도 (v1.06 — 사용자
+    # 지시 "블로그봇의 쿠팡 크롤링 방식을 적용"): 블로그가 사진 5장이 잘 되는
+    # 이유가 fetch_web의 모바일 UA(+cutdaejang 표식)·Referer 레시피라, 상품
+    # 수집에도 같은 방식을 얹는다. 모바일 페이지는 가볍고 사진이 본문에 그대로.
+    if len(parsed.get("images") or []) < 3:
+        m_url = _mobile_variant(final)
+        if m_url:
+            from . import fetch_web  # noqa: PLC0415 — 블로그와 '같은' UA 한 곳 유지
+            say("모바일 페이지에서 사진 찾는 중…")
+            try:
+                m_html, _mf = _fetch_html(m_url, ua=fetch_web._UA, referer=final)
+                p_m = parse_product(m_html)
+                merged_m = list(dict.fromkeys(
+                    (p_m.get("images") or []) + (parsed.get("images") or [])))[:12]
+                if _usable(p_m) and not (parsed and _usable(parsed)):
+                    parsed, via = p_m, "모바일"
+                if merged_m:
+                    parsed = parsed or {}
+                    parsed["images"] = merged_m
+            except Exception:  # noqa: BLE001 — 모바일 실패는 다음 단계로
+                pass
     # 🖼 사진이 '적으면'(3장 미만) 브라우저로 재시도 (v1.04) — 상품 페이지는
     # 사진을 JS로 늦게 그려서 직접 요청 HTML엔 대표 사진 1장만 오는 일이 흔한데,
     # v0.97은 0장일 때만 재시도해 1장이면 그대로 끝났다 (사용자 리포트

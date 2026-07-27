@@ -4347,7 +4347,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.05.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.06.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5476,9 +5476,11 @@ _HTML = """<!doctype html>
       AI가 홍보 대본을 써서 <b>사진+내레이션 영상</b>으로 완성해요. 수익 링크는 영상 설명란에 붙여넣으면 됩니다.</div>
     <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>상품 고르기 <span class="hint">— 두 방법 중 편한 쪽 (검색 또는 직접 붙여넣기)</span></div>
     <details class="opt" open>
-      <summary>🛒 쿠팡 파트너스 <span class="hint" id="cpKeyState">— API 키를 저장하면 상품 검색·파트너스 링크 자동</span></summary>
+      <summary>🛒 쿠팡 파트너스 <span class="hint" id="cpKeyState">— API 키를 저장하면 상품 검색·파트너스 링크 자동</span>
+        <a href="https://partners.coupang.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 파트너스 열기</a></summary>
       <details class="opt" id="cpKeyBox" style="margin-top:4px">
-        <summary>🔑 파트너스 API 키 <span class="hint">— 쿠팡 파트너스 → 도구 → Open API에서 발급</span></summary>
+        <summary>🔑 파트너스 API 키 <span class="hint">— 쿠팡 파트너스 → 도구 → Open API에서 발급</span>
+          <a href="https://partners.coupang.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 발급하러 가기</a></summary>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
           <input type="password" id="cpAccess" placeholder="Access Key" style="flex:1;min-width:140px">
           <input type="password" id="cpSecret" placeholder="Secret Key" style="flex:1;min-width:140px">
@@ -5492,9 +5494,11 @@ _HTML = """<!doctype html>
       <div id="cpResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px"></div>
     </details>
     <details class="opt">
-      <summary>🟢 네이버 쇼핑커넥트 <span class="hint" id="nvKeyState">— 무료 검색 API 키를 저장하면 상품 검색 자동</span></summary>
+      <summary>🟢 네이버 쇼핑커넥트 <span class="hint" id="nvKeyState">— 무료 검색 API 키를 저장하면 상품 검색 자동</span>
+        <a href="https://shoppingconnect.naver.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 쇼핑커넥트 열기</a></summary>
       <details class="opt" id="nvKeyBox" style="margin-top:4px">
-        <summary>🔑 네이버 검색 API 키 <span class="hint">— developers.naver.com에서 앱 등록(무료) 후 발급</span></summary>
+        <summary>🔑 네이버 검색 API 키 <span class="hint">— developers.naver.com에서 앱 등록(무료) 후 발급</span>
+          <a href="https://developers.naver.com/apps/#/register" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 앱 등록 페이지</a></summary>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
           <input type="password" id="nvClientId" placeholder="Client ID" style="flex:1;min-width:140px">
           <input type="password" id="nvClientSecret" placeholder="Client Secret" style="flex:1;min-width:140px">
