@@ -515,7 +515,7 @@ def pad_video(src: str, out_path: str, head_s: float = 0.0, tail_s: float = 0.0,
               fps: int = 30) -> str:
     """앞뒤에 정지 프레임+무음 패딩 — 크로스페이드가 말을 잡아먹지 않게 (v0.94).
 
-    합본의 xfade/acrossfade는 경계 양쪽을 겹쳐 소모한다. 내레이션이 경계까지
+    합본의 xfade는 경계 양쪽을 겹쳐 소모한다. 내레이션이 경계까지
     차 있으면 뒷구간 첫 마디는 볼륨이 0에서 차오르며 깎여 들리고 앞구간 끝
     마디도 잘릴 수 있다 (사용자 리포트 "합쳐지는 부분에 말도 끊어지고").
     겹칠 만큼을 미리 '정지 화면 + 무음'으로 덧대 페이드가 패딩만 먹게 한다.
@@ -550,9 +550,9 @@ def concat_videos(clips: List[str], out_path: str, size=None,
     - 해상도가 제각각이어도 size(기본: 첫 영상 클립 크기)에 맞춰 축소+패딩.
     - 소리 있는 클립은 44100 스테레오로 통일, 사진·무음 클립은 무음 트랙을 깔아
       concat 오류를 막는다. 사진은 still_s초 정지 클립으로.
-    - crossfade_s>0 (v0.83): 경계마다 화면은 디졸브(xfade), 소리는 겹침 페이드
-      (acrossfade)로 부드럽게 — 하드컷 "뚝" 끊김 제거. 전체 길이는 경계당
-      crossfade_s만큼 짧아진다.
+    - crossfade_s>0 (v0.83): 경계마다 화면은 디졸브(xfade). 소리는 페이드 없이
+      원래 볼륨 그대로 이어붙인다 (v0.99 — 램프가 첫마디를 깎던 문제 폐지).
+      전체 길이는 경계당 crossfade_s만큼 짧아진다.
     - N이 커서 필터 그래프가 길어지면 파일 경유(filter_complex_args).
     """
     clips = [str(c) for c in clips if (c or "").strip() and Path(str(c)).is_file()]
