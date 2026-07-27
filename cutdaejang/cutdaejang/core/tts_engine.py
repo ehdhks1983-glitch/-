@@ -826,6 +826,7 @@ class TTSEngine:
                        prev_text: str = "", next_text: str = "") -> Path:
         # 숫자·영어를 한글 발음으로 (2026년→이천이십육년, AI→에이아이) — 오독 방지 (v0.46.1).
         # 자막은 원문 그대로, TTS 입력만 바꾼다. 캐시 키도 변환 후 텍스트 기준.
+        text = text.replace("[카드]", " ").strip()   # 🅰 카드 표식은 읽지 않음 (v1.07)
         text = self._pronounced(text)
         voice = self._resolve_voice(voice)
         # 🎙 이어읽기 문맥 (v0.83) — 지원 제공자(일레븐랩스)만: 앞뒤 문장을 함께

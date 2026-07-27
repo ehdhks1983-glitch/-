@@ -131,6 +131,8 @@ def build_style(settings: dict, orientation: str = "shorts") -> Style:
         hook_style=sub.get("hook_style", "기본"),
         sub_style=sub_style,
         tone=settings["bg"].get("tone", "기본"),
+        text_cards=bool(sub.get("text_cards", True)),   # 🅰 텍스트 카드 (v1.07)
+        card_accent=sub.get("card_accent", "#4D8DFF"),
     )
 
 

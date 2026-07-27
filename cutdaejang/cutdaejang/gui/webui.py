@@ -3278,6 +3278,13 @@ class _Handler(BaseHTTPRequestHandler):
                      title=f"🎞 {title}", params=params)
             _queue_job(job_id, _run_sections, job_id, params, workdir)  # 📋 작업 큐 (v0.88)
             self._send_json({"job_id": job_id})
+        elif path == "/api/draft":     # 📝 작업 임시 저장 (v1.07) — 카드별 폼 초안
+            card = str(params.get("card") or "").strip()[:20]
+            if not card:
+                self._send_json({"error": "card가 필요합니다"}, 400)
+                return
+            config.save_settings({"ui": {"drafts": {card: params.get("data")}}})
+            self._send_json({"ok": True})
         elif path == "/api/rip_script":  # 🎙→📃 목소리 → 대본 따오기 (v1.01)
             _apply_keys(params)
             src = str(params.get("path") or "").strip().strip('"')
@@ -4347,7 +4354,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.06.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.07.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5944,6 +5951,7 @@ _HTML = """<!doctype html>
         <div><label>강조 색</label><input type="color" id="setHlColor" style="height:40px;padding:4px"></div>
       </div>
       <div class="chk"><input type="checkbox" id="setFade"><span>자막 등장 페이드</span></div>
+      <div class="chk"><input type="checkbox" id="setTextCards"><span>🅰 텍스트 카드 장면 <span class="hint">— 숫자·짧은 펀치 문장을 풀스크린 큰 글씨 연출로 (모든 카테고리 공통 · 대본 줄 앞에 [카드]를 쓰면 수동 지정)</span></span></div>
       <div class="chk" style="gap:8px"><span>자막 등장 애니메이션</span>
         <select id="setSubAnim" style="width:auto;padding:6px 8px">
           <option value="none">없음</option>
@@ -8133,13 +8141,54 @@ async function copyLogs(ev){
   catch(e){ alert('복사 실패 — 로그를 드래그해서 복사하세요'); }
 }
 
+// ── 📝 작업 임시 저장 (v1.07) — "하다가 멈춰도" 카드별 핵심 입력 자동 저장·복원 ──
+const DRAFT_FIELDS = {
+  gen:     ['topic', 'genScript', 'genHook'],
+  edit:    ['editVideo', 'photoPath', 'editScript', 'narrTopic', 'narrFile'],
+  weblink: ['weblinkUrl'],
+  shop:    ['shopPasteText', 'shopLinkInput', 'shopScript', 'shopHook']
+};
+const _draftTimers = {};
+function draftSave(card){
+  clearTimeout(_draftTimers[card]);
+  _draftTimers[card] = setTimeout(async () => {
+    const data = {};
+    (DRAFT_FIELDS[card] || []).forEach(id => { const el = $(id); if(el) data[id] = el.value || ''; });
+    try{ await fetch('/api/draft', {method:'POST', body: JSON.stringify({card, data})}); }
+    catch(e){ /* 저장 실패는 다음 입력 때 재시도 */ }
+  }, 900);
+}
+function bindDrafts(){
+  Object.keys(DRAFT_FIELDS).forEach(card => {
+    DRAFT_FIELDS[card].forEach(id => {
+      const el = $(id); if(!el) return;
+      el.addEventListener('input', () => draftSave(card));
+    });
+  });
+}
+function restoreDrafts(s){
+  if(window._draftsRestored) return;
+  window._draftsRestored = true;
+  const drafts = ((s.ui || {}).drafts) || {};
+  let n = 0;
+  Object.keys(DRAFT_FIELDS).forEach(card => {
+    const d = drafts[card] || {};
+    DRAFT_FIELDS[card].forEach(id => {
+      const el = $(id);
+      if(el && !String(el.value || '').trim() && String(d[id] || '').trim()){ el.value = d[id]; n++; }
+    });
+  });
+  if(n) uiBanner('📝 이어서 작성하던 내용 ' + n + '칸을 불러왔어요 — 멈춘 곳부터 계속하세요');
+}
 function fillSettings(s){
+  restoreDrafts(s); bindDrafts();
   $('setFontSize').value = s.subtitle.font_size;
   $('setOutline').value = s.subtitle.outline;
   $('setMarginV').value = s.subtitle.margin_v;
   $('setWrapChars').value = s.subtitle.wrap_chars != null ? s.subtitle.wrap_chars : 16;
   $('setSubAnim').value = s.subtitle.anim || 'none';
   $('setFade').checked = !!s.subtitle.fade;
+  $('setTextCards').checked = s.subtitle.text_cards !== false;   // 🅰 v1.07 (기본 켬)
   $('setHookBand').checked = s.subtitle.hook_band !== false;
   $('setBand').checked = !!s.subtitle.band;
   $('setHlColor').value = s.subtitle.highlight_color;
@@ -8237,7 +8286,8 @@ async function saveSettings(){
                margin_v: +$('setMarginV').value, fade: $('setFade').checked,
                highlight_color: $('setHlColor').value.toUpperCase(),
                hook_band: $('setHookBand').checked, band: $('setBand').checked,
-               wrap_chars: +$('setWrapChars').value, anim: $('setSubAnim').value},
+               wrap_chars: +$('setWrapChars').value, anim: $('setSubAnim').value,
+               text_cards: $('setTextCards').checked},
     bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,
          ai_image: $('setAiImage').checked, scene_images: $('setSceneImg').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},

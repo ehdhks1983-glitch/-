@@ -95,6 +95,8 @@ class Style:
     hook_style: str = "기본"        # 상단 제목 스타일 프리셋 (v0.52) — ass_writer.HOOK_STYLES 키
     sub_style: str = "기본"         # 본문 자막 스타일 프리셋 (v0.54) — ass_writer.SUB_STYLES 키
     tone: str = "기본"             # 화면 톤(색보정) 프리셋 (v0.56) — composer.TONE_PRESETS 키
+    text_cards: bool = True        # 🅰 텍스트 카드 장면 (v1.07) — 숫자·펀치 문장 풀스크린 타이포
+    card_accent: str = "#4D8DFF"   # 카드 숫자 강조색 (스샷의 파랑 글로우)
 
 
 @dataclass

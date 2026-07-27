@@ -32,6 +32,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,{font},{size},{primary},&H000000FF,{def_outline_color},&H80000000,0,0,0,0,100,100,0,0,{def_border},{def_outline},{shadow},{alignment},{sub_ml},{sub_ml},{margin_v},1
 Style: Title,{title_font},{title_size},{title_primary},&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,{title_angle},{title_border},{title_outline},{title_shadow},8,{title_ml},{title_ml},{title_margin_v},1
 Style: Info,{font},{info_size},{info_primary},&H000000FF,&H00101010,&HA0000000,0,0,0,0,100,100,0,0,1,{info_outline},2,5,60,60,0,1
+Style: Card,{title_font},{card_size},&H00FFFFFF,&H000000FF,&H00151210,&H00000000,-1,0,0,0,100,100,1,0,1,{card_outline},0,5,{card_ml},{card_ml},0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -417,6 +418,10 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         info_size=round(spec.canvas.h * 0.085),          # 🔢 숫자 인포 팝 (v0.56)
         info_primary=ass_color(style.highlight_color),
         info_outline=sc(9),
+        # 🅰 텍스트 카드 (v1.07) — 세로는 화면폭, 가로는 높이가 병목이라 비율 분리
+        card_size=round(spec.canvas.h * (0.075 if wide else 0.052)),
+        card_outline=sc(4),
+        card_ml=sc(70),
         sub_ml=sc(110),    # 자막 좌우 여백 — 우측 버튼 기둥(~140px)에 긴 줄이 깔리지 않게
         title_ml=sc(90),   # 제목 좌우 여백
     )
@@ -443,8 +448,56 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             + "\\fscx55\\fscy55\\t(0,140,\\fscx100\\fscy100)\\fad(60,200)}"
             + escape_ass_text(ip.text))
 
+    # 🅰 텍스트 카드 장면 (v1.07, 사용자 스샷 요청) — 숫자·펀치 문장 구간을
+    # 화면 전체를 어둡게 덮고 큰 타이포로. 오버레이 방식이라 길이·내레이션·
+    # 이음새를 안 건드려 생성·편집·사진·구간·블로그·쇼핑 전부에 그대로 적용.
+    from ..text_cards import (  # noqa: PLC0415
+        accent_spans, is_marked, pick_card_indices, strip_mark)
+
+    card_idx = set()
+    if getattr(style, "text_cards", True) and spec.subtitles:
+        card_idx = set(pick_card_indices([s.text for s in spec.subtitles]))
+
+    def _card_lines(sub) -> list:
+        txt = re.sub(r"\[[/가-힣A-Za-z]*\]", "", strip_mark(sub.text)).strip()
+        acc = _inline_color(getattr(style, "card_accent", "#4D8DFF") or "#4D8DFF")
+        # 2줄 줄바꿈 — 가운데에서 가장 가까운 공백
+        parts = [txt]
+        if len(txt) > 14 and " " in txt:
+            mid = len(txt) // 2
+            k = min((abs(j - mid), j) for j, ch in enumerate(txt) if ch == " ")[1]
+            parts = [txt[:k].strip(), txt[k + 1:].strip()]
+
+        def _accentize(ln: str) -> str:
+            out, pos = "", 0
+            for a, b in accent_spans(ln):
+                out += escape_ass_text(ln[pos:a])
+                out += ("{\\1c" + acc + "\\blur" + str(max(3, sc(6))) + "\\b1}"
+                        + escape_ass_text(ln[a:b])
+                        + "{\\1c&H00FFFFFF&\\blur0}")
+                pos = b
+            return out + escape_ass_text(ln[pos:])
+
+        body_txt = "\\N".join(_accentize(p) for p in parts if p)
+        cx = spec.canvas.w // 2
+        cy = round(spec.canvas.h * 0.47)
+        st, en = us_to_ass(sub.start_us), us_to_ass(sub.end_us)
+        dim = (f"Dialogue: 5,{st},{en},Card,,0,0,0,,"
+               + "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H120F0C&\\1a&H22&\\fad(160,160)}"
+               + f"m 0 0 l {spec.canvas.w} 0 {spec.canvas.w} {spec.canvas.h} 0 {spec.canvas.h}")
+        body = ("{\\an5\\pos(" + str(cx) + "," + str(cy) + ")"
+                + "\\fscx80\\fscy80\\t(0,170,\\fscx100\\fscy100)\\fad(150,170)}" + body_txt)
+        return [dim, f"Dialogue: 6,{st},{en},Card,,0,0,0,,{body}"]
+
     pop_on = bool(ss.get("pop_rotate"))  # 🌈 다색 팝 — 문장마다 색 번갈아 (v0.73)
     for i, s in enumerate(spec.subtitles):
+        if i in card_idx:
+            lines += _card_lines(s)
+            continue                     # 카드 문장은 하단 자막 생략 (글자가 화면 주인공)
+        if is_marked(s.text):            # 카드 끈 상태의 [카드] 표식은 표시에서 제거
+            from dataclasses import replace as _rep  # noqa: PLC0415
+
+            s = _rep(s, text=strip_mark(s.text))
         pop = POP_PALETTE[i % len(POP_PALETTE)] if pop_on else ""
         body = dialogue_text(s, style, pop_color=pop)
         if ss.get("blur"):  # 네온 자막 — 외곽선 글로우 (띠 없음 프리셋에서만)
