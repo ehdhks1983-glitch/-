@@ -2226,6 +2226,93 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             mode="sections", status="failed", mp4=None, params=params)
 
 
+def _run_rip_script(job_id: str, params: dict, workdir: str) -> None:
+    """🎙→📃 목소리 → 대본 따오기 (v1.01) — 영상·녹음 속 나레이션을 대본 글로.
+
+    영상은 만들지 않는 글 전용 작업. 발화 구간을 문장 단위로 전사하고
+    (Gemini 키 있으면) 오인식을 문맥으로 교정해, 구간 대본·AI 영상 카드에
+    바로 붙여넣을 수 있는 '한 줄 = 한 문장' 대본을 만든다. 옛 완성본을 새
+    구조로 다시 만들 때·참고 영상 대본을 재활용할 때 쓴다 (사용자 요청).
+    """
+    try:
+        from ..core import edit_mode, video_editor  # noqa: PLC0415
+        from ..core.stt_engine import STTEngine, is_hallucination, make_provider  # noqa: PLC0415
+        from ..core.video_editor import SilenceOptions  # noqa: PLC0415
+        from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+        settings = config.load_settings()
+        edit_cfg = settings["edit"]
+        src = str(params.get("path") or "").strip().strip('"')
+        p = Path(src)
+        if not p.is_file():
+            _set_job(job_id, status="failed",
+                     errors=[f"파일을 찾을 수 없어요: {src or '(비어 있음)'}"])
+            return
+        job_dir = Path(workdir) / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        _set_job(job_id, status="running", stage="analyze", frac=0.05,
+                 note="🎙 말하는 구간을 찾는 중…")
+        dur_us = ff.probe_duration_us(str(p))
+        try:
+            segments, _ = video_editor.detect_speech_segments(
+                str(p), SilenceOptions(
+                    noise_db=edit_cfg["noise_db"],
+                    min_silence_s=edit_cfg["min_silence_s"], pad_s=edit_cfg["pad_s"]))
+        except Exception:  # noqa: BLE001 — 감지 실패면 전체를 한 구간으로
+            segments = []
+        if not segments:
+            segments = [(0, dur_us)]
+        stt_name = params.get("stt_provider") or edit_cfg["stt_provider"]
+        stt_cfg = {**edit_cfg,
+                   "whisper_model": params.get("whisper_model") or edit_cfg["whisper_model"]}
+        stt = STTEngine(make_provider(stt_name, stt_cfg),
+                        Path(workdir) / "cache" / "stt",
+                        language=params.get("language", "ko"))
+        _set_job(job_id, stage="stt", frac=0.1,
+                 note="🎙 목소리를 대본으로 따는 중… (말이 길수록 오래 걸려요)")
+        pieces = edit_mode.transcribe_segments_timed(
+            str(p), segments, stt, job_dir,
+            on_progress=lambda i, n: _set_job(
+                job_id, frac=0.1 + 0.75 * i / max(n, 1)))
+        lines = []
+        for seg_pieces in pieces:
+            for _s, _e, txt in seg_pieces:
+                t = " ".join(str(txt or "").split())
+                if t and not is_hallucination(t):  # '음악'류 환각 제외 (v0.95)
+                    lines.append(t)
+        if not lines:
+            _set_job(job_id, status="failed", errors=[
+                "목소리를 찾지 못했어요 — 말소리가 든 영상/녹음인지 확인하고, "
+                "음성 인식(위스퍼 설치 또는 Gemini 키)을 준비해 주세요"])
+            return
+        raw = list(lines)
+        note = ""
+        if os.environ.get("GEMINI_API_KEY") and params.get("refine", True):
+            _set_job(job_id, stage="script", frac=0.9, note="🪄 AI가 오인식을 다듬는 중…")
+            try:
+                from ..core import script_generator as sg  # noqa: PLC0415
+
+                fixed = sg.refine_subtitles(lines)
+                lines = [str(x or "").strip() or raw[i] for i, x in enumerate(fixed)]
+                note = "🪄 AI가 발음 오인식을 문맥으로 교정했어요 (원문도 같이 보관)"
+            except Exception:  # noqa: BLE001 — 다듬기 실패해도 원문 대본은 산다
+                lines = raw
+        script = "\n".join(lines)
+        try:  # 📂 폴더 열기로도 챙길 수 있게 파일로도 저장
+            (job_dir / "대본.txt").write_text(script + "\n", encoding="utf-8")
+        except OSError:
+            pass
+        _set_job(job_id, status="ok", stage="done", frac=1.0,
+                 script=script, script_raw="\n".join(raw), note="", tts_warn=note)
+    except Exception as e:
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error(
+            "대본 따오기 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed",
+                 errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+
+
 def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
     """📦 배치 (v0.42) — 주제(또는 대본 벌, v0.62) 여러 개를 순차 생성해 mp4 N개.
 
@@ -3161,6 +3248,20 @@ class _Handler(BaseHTTPRequestHandler):
             _set_job(job_id, status="running", stage="tts", frac=0.0,
                      title=f"🎞 {title}", params=params)
             _queue_job(job_id, _run_sections, job_id, params, workdir)  # 📋 작업 큐 (v0.88)
+            self._send_json({"job_id": job_id})
+        elif path == "/api/rip_script":  # 🎙→📃 목소리 → 대본 따오기 (v1.01)
+            _apply_keys(params)
+            src = str(params.get("path") or "").strip().strip('"')
+            if not src:
+                self._send_json({"error": "영상 또는 녹음 파일을 골라주세요"}, 400)
+                return
+            if not Path(src).is_file():
+                self._send_json({"error": f"파일을 찾을 수 없어요: {src}"}, 400)
+                return
+            job_id = orchestrator.new_job_id("대본따오기")
+            _set_job(job_id, status="running", stage="analyze", frac=0.0,
+                     title="🎙→📃 대본 따오기", params=params)
+            _queue_job(job_id, _run_rip_script, job_id, params, workdir)
             self._send_json({"job_id": job_id})
         elif path == "/api/job_params":  # ✏ 다시 편집 — 저장된 입력값 회수 (v0.85)
             from ..db.jobs import JobStore  # noqa: PLC0415
@@ -4216,7 +4317,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.00.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.01.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -4265,6 +4366,10 @@ _HTML = """<!doctype html>
       <button class="ghost" onclick="openVoice(event)">🎤 내 목소리 등록</button>
       <span class="hint">녹음 파일 하나로 <b>나만의 AI 목소리</b>를 만들어 내레이션에 쓸 수 있어요</span>
       <b class="hint" id="homeVoiceState" style="color:#5dd39e"></b>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <button class="ghost" onclick="openRip(event)">🎙→📃 대본 따오기</button>
+      <span class="hint">영상·녹음 속 <b>목소리를 대본 글로</b> 따와요 — 구간 대본·AI 영상에 바로 사용</span>
     </div>
     <div class="guide hidden" id="startGuide">💡 <b>처음 오셨나요? — 준비물 1개 (1분)</b><br>
       AI 대본·자막·좋은 목소리는 <b>무료 Gemini 키</b>가 있어야 해요.
@@ -4770,6 +4875,40 @@ _HTML = """<!doctype html>
       · ✂️ 내 영상 편집 / 📸 사진으로 영상 → ③ 꾸미기 → 🎙️ AI 내레이션의 보이스 맨 위에 생겨요<br>
       · 방법 A는 만들 때 GPT-SoVITS 서버가 켜져 있어야 하고, 꺼져 있으면 자동으로 다른 목소리로 대체돼요</div>
     <div class="hint" style="margin-top:8px">⚠ 어떤 방식이든 꼭 <b>본인 목소리</b>만 등록하세요 (타인 목소리 무단 클로닝 금지).</div>
+  </div>
+
+  <div class="card hidden" id="ripCard">
+    <div class="backrow">
+      <button class="ghost" onclick="closeRip(event)">← 돌아가기</button>
+      <b>🎙→📃 목소리 → 대본 따오기</b>
+    </div>
+    <div class="hint" style="margin-top:10px;font-size:13px;color:#cdd3e0">
+      영상이나 녹음 속 <b>목소리(나레이션)를 대본 글로</b> 따와요. 예전에 만든 완성 영상을
+      새 방식으로 다시 만들 때, 내가 찍어둔 말 영상을 대본으로 정리할 때 쓰세요.
+      따온 대본은 아래 버튼으로 <b>🎞 구간 대본</b>·<b>🤖 AI 영상</b> 카드에 바로 보낼 수 있어요.
+    </div>
+    <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap">
+      <input type="text" id="ripPath" style="flex:1;min-width:220px" placeholder="영상(mp4 등) 또는 녹음(mp3·m4a·wav) 파일 경로">
+      <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'ripPath','video')">🎬 영상 선택</button>
+      <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'ripPath','audio')">🎵 녹음 선택</button>
+    </div>
+    <div class="chk" style="margin-top:8px">
+      <label><input type="checkbox" id="ripRefine" checked><span>🪄 AI 다듬기 <span class="hint">— 발음 오인식을 문맥으로 교정 (Gemini 키 필요 · 없으면 자동 생략)</span></span></label>
+    </div>
+    <button id="ripGo" style="margin-top:10px" onclick="startRip(event)">🎙 대본 따오기</button>
+    <div class="hint" id="ripStatus" style="margin-top:8px"></div>
+    <div id="ripResultBox" class="hidden" style="margin-top:10px">
+      <label>따온 대본 <span class="hint">— 한 줄이 문장 하나예요. 여기서 바로 고쳐도 됩니다</span></label>
+      <textarea id="ripOut" style="min-height:180px"></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="ghost" onclick="sendRip(event,'sections')">🎞 구간 대본으로 보내기</button>
+        <button class="ghost" onclick="sendRip(event,'gen')">🤖 AI 영상 대본으로</button>
+        <button class="ghost" onclick="downloadRip(event)">📥 .txt 저장</button>
+        <button class="ghost hidden" id="ripRawBtn" onclick="toggleRipRaw(event)">📃 원문(교정 전) 보기</button>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:10px">음성 인식은 ✂️ 편집과 같은 엔진(위스퍼 또는 Gemini)을 써요 —
+      정확도 설정은 ⚙ 설정 → 편집에서. 말이 긴 영상은 몇 분 걸릴 수 있어요.</div>
   </div>
 
   <div class="card hidden" id="formCard">
@@ -6067,6 +6206,7 @@ function openMode(kind){
   window._view = kind;                       // 'gen'|'edit'|'photo'|'weblink'|'sections'|'shop'
   $('homeCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
+  $('ripCard').classList.add('hidden');      // 🎙→📃 대본 따오기 (v1.01)
   $('weblinkCard').classList.toggle('hidden', kind !== 'weblink');  // 🔗 전용 탭 (v0.79)
   $('sectionCard').classList.toggle('hidden', kind !== 'sections'); // 🎞 구간 대본 (v0.80)
   $('shopCard').classList.toggle('hidden', kind !== 'shop');        // 🛒 쇼핑 상품 (v0.89)
@@ -6092,6 +6232,7 @@ function showHome(ev){
   $('formCard').classList.add('hidden');
   $('editCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
+  $('ripCard').classList.add('hidden');
   $('weblinkCard').classList.add('hidden');
   $('sectionCard').classList.add('hidden');
   $('shopCard').classList.add('hidden');
@@ -6106,6 +6247,7 @@ function openVoice(ev){
   $('weblinkCard').classList.add('hidden');
   $('sectionCard').classList.add('hidden');
   $('shopCard').classList.add('hidden');
+  $('ripCard').classList.add('hidden');
   $('voiceCard').classList.remove('hidden');
   window._view = 'voice';
 }
@@ -6114,6 +6256,91 @@ function closeVoice(ev){
   $('voiceCard').classList.add('hidden');
   const r = window._voiceReturn;
   if(r === 'gen' || r === 'edit' || r === 'photo' || r === 'weblink' || r === 'sections') openMode(r); else showHome();
+}
+// ── 🎙→📃 목소리 → 대본 따오기 전용 화면 (v1.01 — 사용자 요청 "목소리를 대본으로") ──
+function openRip(ev){
+  if(ev) ev.preventDefault();
+  window._ripReturn = window._view || 'home';
+  for(const id of ['homeCard','formCard','editCard','weblinkCard','sectionCard','shopCard','voiceCard'])
+    $(id).classList.add('hidden');
+  $('ripCard').classList.remove('hidden');
+  window._view = 'rip';
+}
+function closeRip(ev){
+  if(ev) ev.preventDefault();
+  $('ripCard').classList.add('hidden');
+  const r = window._ripReturn;
+  if(r === 'gen' || r === 'edit' || r === 'photo' || r === 'weblink' || r === 'sections' || r === 'shop') openMode(r); else showHome();
+}
+async function startRip(ev){
+  ev.preventDefault();
+  const path = $('ripPath').value.trim();
+  if(!path){ alert('영상 또는 녹음 파일을 골라주세요'); return; }
+  const btn = $('ripGo'); btn.disabled = true;
+  $('ripResultBox').classList.add('hidden');
+  $('ripStatus').textContent = '⏳ 시작하는 중…';
+  try{
+    const d = await (await fetch('/api/rip_script', {method:'POST',
+      body: JSON.stringify({path, refine: $('ripRefine').checked})})).json();
+    if(d.error){ alert(d.error); $('ripStatus').textContent = ''; btn.disabled = false; return; }
+    watchRip(d.job_id);
+  } catch(e){ alert('시작 실패: ' + e); $('ripStatus').textContent = ''; btn.disabled = false; }
+}
+function watchRip(jobId){
+  const t = setInterval(async () => {
+    try{
+      const st = await (await fetch('/api/state')).json();
+      const j = (st.jobs || []).find(x => x.id === jobId);
+      if(!j) return;
+      if(j.status === 'queued' || j.status === 'running'){
+        $('ripStatus').textContent = (j.note || '작업 중…') + ' (' + Math.round((j.frac || 0) * 100) + '%)';
+        return;
+      }
+      clearInterval(t); $('ripGo').disabled = false;
+      if(j.status === 'ok'){
+        window._ripScript = j.script || ''; window._ripRaw = j.script_raw || '';
+        window._ripShowRaw = false;
+        $('ripOut').value = window._ripScript;
+        $('ripResultBox').classList.remove('hidden');
+        $('ripRawBtn').classList.toggle('hidden', !window._ripRaw || window._ripRaw === window._ripScript);
+        $('ripRawBtn').textContent = '📃 원문(교정 전) 보기';
+        const nLines = window._ripScript.split('\\n').filter(x => x.trim()).length;
+        $('ripStatus').textContent = '✅ 대본을 따왔어요 — ' + nLines + '문장' + (j.tts_warn ? ' · ' + j.tts_warn : '');
+      } else {
+        $('ripStatus').textContent = '';
+        alert('대본 따오기 실패: ' + ((j.errors || [])[0] || '알 수 없는 오류'));
+      }
+    } catch(e){ /* 폴링 오류는 다음 틱에 재시도 */ }
+  }, 800);
+}
+function toggleRipRaw(ev){
+  ev.preventDefault();
+  window._ripShowRaw = !window._ripShowRaw;
+  $('ripOut').value = window._ripShowRaw ? (window._ripRaw || '') : (window._ripScript || '');
+  ev.target.textContent = window._ripShowRaw ? '🪄 교정본 보기' : '📃 원문(교정 전) 보기';
+}
+function sendRip(ev, to){
+  ev.preventDefault();
+  const txt = $('ripOut').value.trim();
+  if(!txt){ alert('보낼 대본이 없습니다'); return; }
+  if(to === 'sections'){
+    openMode('sections');
+    const box = $('secScriptBox'); if(box) box.open = true;
+    $('secScriptText').value = txt;
+    uiBanner('🎞 대본을 구간 카드에 넣었어요 — [✂️ 구간 자동 나누기]를 누르면 구간이 채워져요');
+  } else {
+    openMode('gen');
+    $('genScript').value = txt;
+    uiBanner('🤖 대본을 AI 영상 카드에 넣었어요 — 한 줄이 자막 한 개가 돼요');
+  }
+}
+function downloadRip(ev){
+  ev.preventDefault();
+  const txt = $('ripOut').value;
+  if(!txt.trim()){ alert('저장할 대본이 없습니다'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\\ufeff' + txt], {type:'text/plain;charset=utf-8'}));
+  a.download = '대본.txt'; a.click();
 }
 function markMyVoice(){
   for(const id of ['myVoiceState', 'myVoiceStateNarr', 'homeVoiceState']){
