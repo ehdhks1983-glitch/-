@@ -10,6 +10,8 @@ v0.46.1부터는 TTS 합성 직전에도 자동 적용된다(자막은 원문 �
   - 고유어 수사(native): 개·명·살·번·시·마리·가지 등 → 열두시, 스물한살 (1~99)
   - 소수: 3.5 → 삼점오
   - 영어 대문자 약어(2자 이상): AI → 에이아이, SNS → 에스엔에스
+  - 기술 용어 사전(대소문자 무관, v1.03): gif/GIF → 지아이에프, mp3 → 엠피쓰리,
+    wifi → 와이파이 — "지프"처럼 영어 단어로 읽어버리는 오독 방지 (한국식 이니셜)
 """
 
 from __future__ import annotations
@@ -86,6 +88,24 @@ _LETTER_KO = {
     "U": "유", "V": "브이", "W": "더블유", "X": "엑스", "Y": "와이", "Z": "제트",
 }
 
+# 🔤 자주 쓰는 기술 용어 — 대소문자 무관 한국식 읽기 (v1.03, 사용자 리포트
+# "GIF를 지프라고 읽어" — 소문자 gif·숫자 섞인 mp3는 대문자 약어 규칙이 못 잡음)
+_TECH_TERMS = {
+    "gif": "지아이에프", "jpeg": "제이페그", "jpg": "제이피지", "png": "피엔지",
+    "mp3": "엠피쓰리", "mp4": "엠피포", "url": "유알엘", "pdf": "피디에프",
+    "usb": "유에스비", "cpu": "씨피유", "gpu": "지피유", "qr": "큐알",
+    "ocr": "오씨알", "api": "에이피아이", "sns": "에스엔에스", "ssd": "에스에스디",
+    "hdd": "에이치디디", "wi-fi": "와이파이", "wifi": "와이파이", "tv": "티브이",
+    "ip": "아이피", "id": "아이디", "ai": "에이아이", "pc": "피씨",
+    "ceo": "씨이오", "diy": "디아이와이",
+}
+_RE_TECH = re.compile(
+    r"(?<![A-Za-z0-9])("
+    + "|".join(sorted(map(re.escape, _TECH_TERMS), key=len, reverse=True))
+    + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
 # 개월은 사이노(삼 개월)라 고유어 목록에서 우선 분리 처리
 # \b는 한글 앞뒤에서 성립하지 않으므로("AI가") 영문자 인접만 배제하는 룩어라운드 사용
 _RE_ACRONYM = re.compile(r"(?<![A-Za-z])[A-Z]{2,}(?![A-Za-z])")
@@ -106,6 +126,9 @@ def pronounce_ko(text: str) -> str:
     """문장 속 숫자·단위·영문 약어를 한글 발음 표기로 치환."""
     out = text
 
+    # 기술 용어 사전이 대문자 약어 규칙보다 먼저 — mp3=엠피쓰리(엠피삼 방지),
+    # 소문자 gif도 지아이에프 (한국식 이니셜 읽기, 사용자 리포트)
+    out = _RE_TECH.sub(lambda m: _TECH_TERMS[m.group(1).lower()], out)
     out = _RE_ACRONYM.sub(lambda m: "".join(_LETTER_KO[c] for c in m.group(0)), out)
 
     def decimal_unit(m):
