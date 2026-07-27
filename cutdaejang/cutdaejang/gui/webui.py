@@ -1951,7 +1951,8 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         params = dict(params)
         params["hook"] = hook_txt          # 렌더·재사용 지문·재편집 모두 확정값 사용
         common_fp = (f"{style!r}|{layout}|{quality}|{voice}|{list(chain)}|{piece_us}"
-                     f"|{params.get('hook') or ''}")   # 🪝 훅 바뀌면 재사용 안 함 (v0.96)
+                     f"|{params.get('hook') or ''}|bed1")  # bed1: v1.00 무음 구간 렌더
+        # (🪝 훅 바뀌면 재사용 안 함 v0.96 · bed1 마커로 내레이션 구운 옛 구간 재사용 차단)
 
         def _sec_fp(sec_d: dict, rng: str) -> str:
             key = json.dumps({"n": sec_d.get("narration"),
@@ -1996,16 +1997,18 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 prev_file = (prev_dir / f"sec_{i}.mp4") if prev_dir else None
                 p["reuse"] = bool(prev_meta.get(str(i)) == p["fp"]
                                   and prev_file and prev_file.is_file())
-                if not p["reuse"]:
-                    lines = [ln.strip() for ln in str(sec["narration"]).splitlines()
-                             if ln.strip()]
-                    p["lines"] = split_long_sentences(  # 🛡 자막 2줄 안전장치 (v0.77)
-                        Script(title="", sentences=lines),
-                        limit=max(8, wrap * 2)).sentences
+                # v1.00: 재사용 구간도 대본은 합성 목록에 넣는다 — 내레이션은 이제
+                # 합본 위에 한 트랙으로 얹으므로(사용자 제안 구조) 모든 구간의
+                # 문장 클립이 필요하다. 같은 문장·목소리는 TTS 캐시 적중이라 빠름.
+                lines = [ln.strip() for ln in str(sec["narration"]).splitlines()
+                         if ln.strip()]
+                p["lines"] = split_long_sentences(  # 🛡 자막 2줄 안전장치 (v0.77)
+                    Script(title="", sentences=lines),
+                    limit=max(8, wrap * 2)).sentences
             except Exception as pe:  # noqa: BLE001 — 이 구간만 실패, 나머지는 계속
                 p["err"] = str(pe)[:200]
             plan.append(p)
-        to_synth = [p for p in plan if not p["err"] and not p["reuse"] and p["lines"]]
+        to_synth = [p for p in plan if not p["err"] and p["lines"]]
         clip_slices = {}
         if to_synth:
             all_lines = [ln for p in to_synth for ln in p["lines"]]
@@ -2035,6 +2038,13 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                     job_dir.mkdir(parents=True, exist_ok=True)
                     dst = job_dir / f"sec_{i}.mp4"
                     shutil.copy2(prev_dir / f"sec_{i}.mp4", dst)
+                    # v1.00: 재사용 구간도 내레이션 베드에 실을 자막·클립은 준비
+                    clips_r = clip_slices.get(i) or []
+                    subs0_r = edit_mode.dicts_to_subtitles(
+                        [{"text": t, "start_us": 0, "end_us": 1_000} for t in p["lines"]])
+                    subs_r, clips2_r, _ = edit_mode.retime_narration(
+                        clips_r, subs0_r, 0, job_dir, fit="freeze")
+                    p["bed"] = (list(clips2_r), list(subs_r))
                     outs.append(str(dst))
                     out_titles.append((str(sec.get("title") or "").strip() or f"구간 {i}"))
                     fps_meta[str(i)] = fp
@@ -2093,20 +2103,21 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 elif dur < narr_end:                 # 짧으면 마지막 장면 정지로 연장
                     cut = video_editor.extend_video(
                         video, narr_end, str(job_dir / f"sec_{i}_ext.mp4"))
-                cut_us = ff.probe_duration_us(cut)
-                narr_wav = edit_mode.build_narration_wav(
-                    clips2, subs, max(cut_us, narr_end), job_dir / f"sec_{i}_narr.wav")
                 _set_job(job_id, stage="render", frac=base + 0.4 / n,
-                         note=f"🎞 구간 {i}/{n} — 자막·목소리 입혀 렌더 중…")
+                         note=f"🎞 구간 {i}/{n} — 자막 입혀 렌더 중…")
+                # 🎙 v1.00 (사용자 제안 구조): 구간엔 내레이션을 굽지 않는다 —
+                # 영상을 전부 합친 뒤 전체 타임라인 위에 한 트랙으로 얹어,
+                # 구간 경계에서 목소리가 끊기거나 톤이 리셋될 여지를 없앤다.
                 r = edit_mode.render_from_analysis(
                     cut, subs, str(job_dir / f"sec_{i}.mp4"), style=style, layout=layout,
                     hook=str(params.get("hook") or ""),   # 🪝 훅 제목 (v0.96 — 카드 공통)
-                    quality=quality, narration_wav=str(narr_wav),
+                    quality=quality, narration_wav=None,
                     orig_audio="mute",
                     progress_cb=lambda f, b=base: _set_job(
                         job_id, frac=min(0.97, b + (0.4 + f * 0.6) / n)))
                 if not r.ok:
                     raise RuntimeError("; ".join(r.errors) or "렌더 실패")
+                p["bed"] = (list(clips2), list(subs))   # 합본 내레이션 베드 재료
                 outs.append(str(job_dir / f"sec_{i}.mp4"))
                 out_titles.append((str(sec.get("title") or "").strip() or f"구간 {i}"))
                 fps_meta[str(i)] = fp     # ♻ 다음 "다시 편집" 때 재사용 판별용 (v0.85)
@@ -2130,13 +2141,41 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         fade = video_editor.xfade_clamp(sec_xfade, durs)
         final = outs[0]
         if len(outs) > 1:
-            # 🔊 v0.99: 패딩(v0.94) 제거 — 이음새마다 1.5초 죽은 공백을 만들었다
-            # (사용자 영상 실측: 문장 쉼 0.45초의 3배). concat_videos가 소리를
-            # 페이드 없이 제자리 겹침(amix)하므로 말이 깎일 일 자체가 없어졌고,
-            # 경계 쉼은 구간 꼬리 여백(0.7초)−겹침(0.45초)≈문장 쉼 수준이 된다.
             final = video_editor.concat_videos(
                 outs, str(job_dir / "sections_final.mp4"), size=(cw, ch),
                 crossfade_s=fade, transition=transition)
+        # 🎙 v1.00 (사용자 제안 구조): "영상을 다 합치고 → 그다음에 내레이션".
+        # 구간 파일은 전부 무음(화면·자막만)이라 경계에서 말이 잘리거나 톤이
+        # 리셋될 소리 자체가 없고, 목소리는 합본 전체 타임라인 위에 '한 트랙'
+        # 으로 한 번만 얹는다. 구간 k의 절대 시작 시각 = Σ(앞 구간 길이 − 전환 겹침).
+        all_clips, abs_subs, off = [], [], 0.0
+        for k, p in enumerate([q for q in plan if "bed" in q]):
+            clips_b, subs_b = p["bed"]
+            shift = int(off * 1e6)
+            abs_subs += [dataclasses.replace(s, start_us=s.start_us + shift,
+                                             end_us=s.end_us + shift)
+                         for s in subs_b]
+            all_clips += list(clips_b)
+            off += durs[k] - (fade if k < len(outs) - 1 else 0.0)
+        if all_clips:
+            _set_job(job_id, frac=0.975, note="🎙 합본 위에 내레이션을 한 트랙으로 얹는 중…")
+            try:
+                total_us = ff.probe_duration_us(final)
+                bed_wav = edit_mode.build_narration_wav(
+                    all_clips, abs_subs, total_us, job_dir / "narration_bed.wav")
+                voiced = str(job_dir / "sections_voiced.mp4")
+                ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+                        "-i", str(final), "-i", str(bed_wav),
+                        "-filter_complex",
+                        "[1:a]aresample=44100,aformat=channel_layouts=stereo[nb];"
+                        "[0:a][nb]amix=inputs=2:duration=first:normalize=0[a]",
+                        "-map", "0:v", "-map", "[a]", "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+                        voiced])
+                final = voiced
+            except Exception as be:  # noqa: BLE001 — 실패해도 무음 합본은 살린다
+                logging.getLogger("cutdaejang").error("내레이션 얹기 실패: %s", be)
+                errors.append(f"내레이션 얹기 실패: {str(be)[:200]}")
         if (params.get("bgm") or "").strip():        # 🎵 BGM은 최종 합본에 1회 (덕킹)
             b = resolve_bgm(params["bgm"], settings)
             if b and b.path:
@@ -2169,8 +2208,9 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             title=(_get_job(job_id) or {}).get("title") or "🎞 구간 대본 영상",
             mode="sections", status=("ok" if not errors else "partial"),
             mp4=final, params=params, duration_us=int(total_s * 1e6))
+        # v1.00: 구간별 파일(sec_N.mp4)은 무음 중간산출물이라 다운로드 목록에서 제외
         _set_job(job_id, status=("ok" if not errors else "partial"), stage="done",
-                 frac=1.0, mp4=final, mp4s=[final] + (outs if len(outs) > 1 else []),
+                 frac=1.0, mp4=final, mp4s=[final],
                  chapters=("\n".join(chap_lines) if len(chap_lines) > 1 else ""),
                  note="", tts_warn=" · ".join([msg] + notes + errors))
     except Exception as e:
@@ -4176,7 +4216,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.99.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.00.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
