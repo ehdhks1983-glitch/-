@@ -1921,7 +1921,8 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         # 않고 결과를 복사. "다시 편집"에서 한 구간만 고치면 그 구간만 재제작된다.
         import hashlib as _hl  # noqa: PLC0415
         import shutil  # noqa: PLC0415
-        common_fp = f"{style!r}|{layout}|{quality}|{voice}|{list(chain)}|{piece_us}"
+        common_fp = (f"{style!r}|{layout}|{quality}|{voice}|{list(chain)}|{piece_us}"
+                     f"|{params.get('hook') or ''}")   # 🪝 훅 바뀌면 재사용 안 함 (v0.96)
 
         def _sec_fp(sec_d: dict, rng: str) -> str:
             key = json.dumps({"n": sec_d.get("narration"),
@@ -2068,7 +2069,8 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                          note=f"🎞 구간 {i}/{n} — 자막·목소리 입혀 렌더 중…")
                 r = edit_mode.render_from_analysis(
                     cut, subs, str(job_dir / f"sec_{i}.mp4"), style=style, layout=layout,
-                    hook="", quality=quality, narration_wav=str(narr_wav),
+                    hook=str(params.get("hook") or ""),   # 🪝 훅 제목 (v0.96 — 카드 공통)
+                    quality=quality, narration_wav=str(narr_wav),
                     orig_audio="mute",
                     progress_cb=lambda f, b=base: _set_job(
                         job_id, frac=min(0.97, b + (0.4 + f * 0.6) / n)))
@@ -4146,7 +4148,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.95.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.96.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5076,10 +5078,26 @@ _HTML = """<!doctype html>
       <div class="steplabel"><span class="stepnum">3</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄 = 사진 한 장 타이밍. AI 목소리가 읽어요</span></div>
       <textarea id="wlScript" style="min-height:110px"></textarea>
       <div class="chk" style="gap:8px"><span>훅 제목</span><input type="text" id="wlHook" style="flex:1" placeholder="영상 상단에 크게 붙는 제목"></div>
-      <div class="chk" style="gap:8px">
+      <div class="chk" style="gap:8px;flex-wrap:wrap">
         <span>목소리</span>
         <select id="wlVoiceSel" style="width:auto;min-width:200px"></select>
-        <span class="hint">— 🎙 AI 내레이션과 같은 목록 (제미나이 키가 있어야 적용)</span>
+        <span>배경음악</span>
+        <select id="wlBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
+        <span class="hint">— 🎙 AI 내레이션과 같은 목록 (제미나이 키가 있어야 목소리 적용)</span>
+      </div>
+      <div class="chk" style="gap:10px;flex-wrap:wrap">
+        <span>화면 비율</span>
+        <select id="wlOrientSel" style="width:auto">
+          <option value="shorts">📱 세로 쇼츠 (9:16)</option>
+          <option value="wide">🖥 가로 (16:9)</option>
+        </select>
+        <span>화질</span>
+        <select id="wlQualitySel" style="width:auto">
+          <option value="draft">빠름 (초안)</option>
+          <option value="standard" selected>표준 (1080p)</option>
+          <option value="high">고화질</option>
+          <option value="ultra">초고화질 (4K)</option>
+        </select>
       </div>
       <details class="opt" id="wlDecoBox">
         <summary>🎨 꾸미기 <span class="hint">— 감성 테마·자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
@@ -5169,6 +5187,17 @@ _HTML = """<!doctype html>
         <option value="fadeblack">암전 (어두워졌다 밝게)</option>
         <option value="none">컷 (전환 없음)</option>
       </select>
+      <span style="margin-left:6px">화질</span>
+      <select id="secQualitySel" style="width:auto;padding:6px 8px">
+        <option value="draft">빠름 (초안)</option>
+        <option value="standard" selected>표준 (1080p)</option>
+        <option value="high">고화질</option>
+        <option value="ultra">초고화질 (4K)</option>
+      </select>
+    </div>
+    <div class="chk" style="gap:8px">
+      <span>훅 제목</span>
+      <input type="text" id="secHook" style="flex:1" placeholder="(선택) 영상 상단에 계속 크게 붙는 제목 — 비우면 없음">
     </div>
     <details class="opt" id="secDecoBox">
       <summary>🎨 꾸미기 <span class="hint">— 자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
@@ -5259,6 +5288,16 @@ _HTML = """<!doctype html>
       <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:4px">
         <span>목소리</span><select id="shopVoiceSel" style="width:auto;min-width:180px"></select>
         <span>배경음악</span><select id="shopBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
+        <span>비율</span><select id="shopOrientSel" style="width:auto">
+          <option value="shorts">📱 쇼츠 (9:16)</option>
+          <option value="wide">🖥 가로 (16:9)</option>
+        </select>
+        <span>화질</span><select id="shopQualitySel" style="width:auto">
+          <option value="draft">빠름 (초안)</option>
+          <option value="standard" selected>표준 (1080p)</option>
+          <option value="high">고화질</option>
+          <option value="ultra">초고화질 (4K)</option>
+        </select>
       </div>
       <details class="opt" id="shopDecoBox">
         <summary>🎨 꾸미기 <span class="hint">— 감성 테마·자막·제목 스타일·화면 톤</span></summary>
@@ -8373,7 +8412,8 @@ async function startShop(){
   const body = {
     photo_path: imgs.join(';'),
     photo_sec: Math.max(10, Math.min(180, Math.round(lines.length * 4))),
-    layout: 'shorts', quality: 'standard',
+    layout: ($('shopOrientSel')||{}).value || 'shorts',        // 📐 비율 (v0.96)
+    quality: ($('shopQualitySel')||{}).value || 'standard',    // 🖼 화질 (v0.96)
     script: lines.join(NL), script_tts: true,
     hook: ($('shopHook')||{}).value || '',
     narr_voice: ($('shopVoiceSel')||{}).value || '',
@@ -8504,6 +8544,13 @@ function initWeblinkCard(){
     wl.innerHTML = nv.innerHTML;
     wl.value = [...wl.options].some(o => o.value === cur) && cur ? cur : nv.value;
   }
+  // 🎵 배경음악 목록 — 편집 폼과 동일 (무료 BGM 받으면 여기도 뜸) (v0.96)
+  const bg = $('bgmEditSel'), wb = $('wlBgmSel');
+  if(bg && wb && bg.options.length && wb.options.length !== bg.options.length){
+    const cur = wb.value;
+    wb.innerHTML = bg.innerHTML;
+    wb.value = [...wb.options].some(o => o.value === cur) ? cur : '';
+  }
   // 🎨 꾸미기 — 편집 폼의 스타일 옵션·기억값 복제 (v0.81)
   cloneSelect('editSubStyleSel', 'wlSubStyleSel');
   cloneSelect('hookStyleSel', 'wlHookStyleSel');
@@ -8561,12 +8608,13 @@ async function startWeblink(){
   const body = {
     photo_path: imgs.join(';'),
     photo_sec: Math.max(10, Math.min(180, Math.round(lines.length * 4))),
-    layout: 'shorts', quality: 'standard',
+    layout: ($('wlOrientSel')||{}).value || 'shorts',          // 📐 비율 (v0.96)
+    quality: ($('wlQualitySel')||{}).value || 'standard',      // 🖼 화질 (v0.96)
     script: lines.join(NL), script_tts: true,      // 🔊 대본을 목소리로
     hook: ($('wlHook')||{}).value || '',
     narr_voice: ($('wlVoiceSel')||{}).value || '',
     auto_subtitle: false, cut_silence: false,
-    bgm: ($('bgmEditSel')||{}).value || '',        // 편집 폼에서 고른 BGM 있으면 같이
+    bgm: ($('wlBgmSel')||{}).value || '',          // 🎵 카드 안 배경음악 선택 (v0.96)
     sub_style: ($('wlSubStyleSel')||{}).value || '',   // 🎨 꾸미기 (v0.81)
     hook_style: ($('wlHookStyleSel')||{}).value || '',
     sub_font: ($('wlSubFontSel')||{}).value || '',
@@ -8777,6 +8825,8 @@ function collectSecDraft(){
     src_mode: pick('secSrcMode') || 'full',
     full_video: (($('secFullPath')||{}).value || '').trim(),
     layout: pick('secLayout') || 'wide',
+    hook: ($('secHook')||{}).value || '',                      // 🪝 훅 제목 (v0.96)
+    quality: ($('secQualitySel')||{}).value || 'standard',     // 🖼 화질 (v0.96)
     narr_voice: (($('secVoiceSel')||{}).value || ''),
     tempo: (($('secTempoSel')||{}).value || ''),
     bgm: (($('secBgmSel')||{}).value || ''),
@@ -9003,6 +9053,8 @@ async function startSections(){
     transition: ($('secXfadeSel')||{}).value || '',   // 🎬 구간 전환 종류 (v0.85)
     reuse_job: window._secReuseJob || '',             // ♻ 바뀐 구간만 재제작 (v0.85)
     layout: pick('secLayout') || 'wide',
+    hook: ($('secHook')||{}).value || '',                      // 🪝 훅 제목 (v0.96)
+    quality: ($('secQualitySel')||{}).value || 'standard',     // 🖼 화질 (v0.96)
     quality: 'standard',
     narr_voice: ($('secVoiceSel')||{}).value || '',
     tempo: ($('secTempoSel')||{}).value || '',
@@ -9255,9 +9307,11 @@ async function poll(){
   updateLogs(state.logs);
   renderJobsBar(state.jobs || []);   // 📋 진행·대기 목록 (v0.88)
   syncParallelSel(state);            // 🔀 동시 개수 셀렉트 동기화 (v0.90)
-  // 🎙 쇼핑 카드 목소리·BGM — 목록이 늦게 로드돼도 계속 동기화 (v0.93 버그 수정:
-  // 카드를 목록 로드 전에 열면 목소리가 빈 채로 남던 문제. initShopCard는 멱등)
+  // 🎙 카드별 목소리·BGM — 목록이 늦게 로드돼도 계속 동기화 (v0.93 버그 수정,
+  // v0.96 블로그·구간 카드로 확대: init 함수들은 전부 멱등이라 매번 불러도 안전)
   if(window._view === 'shop') initShopCard();
+  else if(window._view === 'weblink') initWeblinkCard();
+  else if(window._view === 'sections') initSectionCard();
   if(!currentJob) return;
   const job = state.jobs.find(j => j.id === currentJob);
   if(!job) return;
