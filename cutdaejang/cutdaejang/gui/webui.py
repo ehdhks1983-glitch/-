@@ -1611,6 +1611,12 @@ def _kit_text(kit: dict, title: str) -> str:
     lines += ["", "── 설명문 (설명란에 그대로 붙여넣기) ──", kit.get("description", "")]
     lines += ["", "── 태그 (태그란에 통째로 붙여넣기) ──", ", ".join(kit.get("tags", []))]
     lines += ["", "── 핵심 키워드 10 ──", " · ".join(kit.get("keywords", []))]
+    if kit.get("niche_keywords"):  # 🎯 작은 채널 노출 시작점 (v1.02)
+        lines += ["", "── 🎯 틈새 검색어 (작은 채널은 여기서 노출이 시작돼요) ──",
+                  " · ".join(kit["niche_keywords"])]
+    if kit.get("pinned_comment"):
+        lines += ["", "── 📌 고정 댓글 (업로드 직후 내 댓글로 달고 [고정]) ──",
+                  kit["pinned_comment"]]
     lines += ["", "── 카테고리 ──",
               f"{kit.get('category', '')} — {kit.get('category_reason', '')}"]
     tk = kit.get("tiktok") or {}
@@ -3763,7 +3769,8 @@ class _Handler(BaseHTTPRequestHandler):
             if os.environ.get("GEMINI_API_KEY"):
                 kit = sg.suggest_upload_kit(
                     frames, transcript, duration_s=dur_s, is_shorts=is_shorts,
-                    hook=hook or title, channel=channel)
+                    hook=hook or title, channel=channel,
+                    stage=str(channel.get("stage") or ""))  # 📈 채널 단계 전략 (v1.02)
             else:
                 kit = sg.suggest_upload_kit_stub(transcript, hook or title,
                                                  is_shorts=is_shorts)
@@ -4317,7 +4324,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.01.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.02.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5720,7 +5727,14 @@ _HTML = """<!doctype html>
           </div>
           <textarea id="kitTags" style="min-height:48px;margin-top:4px"></textarea>
           <div class="hint" id="kitKeywords" style="margin-top:8px"></div>
+          <div class="hint" id="kitNiche" style="margin-top:4px;color:#ffd97a"></div>
           <div class="hint" id="kitCategory" style="margin-top:4px"></div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+            <b style="font-size:13px">📌 고정 댓글</b>
+            <span class="hint">(업로드 직후 내 계정으로 달고 <b>[고정]</b> — 초기 댓글·참여가 노출을 밀어줘요)</span>
+            <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitPinned')">📋 복사</button>
+          </div>
+          <textarea id="kitPinned" style="min-height:44px;margin-top:4px"></textarea>
 
           <details class="opt" style="margin-top:10px">
             <summary>🎵 틱톡 <span class="hint">— 캡션+해시태그 (150자·태그 3~5개)</span>
@@ -5757,6 +5771,12 @@ _HTML = """<!doctype html>
           </details>
 
           <div class="hint" id="kitChecklist" style="white-space:pre-line;margin-top:8px;color:#cdd3e0"></div>
+          <div class="guide" id="kitAlgoTips" style="margin-top:8px">📈 <b>조회수가 안 나올 때 — 문구 밖 4가지가 더 큽니다</b><br>
+            ① <b>첫 1초</b>: 화면+첫마디에서 멈추게 해야 해요 — 훅 제목·강한 첫 장면 활용<br>
+            ② <b>완주율</b>: 쇼츠는 30초 안쪽이 유리 — 끝까지 보게 군더더기를 잘라내세요<br>
+            ③ <b>꾸준함</b>: 같은 주제(니치)로 매일 1개, 최소 2~4주 — 알고리즘이 채널 주제를 학습할 시간이 필요해요<br>
+            ④ <b>초기 참여</b>: 위 📌 고정 댓글을 달고, 시청자가 많은 시간대(점심 12시·저녁 19~22시)에 올리세요<br>
+            <span class="hint">채널 단계(⚙ 설정 → 내 채널 정보)를 맞춰두면 키워드 전략이 채널 크기에 맞게 나와요</span></div>
           <div class="hint" id="kitPath" style="margin-top:8px"></div>
           <button class="ghost" style="margin-top:8px" onclick="makeKit(event)">🔄 다시 만들기</button>
         </div>
@@ -5952,6 +5972,15 @@ _HTML = """<!doctype html>
         <div><label>채널명</label><input type="text" id="setChName" placeholder="예) 곰대리의 자동화"></div>
         <div><label>채널 주제</label><input type="text" id="setChTopic" placeholder="예) 블로그·유튜브 자동화 꿀팁"></div>
         <div><label>타깃 시청자</label><input type="text" id="setChAudience" placeholder="예) 부업 시작하는 3040 직장인"></div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <div><label>📈 채널 단계 <span class="hint">— 업로드 키트의 키워드 전략이 여기에 맞춰져요</span></label>
+          <select id="setChStage">
+            <option value="">선택 안 함</option>
+            <option value="신규">🌱 신규 — 구독 1천 미만 (틈새 검색어 올인)</option>
+            <option value="성장">🚀 성장 중 — 1천~1만 (틈새 7 : 대중 3)</option>
+            <option value="정착">🏆 자리 잡음 — 1만+ (대중 키워드 확대)</option>
+          </select></div>
       </div>
       <div class="row" style="margin-top:6px">
         <div><label>🎞 인트로 파일 <span class="hint">(영상 또는 사진 — 사진은 2.5초)</span></label>
@@ -7718,6 +7747,11 @@ function renderKit(data){
   $('kitThreads').value = th.post
     ? (th.post + (th.topic ? (NL + NL + th.topic) : '')) : '';   // 토픽은 맨 아랫줄 (라벨 없음)
   $('kitKeywords').innerHTML = '<b>🔑 키워드 10:</b> ' + escHtml((kit.keywords || []).join(' · '));
+  // 🎯 틈새 롱테일 검색어 + 📌 고정 댓글 (v1.02 — 작은 채널 노출 전략)
+  if($('kitNiche')) $('kitNiche').innerHTML = (kit.niche_keywords || []).length
+    ? '<b>🎯 틈새 검색어(노출 시작점):</b> ' + escHtml(kit.niche_keywords.join(' · '))
+    : '';
+  if($('kitPinned')) $('kitPinned').value = kit.pinned_comment || '';
   $('kitCategory').innerHTML = '<b>📂 카테고리:</b> ' + escHtml(kit.category || '') +
     (kit.category_reason ? (' — ' + escHtml(kit.category_reason)) : '');
   $('kitChecklist').textContent = (kit.checklist || []).map(c => '□ ' + c)
@@ -8067,6 +8101,7 @@ function fillSettings(s){
   $('setChName').value = ch.name || '';
   $('setChTopic').value = ch.topic || '';
   $('setChAudience').value = ch.audience || '';
+  $('setChStage').value = ch.stage || '';        // 📈 채널 단계 (v1.02)
   const br = s.branding || {};
   $('setIntroPath').value = br.intro || '';
   $('setOutroPath').value = br.outro || '';
@@ -8153,7 +8188,7 @@ async function saveSettings(){
     tts: {rpm_limit: +$('setRpm').value, windows_rate: +$('setWinRate').value,
           windows_voice: $('setWinVoice').value},
     channel: {name: $('setChName').value.trim(), topic: $('setChTopic').value.trim(),
-              audience: $('setChAudience').value.trim()},
+              audience: $('setChAudience').value.trim(), stage: $('setChStage').value},
     branding: {intro: $('setIntroPath').value.trim(), outro: $('setOutroPath').value.trim()},
   }};
   const data = await (await fetch('/api/settings', {method:'POST', body: JSON.stringify(body)})).json();

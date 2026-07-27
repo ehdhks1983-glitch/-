@@ -899,30 +899,46 @@ YT_CATEGORIES = (
     "자동차", "반려동물/동물",
 )
 
-UPLOAD_KIT_PROMPT = """너는 한국 숏폼 SEO·업로드 전문가다. 아래 영상의 장면 캡처{with_tr}를 보고,
-유튜브·틱톡·인스타그램 릴스·네이버 클립·스레드에 그대로 붙여넣을 업로드 문구를 만든다.
-{channel}
+UPLOAD_KIT_PROMPT = """너는 한국 숏폼 알고리즘·검색(SEO) 전문가다. 아래 영상의 장면 캡처{with_tr}를 보고,
+유튜브·틱톡·인스타그램 릴스·네이버 클립·스레드 각각의 알고리즘에 맞춘 업로드 문구를 만든다.
+{channel}{stage}
 [영상 정보] 길이 {dur}초 · 형태: {shape}{hook}
 {transcript}
 
-규칙 (2026 플랫폼 권장 반영):
-[유튜브]
-- titles: 3~5개, 각 40~60자 지향(모바일 잘림 방지). 핵심 검색어를 앞쪽에, 궁금증 유발. 낚시 금지.
+⚠ 전 플랫폼 공통 원칙 (조회수 안 나오는 채널의 1순위 원인 교정):
+- "꿀팁·정리·레전드·대박·필수" 같은 범용 단어만으로 된 제목·태그 금지 — 경쟁이 심해
+  작은 채널은 노출 자체가 안 된다. 반드시 이 영상의 구체어(제품·상황·문제·대상)를 쓴다.
+- 노출의 시작은 틈새 검색어(롱테일): 사람들이 실제 검색창에 치는 문장형 표현
+  ("○○ 안될 때", "○○ 처음 하는 법", "○○ vs △△", "○○ 가격")을 파고든다.
+- 영상에 없는 내용으로 낚지 않는다 — 낚시는 초반 이탈을 낳아 알고리즘 점수를 깎는다.
+
+[유튜브 — 노출 = ① 추천 피드에서 안 넘기고 보게 ② 검색·연관 동영상 유입]
+- titles: 정확히 4개, 각 40~60자. ① 틈새 검색어로 시작하는 검색형 ② 구체적 숫자·결과 제시형
+  ③ 내용 기반 궁금증형 ④ 타깃 호명형("○○ 하는 분만"). 핵심 검색어는 앞 20자 안에(모바일 잘림).
 - title_tags: 제목 뒤에 붙일 짧은 해시태그 2~3개(각 8자 이내 단어, ＃ 없이) —
   제목과 합쳐 100자를 넘지 않게.
-- description: 첫 125자 안에 핵심 키워드 + 클릭을 부르는 문장(검색 미리보기 노출 구간),
+- description: 첫 125자 안에 핵심 검색어 2개가 자연스럽게 든 요약(검색 미리보기 노출 구간),
   이어서 내용 요약 2~3문장, 마지막 줄에 해시태그 3개. 전체 500자 이내. 이모지 1~3개.
-- tags: 유튜브 스튜디오 태그란용 구체적 검색어 15~20개 (전체 400자 이내).
+- tags: 유튜브 스튜디오 태그란용 15~20개 (전체 400자 이내) — 구체 검색어 위주(범용 단어 3개 이하),
+  자주 틀리는 표기·동의어 변형 포함.
 - keywords: 핵심 검색 키워드 정확히 10개.
+- niche_keywords: 틈새 롱테일 검색어 5~8개 — 실제 검색창에 칠 법한 문장형(조사 최소화).
+  제목·태그·설명에 우선 배치한 그 표현들을 그대로 모은다.
+- pinned_comment: 업로드 직후 창작자가 직접 달아 [고정]할 댓글 1개(80자 이내) —
+  시청자가 한 단어로도 답할 수 있는 구체 질문. 초기 댓글·참여 신호가 노출을 밀어준다.
 - hashtags: 설명문 마지막 줄용 3개(＃ 없이 단어만). 쇼츠면 첫 번째는 반드시 "Shorts".
 - category: 다음 중 정확히 하나만 — {cats}
-[틱톡] tiktok.caption: 150자 이내, 밝고 가벼운 해요체(존댓말) — 반말 금지 (예: "~해요", "~예요", "~해보세요").
-  핵심 키워드를 문장에 자연스럽게, 이모지 1~2개, 행동 유도 1개.
-  tiktok.hashtags: 3~5개(넓은 태그 2~3 + 틈새 태그 1~2, ＃ 없이. fyp·viral 같은 무의미 태그 금지)
-[인스타그램 릴스] instagram.caption: 친근한 해요체. 첫 줄은 125자 안에 끝나는 훅, 빈 줄 하나, 본문 2~3줄 + 행동 유도.
-  instagram.hashtags: 3~5개(＃ 없이)
-[네이버 클립] naver_clip.title: 검색형 제목 30자 이내(핵심 키워드를 맨 앞에).
-  naver_clip.tags: 10~12개(대중 태그 + 틈새 태그 조합, ＃ 없이)
+[틱톡 — 캡션·화면 텍스트가 검색에 그대로 인덱싱된다 (틱톡 SEO)]
+  tiktok.caption: 150자 이내, 밝고 가벼운 해요체(존댓말) — 반말 금지 (예: "~해요", "~예요", "~해보세요").
+  검색어가 든 문장을 캡션 앞부분에 자연스럽게, 이모지 1~2개, 행동 유도 1개.
+  tiktok.hashtags: 3~5개(넓은 태그 1~2 + 틈새 태그 2~3, ＃ 없이. fyp·viral 같은 무의미 태그 금지)
+[인스타그램 릴스 — 캡션 텍스트가 인스타 검색에 인덱싱된다]
+  instagram.caption: 친근한 해요체. 첫 줄은 125자 안에 끝나는 훅(검색어 포함), 빈 줄 하나,
+  본문 2~3줄 + 행동 유도. instagram.hashtags: 3~5개(＃ 없이 — 과다 태그는 역효과)
+[네이버 클립 — 네이버 검색·클립 탭 노출, 태그가 검색 연결의 핵심]
+  naver_clip.title: 검색형 제목 30자 이내 — 네이버에 검색할 법한 명사구를 맨 앞에.
+  naver_clip.tags: 10~12개(＃ 없이) — 네이버 검색어 스타일 명사구, 대중 3~4 + 틈새 6~8,
+  시의성(계절·시기) 태그 1~2 포함.
   naver_clip.category1: 영상에 가장 맞는 1차 카테고리 1개 — 라이프, 뷰티, 패션, 푸드,
   여행, 건강/운동, 스포츠, 게임, 테크, 자동차, 동물, 육아, 지식/교육, 엔터테인먼트, 음악, 유머 중에서
   naver_clip.category2: 그 1차 안의 세부 주제(2차 카테고리)를 짧게 — 예: 라이프→직장인 일상, 푸드→집밥 레시피
@@ -932,16 +948,28 @@ UPLOAD_KIT_PROMPT = """너는 한국 숏폼 SEO·업로드 전문가다. 아래 
   threads.topic: 토픽 태그 딱 1개(스레드는 태그를 1개만 지원)
 JSON만 출력:
 {{"titles": ["..."], "title_tags": ["..."], "description": "...", "tags": ["..."],
-  "keywords": ["..."], "hashtags": ["..."], "category": "...", "category_reason": "한 문장",
+  "keywords": ["..."], "niche_keywords": ["..."], "pinned_comment": "...",
+  "hashtags": ["..."], "category": "...", "category_reason": "한 문장",
   "tiktok": {{"caption": "...", "hashtags": ["..."]}},
   "instagram": {{"caption": "...", "hashtags": ["..."]}},
   "naver_clip": {{"title": "...", "tags": ["..."], "category1": "...", "category2": "..."}},
   "threads": {{"post": "...", "topic": "..."}}}}"""
 
+# 📈 채널 단계별 키워드 전략 (v1.02) — "10일 올려도 조회수 0" 리포트의 핵심 교정:
+# 작은 채널이 대중 키워드로 경쟁하면 노출 자체가 없다 → 단계에 맞는 배합을 지시.
+KIT_STAGE_NOTES = {
+    "신규": ("[채널 단계] 신규(구독 1천 미만) — 대중 키워드 경쟁은 무의미하다. "
+            "제목·태그를 전부 틈새 검색어 중심으로 짜서 검색·연관 유입에 건다."),
+    "성장": ("[채널 단계] 성장 중(구독 1천~1만) — 틈새 검색어 7 : 대중 키워드 3 "
+            "비율로 섞는다."),
+    "정착": ("[채널 단계] 자리 잡음(구독 1만+) — 대중 키워드·궁금증형 제목 비중을 "
+            "높여도 노출이 붙는다."),
+}
+
 
 def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: int = 0,
                        is_shorts: bool = True, hook: str = "", channel: Optional[dict] = None,
-                       model: str = "gemini-2.5-flash", api_key=None) -> dict:
+                       stage: str = "", model: str = "gemini-2.5-flash", api_key=None) -> dict:
     """장면 캡처+대본으로 유튜브 업로드 문구(제목·설명·태그·키워드·카테고리) 생성."""
     import os  # noqa: PLC0415
 
@@ -953,9 +981,11 @@ def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: in
         ch = ("[채널 정보 — 이 채널 톤에 맞출 것] "
               f"채널명: {channel.get('name') or '-'} / 주제: {channel.get('topic') or '-'} / "
               f"타깃 시청자: {channel.get('audience') or '-'}")
+    st = KIT_STAGE_NOTES.get(str(stage or "").strip(), "")
     tr = f"[영상 속 대사]\n{transcript.strip()[:3500]}" if transcript.strip() else ""
     prompt = UPLOAD_KIT_PROMPT.format(
-        with_tr="와 대사" if tr else "", channel=ch, dur=duration_s or "?",
+        with_tr="와 대사" if tr else "", channel=ch,
+        stage=("\n" + st if st else ""), dur=duration_s or "?",
         shape=("세로 쇼츠" if is_shorts
                else "가로 롱폼 — Shorts 태그·쇼츠 표현 금지, 시청 지속(더 길게 보게) 관점으로"),
         hook=f" · 상단 제목: {hook}" if hook.strip() else "",
@@ -1001,6 +1031,10 @@ def normalize_kit(out: dict) -> dict:
         "description": str(out.get("description", ""))[:1200],
         "tags": [str(x).strip()[:30] for x in out.get("tags", []) if str(x).strip()][:20],
         "keywords": [str(x).strip() for x in out.get("keywords", []) if str(x).strip()][:10],
+        # 🎯 틈새 롱테일 검색어 + 📌 고정 댓글 (v1.02 — 작은 채널 노출 전략)
+        "niche_keywords": [str(x).strip()[:40]
+                           for x in out.get("niche_keywords", []) if str(x).strip()][:8],
+        "pinned_comment": str(out.get("pinned_comment", "")).strip()[:200],
         "hashtags": _norm_words(out.get("hashtags"), 3),
         "category": cat,
         "category_reason": str(out.get("category_reason", ""))[:200],
@@ -1036,6 +1070,9 @@ def suggest_upload_kit_stub(transcript: str = "", hook: str = "",
                      "설명", "추천", "자동화"],
             "keywords": ["가이드", "꿀팁", "하는법", "정리", "강의", "초보 가이드",
                          "추천", "자동화", "튜토리얼", "노하우"],
+            "niche_keywords": [f"{base} 처음 하는 법", f"{base} 안될 때",
+                               f"{base} 초보 가이드", f"{base} 순서"],
+            "pinned_comment": f"{base}에서 제일 막히는 부분이 어디예요? 댓글로 알려주시면 다음 영상에서 다뤄볼게요 🙌",
             "hashtags": ["꿀팁", "가이드", "정리"],
             "category": "노하우/스타일",
             "tiktok": {"caption": f"{base} 핵심 정리 — 풀버전은 유튜브에! 🔍",
@@ -1060,6 +1097,9 @@ def suggest_upload_kit_stub(transcript: str = "", hook: str = "",
                  "가이드", "추천", "자동화"],
         "keywords": ["쇼츠", "꿀팁", "하는법", "정리", "요약", "초보 가이드",
                      "추천", "자동화", "튜토리얼", "노하우"],
+        "niche_keywords": [f"{base} 하는 법", f"{base} 안될 때", f"{base} 초보",
+                           f"{base} 30초 정리"],
+        "pinned_comment": f"{base} 해보신 분 있나요? 한 줄 후기 남겨주세요 🙌",
         "hashtags": ["Shorts", "꿀팁", "정리"],
         "category": "노하우/스타일",
         "category_reason": "방법·팁을 알려주는 실용 영상이라 노하우/스타일이 적합합니다.",
