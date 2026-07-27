@@ -1800,8 +1800,19 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
             dest = Path(workdir) / "weblink" / _hl.sha1(url.encode("utf-8")).hexdigest()[:8]
             say(f"상품 사진 {len(prod['images'])}장 내려받는 중…")
             local, skipped = product_page.download_images(prod["images"], dest)
-            note = (f"🛒 상품 페이지에서 자동 수집했어요 ({prod['via']} 경로) — "
-                    f"사진 {len(local)}장" + (f", 자잘한 그림 {skipped}장 제외" if skipped else ""))
+            if local:
+                note = (f"🛒 상품 페이지에서 자동 수집했어요 ({prod['via']} 경로) — "
+                        f"사진 {len(local)}장"
+                        + (f", 자잘한 그림 {skipped}장 제외" if skipped else ""))
+            else:
+                # 🖼 글은 왔는데 사진이 0장 (v0.97) — 페이지를 열어 복사 폴백으로 연결
+                note = ("🖼 글은 가져왔는데 사진은 자동으로 못 가져왔어요 — 방금 연 "
+                        "상품 페이지에서 Ctrl+A(전체 선택) → Ctrl+C(복사) 후 이 화면에 "
+                        "Ctrl+V 하면 메인 사진들이 들어와요")
+                try:
+                    webbrowser.open(prod.get("final_url") or url)
+                except Exception:  # noqa: BLE001
+                    pass
             art = {"title": prod["title"] or "상품 소개", "text": prod["text"],
                    "images": local, "links": [url],
                    "source_url": prod.get("final_url") or url, "notes": [note]}
@@ -4148,7 +4159,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.96.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v0.97.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">

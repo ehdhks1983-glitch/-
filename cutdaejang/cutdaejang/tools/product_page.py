@@ -81,7 +81,25 @@ def _browser_candidates() -> List[str]:
     return [c for c in cands if Path(c).is_file()]
 
 
-def _browser_dump(url: str, timeout: float = 45.0) -> str:
+def _browser_args(exe: str, url: str) -> List[str]:
+    """헤드리스 실행 인자 — 반드시 전용 임시 프로필을 쓴다 (v0.97 핵심 수정).
+
+    크로미움은 같은 프로필의 브라우저가 이미 떠 있으면 새 프로세스가 기존 창에
+    신호만 보내고 즉시 종료한다 → 사용자가 엣지/크롬을 켜 둔 채면 --dump-dom이
+    빈손으로 끝났다 (사용자 리포트 "사진이 안 들어와"의 주범). 전용
+    --user-data-dir로 항상 독립 헤드리스 인스턴스를 띄운다.
+    """
+    import os  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    profile = os.path.join(tempfile.gettempdir(), "cutdaejang_headless")
+    return [exe, "--headless=new", "--disable-gpu", "--disable-extensions",
+            "--no-first-run", "--no-default-browser-check", "--mute-audio",
+            f"--user-data-dir={profile}", "--window-size=1280,2400",
+            "--virtual-time-budget=12000", "--timeout=30000", "--dump-dom", url]
+
+
+def _browser_dump(url: str, timeout: float = 50.0) -> str:
     """설치된 엣지/크롬 헤드리스로 렌더된 DOM 받기.
 
     UA를 바꾸지 않는다(HeadlessChrome으로 자신을 알림) — 사이트가 헤드리스를
@@ -89,11 +107,8 @@ def _browser_dump(url: str, timeout: float = 45.0) -> str:
     """
     for exe in _browser_candidates():
         try:
-            r = subprocess.run(
-                [exe, "--headless=new", "--disable-gpu", "--no-first-run",
-                 "--no-default-browser-check", "--mute-audio",
-                 "--virtual-time-budget=9000", "--timeout=25000", "--dump-dom", url],
-                capture_output=True, timeout=timeout)
+            r = subprocess.run(_browser_args(exe, url),
+                               capture_output=True, timeout=timeout)
             out = (r.stdout or b"").decode("utf-8", errors="replace")
             if len(out) > 3000 and "<html" in out.lower():
                 return out
@@ -180,12 +195,17 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
     except Exception:  # noqa: BLE001 — 브라우저 경로로 넘어감
         via = ""
     parsed = parse_product(html_text) if html_text else {}
-    if not (parsed and _usable(parsed)):
-        say("자동 접속이 막혔어요 — PC의 엣지/크롬으로 페이지 읽는 중… (최대 30초)")
+    # 🖼 글만 오고 사진이 0장인 경우도 브라우저로 재시도 (v0.97) — 상품 페이지는
+    # 사진을 JS로 늦게 그려서, 직접 요청 HTML엔 메인 사진 주소가 없는 일이 흔하다
+    # (사용자 리포트: "메인 썸네일만 끌어오면 되는데 사진이 안 들어와").
+    if not (parsed and _usable(parsed)) or not parsed.get("images"):
+        say("메인 사진까지 실리게 PC의 엣지/크롬으로 페이지 읽는 중… (최대 30초)")
         dumped = _browser_dump(final)
         if dumped:
-            parsed = parse_product(dumped)
-            via = "브라우저"
+            p2 = parse_product(dumped)
+            better = len(p2.get("images") or []) > len(parsed.get("images") or [])
+            if _usable(p2) and (better or not (parsed and _usable(parsed))):
+                parsed, via = p2, "브라우저"
     if not (parsed and _usable(parsed)):
         raise ShopBlockedError(
             "쇼핑몰이 프로그램의 자동 접속을 차단했어요. 상품 페이지를 브라우저로 "
