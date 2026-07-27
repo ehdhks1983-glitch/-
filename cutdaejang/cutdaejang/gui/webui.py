@@ -1793,6 +1793,29 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                    "source_url": url or "",
                    "notes": ["📋 붙여넣은 상품 정보로 만들었어요 — 사진은 [🖼 상품 사진 고르기]로 넣어주세요"]}
             dest = Path(workdir) / "weblink" / "pasted"
+            # 🛒 v1.05: 글이 채워져 있어도 '상품 링크'가 있으면 사진은 링크에서 수집
+            # — 파트너스 검색으로 상품을 고르면 상품 정보칸이 자동으로 채워지는데,
+            # 그 상태로 [대본 만들기]를 누르면 붙여넣기 분기가 링크 수집을 통째로
+            # 건너뛰어 API 대표 사진 1장만 남았다 (사용자 리포트 "블로그는
+            # 5장인데 여긴 왜 그러는 거야"의 진짜 원인 — 수집기가 아예 안 돌았음)
+            if url and product_page.is_shop_url(url):
+                try:
+                    prod = product_page.collect_product(url, progress_cb=say)
+                    say(f"상품 사진 {len(prod['images'])}장 내려받는 중…")
+                    dest2 = Path(workdir) / "weblink" / _hl.sha1(
+                        url.encode("utf-8")).hexdigest()[:8]
+                    local, skipped = product_page.download_images(prod["images"], dest2)
+                    if local:
+                        art["images"], dest = local, dest2
+                        art["notes"] = [
+                            f"🛒 링크에서 상품 사진 {len(local)}장을 자동 수집해 "
+                            "붙여넣은 설명과 합쳤어요"
+                            + (f" (자잘한 그림 {skipped}장 제외)" if skipped else "")]
+                except Exception:  # noqa: BLE001 — 사진이 막혀도 글로는 대본 진행
+                    art["notes"] = [
+                        "🛒 링크 사진 자동 수집이 막혀 붙여넣은 정보로만 만들었어요 — "
+                        "상품 페이지에서 사진 부분을 복사(Ctrl+C)해 이 화면에 "
+                        "Ctrl+V 하면 사진이 한꺼번에 들어와요"]
         elif product_page.is_shop_url(url):
             # 🛒 상품 링크 자동 수집 (v0.92) — 직접 요청 → PC 브라우저 헤드리스 → 폴백 안내
             try:
@@ -4324,7 +4347,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.04.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.05.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -8757,10 +8780,19 @@ async function makeShopScript(ev){
       if(!($('shopHook').value || '').trim()) $('shopHook').value = r.hook || r.title || '';
       $('shopPreview').classList.remove('hidden');
       if((r.images || []).length){                       // 🛒 수집된 상품 사진 (v0.92)
-        window._shopPhotos = r.images.slice();
-        window._shopPrev = (r.previews || []).slice();
+        // v1.05: 이미 담긴 사진(파트너스 대표컷·붙여넣기)에 '합친다' — 덮어쓰기 금지
+        window._shopPhotos = window._shopPhotos || []; window._shopPrev = window._shopPrev || [];
+        const before = window._shopPhotos.length;
+        const seen = new Set(window._shopPhotos);
+        (r.images || []).forEach((p, i) => {
+          if(seen.has(p)) return;
+          seen.add(p); window._shopPhotos.push(p);
+          window._shopPrev.push((r.previews || [])[i] || '');
+        });
         renderShopPhotoPrev();
-        $('shopPhotoCnt').textContent = '📷 상품 사진 ' + r.images.length + '장 자동 수집됨';
+        const added = window._shopPhotos.length - before;
+        $('shopPhotoCnt').textContent = '📷 상품 사진 ' + window._shopPhotos.length + '장' +
+          (before && added ? ' (링크에서 ' + added + '장 추가됨)' : ' 자동 수집됨');
       }
       if(linkOnly && r.text){                            // 수집한 설명을 눈으로 확인·보강
         $('shopPasteText').value = r.text;
