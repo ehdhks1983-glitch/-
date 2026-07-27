@@ -19,7 +19,8 @@ def test_threads_tone_friendly_banmal_not_rude():
 
 def test_tiktok_tone_polite():
     """틱톡: 해요체(존댓말) — 반말 금지 명시 (사용자 리포트: 틱톡은 반말 형식 아님)."""
-    tiktok = UPLOAD_KIT_PROMPT.split("[틱톡]")[1].split("[인스타그램")[0]
+    # v1.02: 섹션 제목이 "[틱톡 — …SEO]"로 확장돼 접두사로 자른다
+    tiktok = UPLOAD_KIT_PROMPT.split("[틱톡")[1].split("[인스타그램")[0]
     assert "해요체" in tiktok and "반말 금지" in tiktok
 
 
