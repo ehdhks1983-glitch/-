@@ -4324,7 +4324,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.03.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.04.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5499,10 +5499,15 @@ _HTML = """<!doctype html>
       <input type="text" id="shopLinkInput" style="flex:1" placeholder="상품 링크를 붙여넣고 아래 [🤖 대본 만들기]를 누르면 사진·설명 자동 수집 (파트너스·쇼핑커넥트 링크도 이 칸)">
     </div>
     <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)" title="상세설명이 비어 있어도 링크가 있으면 상품 페이지에서 사진·설명을 자동으로 수집해요 (안 되면 페이지 복사→붙여넣기 안내)">🤖 이 상품으로 대본 만들기</button>
+    <div class="chk" style="gap:8px;margin-top:8px">
+      <span style="white-space:nowrap">🪝 훅 제목</span>
+      <input type="text" id="shopHook" style="flex:1" placeholder="영상 상단에 크게 붙는 후킹 문구 — 비우면 대본 만들 때 AI가 자동으로 지어요">
+      <button class="ghost" style="white-space:nowrap;padding:6px 10px" onclick="suggestShopHooks(event)" title="상품 설명·대본을 바탕으로 후킹 문구 후보를 뽑아요 (제미나이 키 필요)">🪝 AI 추천</button>
+    </div>
+    <div id="shopHookCands" class="hookcands"></div>
     <div id="shopPreview" class="hidden">
       <div class="steplabel" style="margin-top:10px"><span class="stepnum">3</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄. AI 목소리가 읽어요</span></div>
       <textarea id="shopScript" style="min-height:110px"></textarea>
-      <div class="chk" style="gap:8px"><span>훅 제목</span><input type="text" id="shopHook" style="flex:1" placeholder="영상 상단에 크게 붙는 제목"></div>
       <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:4px">
         <span>목소리</span><select id="shopVoiceSel" style="width:auto;min-width:180px"></select>
         <span>배경음악</span><select id="shopBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
@@ -6677,6 +6682,31 @@ async function suggestSecHooks(ev){
       const b = document.createElement('button');
       b.textContent = h;
       b.onclick = (e) => { e.preventDefault(); $('secHook').value = h; cands.innerHTML = ''; };
+      cands.appendChild(b);
+    });
+    if(!(data.hooks || []).length) alert('추천을 만들지 못했어요 — 잠시 후 다시 시도해 주세요');
+  } catch(e){ alert('훅 추천 오류: ' + e); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+// ── 🛒 쇼핑 카드 훅 추천 (v1.04 — "후킹 문구 설정이 없다" 리포트) ──
+async function suggestShopHooks(ev){
+  ev.preventDefault();
+  const ctx = [(($('shopScript')||{}).value || ''), (($('shopPasteText')||{}).value || '')]
+    .join(' ').trim();
+  if(!ctx){ alert('상품 설명을 붙여넣거나 [🤖 대본 만들기]를 먼저 해주세요 — 그 내용으로 후킹 문구를 뽑아요'); return; }
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '추천 중…';
+  const cands = $('shopHookCands'); cands.innerHTML = '';
+  try{
+    const key = ensureGeminiKey();
+    const data = await (await fetch('/api/suggest_hooks', {method:'POST',
+      body: JSON.stringify({context: ctx.slice(0, 900), gemini_key: key, save_key: true})})).json();
+    if(data.error){ alert(data.error); return; }
+    (data.hooks || []).forEach(h => {
+      const b = document.createElement('button');
+      b.textContent = h;
+      b.onclick = (e) => { e.preventDefault(); $('shopHook').value = h; cands.innerHTML = ''; };
       cands.appendChild(b);
     });
     if(!(data.hooks || []).length) alert('추천을 만들지 못했어요 — 잠시 후 다시 시도해 주세요');
@@ -8723,7 +8753,8 @@ async function makeShopScript(ev){
       if(t.error){ alert(t.error); break; }
       const r = t.result || {};
       $('shopScript').value = (r.script_lines || []).join('\\n');
-      $('shopHook').value = r.hook || r.title || '';
+      // 🪝 직접 넣은 훅이 있으면 존중 — 비어 있을 때만 AI 추천으로 채움 (v1.04)
+      if(!($('shopHook').value || '').trim()) $('shopHook').value = r.hook || r.title || '';
       $('shopPreview').classList.remove('hidden');
       if((r.images || []).length){                       // 🛒 수집된 상품 사진 (v0.92)
         window._shopPhotos = r.images.slice();

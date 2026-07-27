@@ -31,7 +31,11 @@ _IMG_RE = re.compile(
     r"(?:https?:)?//(?:thumbnail|image|static)\d*\.coupangcdn\.com/[^\s\"'<>\\)]+?"
     r"\.(?:jpg|jpeg|png|webp)|"
     r"(?:https?:)?//(?:shop-phinf|shopping-phinf|phinf)\.pstatic\.net/[^\s\"'<>\\)]+?"
-    r"\.(?:jpg|jpeg|png|webp)", re.I)
+    r"\.(?:jpg|jpeg|png|webp)|"
+    r"(?:https?:)?//cdn\.011st\.com/[^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp)|"
+    r"(?:https?:)?//gdimg\.gmarket\.co\.kr/[^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp)|"
+    r"(?:https?:)?//image\.auction\.co\.kr/[^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp)|"
+    r"(?:https?:)?//sitem\.ssgcdn\.com/[^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp)", re.I)
 _JUNK_IMG = ("logo", "icon", "sprite", "banner", "btn_", "/common/", "blank.")
 
 
@@ -133,6 +137,11 @@ def _meta(html: str, prop: str) -> str:
 
 
 def extract_image_urls(html: str, limit: int = 12) -> List[str]:
+    # 🧩 v1.04: 상품 사진 주소는 페이지 JSON 안에 "https:\/\/…"(이스케이프)로
+    # 실리는 일이 흔한데 그동안 못 잡았다 — 메타태그의 대표 사진 1장만 오던
+    # 주범 (사용자 리포트 "아직도 한 장만 들어오네"). 이스케이프를 풀고 긁는다.
+    html = ((html or "").replace("\\/", "/")
+            .replace("\\u002F", "/").replace("\\u002f", "/"))
     out: List[str] = []
     seen = set()
     for m in _IMG_RE.finditer(html or ""):
@@ -195,17 +204,22 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
     except Exception:  # noqa: BLE001 — 브라우저 경로로 넘어감
         via = ""
     parsed = parse_product(html_text) if html_text else {}
-    # 🖼 글만 오고 사진이 0장인 경우도 브라우저로 재시도 (v0.97) — 상품 페이지는
-    # 사진을 JS로 늦게 그려서, 직접 요청 HTML엔 메인 사진 주소가 없는 일이 흔하다
-    # (사용자 리포트: "메인 썸네일만 끌어오면 되는데 사진이 안 들어와").
-    if not (parsed and _usable(parsed)) or not parsed.get("images"):
-        say("메인 사진까지 실리게 PC의 엣지/크롬으로 페이지 읽는 중… (최대 30초)")
+    # 🖼 사진이 '적으면'(3장 미만) 브라우저로 재시도 (v1.04) — 상품 페이지는
+    # 사진을 JS로 늦게 그려서 직접 요청 HTML엔 대표 사진 1장만 오는 일이 흔한데,
+    # v0.97은 0장일 때만 재시도해 1장이면 그대로 끝났다 (사용자 리포트
+    # "아직도 한 장만 들어오네"). 두 경로에서 모은 사진은 합집합으로 합친다.
+    if not (parsed and _usable(parsed)) or len(parsed.get("images") or []) < 3:
+        say("사진을 더 실으려고 PC의 엣지/크롬으로 페이지 읽는 중… (최대 30초)")
         dumped = _browser_dump(final)
         if dumped:
             p2 = parse_product(dumped)
-            better = len(p2.get("images") or []) > len(parsed.get("images") or [])
-            if _usable(p2) and (better or not (parsed and _usable(parsed))):
+            merged = list(dict.fromkeys(
+                (p2.get("images") or []) + (parsed.get("images") or [])))[:12]
+            if _usable(p2):
+                p2["images"] = merged
                 parsed, via = p2, "브라우저"
+            elif parsed and _usable(parsed) and merged:
+                parsed["images"] = merged
     if not (parsed and _usable(parsed)):
         raise ShopBlockedError(
             "쇼핑몰이 프로그램의 자동 접속을 차단했어요. 상품 페이지를 브라우저로 "
