@@ -43,13 +43,21 @@ class JobStore:
         self._migrate()
 
     def _migrate(self) -> None:
+        # 새 DB에 여러 연결이 동시에 붙으면(v0.90 병렬 작업 + 상태 폴링) 같은
+        # ALTER를 둘이 실행해 'duplicate column'이 난다 — 멱등 처리 (v0.99)
+        def _add(coldef: str) -> None:
+            try:
+                self._conn.execute(f"ALTER TABLE jobs ADD COLUMN {coldef}")
+                self._conn.commit()
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(jobs)")}
         if "tts_provider" not in cols:  # v0.3: 폴백 추적용 (지시서 1-4)
-            self._conn.execute("ALTER TABLE jobs ADD COLUMN tts_provider TEXT")
-            self._conn.commit()
+            _add("tts_provider TEXT")
         if "params_json" not in cols:  # v0.85: 구간 대본 재편집용 입력값 보존
-            self._conn.execute("ALTER TABLE jobs ADD COLUMN params_json TEXT")
-            self._conn.commit()
+            _add("params_json TEXT")
 
     def close(self) -> None:
         self._conn.close()
