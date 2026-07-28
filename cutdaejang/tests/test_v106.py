@@ -12,11 +12,13 @@ from cutdaejang.tools import product_page as pp
 
 
 def test_quick_links_in_shop_card():
-    html = webui._HTML
+    # v1.11.1: 링크 주소는 EXT_LINKS 한 곳에서 관리하고 서빙 직전에 치환한다.
+    # (쇼핑커넥트 주소가 실재하지 않는 도메인이었던 사고 → 목록·치환 구조로 교체)
+    html = webui._apply_links(webui._HTML)
     for tok in ('href="https://partners.coupang.com"',
-                'href="https://shoppingconnect.naver.com"',
+                'href="https://brandconnect.naver.com"',
                 'href="https://developers.naver.com/apps/#/register"',
-                "↗ 파트너스 열기", "↗ 쇼핑커넥트 열기", "↗ 앱 등록 페이지"):
+                "↗ 파트너스 열기", "↗ 브랜드커넥트(쇼핑커넥트) 열기", "↗ 앱 등록 페이지"):
         assert tok in html, tok
 
 
