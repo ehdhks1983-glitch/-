@@ -1014,26 +1014,49 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
     return out_subs, out_clips, note
 
 
+_BED_CHUNK = 40   # 한 ffmpeg가 받는 클립 수 — Windows 명령줄 32K 한계 안전권
+
+
 def build_narration_wav(clips: List, subtitles: List[Subtitle], total_us: int,
                         out_wav) -> str:
-    """TTS 클립들을 각 자막 시작 시각에 배치해 하나의 내레이션 트랙으로 합침."""
+    """TTS 클립들을 각 자막 시작 시각에 배치해 하나의 내레이션 트랙으로 합침.
+
+    v1.09: 긴 영상(8분+ ≈ 문장 100개↑)은 클립 경로 전부를 한 명령줄에 실으면
+    Windows 32K 한계에 깨진다 — 40개 묶음으로 부분 트랙을 만들고 그 묶음들을
+    다시 겹쳐(전부 전체 길이·무음 패딩이라 결과 동일) 어떤 길이여도 안전하게.
+    """
     if not clips:
         raise ValueError("내레이션 클립이 없습니다")
-    args = [ff.ffmpeg_bin(), "-y", "-v", "error"]
-    parts, labels = [], []
-    for i, (clip, sub) in enumerate(zip(clips, subtitles)):
-        args += ["-i", str(clip)]
-        ms = max(0, sub.start_us // 1000)
-        parts.append(f"[{i}:a]adelay={ms}|{ms}[n{i}]")
-        labels.append(f"[n{i}]")
     total_s = max(0.1, total_us / 1e6)
-    fc = (
-        ";".join(parts) + ";" + "".join(labels)
-        + f"amix=inputs={len(labels)}:normalize=0,apad,atrim=0:{total_s:.3f}[a]"
-    )
-    args += ["-filter_complex", fc, "-map", "[a]", "-ar", "44100", str(out_wav)]
-    ff.run(args)
-    return str(out_wav)
+    pairs = list(zip(clips, subtitles))
+    out_p = Path(out_wav)
+
+    def _mix(inputs: List, delays_ms: List[int], dest: Path) -> str:
+        args = [ff.ffmpeg_bin(), "-y", "-v", "error"]
+        parts, labels = [], []
+        for i, src in enumerate(inputs):
+            args += ["-i", str(src)]
+            ms = delays_ms[i]
+            head = f"[{i}:a]adelay={ms}|{ms}[n{i}]" if ms > 0 else f"[{i}:a]anull[n{i}]"
+            parts.append(head)
+            labels.append(f"[n{i}]")
+        fc = (";".join(parts) + ";" + "".join(labels)
+              + f"amix=inputs={len(labels)}:normalize=0,apad,atrim=0:{total_s:.3f}[a]")
+        args += ff.filter_complex_args(fc, dest.with_suffix(".filter.txt"))
+        args += ["-map", "[a]", "-ar", "44100", str(dest)]
+        ff.run(args)
+        return str(dest)
+
+    if len(pairs) <= _BED_CHUNK:
+        return _mix([c for c, _ in pairs],
+                    [max(0, s.start_us // 1000) for _, s in pairs], out_p)
+    partials = []
+    for gi in range(0, len(pairs), _BED_CHUNK):
+        grp = pairs[gi:gi + _BED_CHUNK]
+        partials.append(_mix(
+            [c for c, _ in grp], [max(0, s.start_us // 1000) for _, s in grp],
+            out_p.with_name(f"{out_p.stem}_part{gi // _BED_CHUNK:02d}.wav")))
+    return _mix(partials, [0] * len(partials), out_p)
 
 
 def split_into_clips(subtitles: List[Subtitle], target_sec: float = 30.0,

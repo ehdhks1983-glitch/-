@@ -462,6 +462,38 @@ def _nearest_scene(t_us: int, scenes: List[int], max_shift_us: int):
     return best
 
 
+def shift_ranges_to_silence(ranges: List[Tuple[int, int]],
+                            speech_segs: List[Tuple[int, int]], dur_us: int,
+                            max_shift_us: int = 1_500_000,
+                            min_len_us: int = 600_000) -> List[Tuple[int, int]]:
+    """컷 경계를 '말하는 중간'에서 무음 지점으로 이동 (v1.09 — 사용자 리포트
+    "전환될 때마다 나래이션이 끊긴다": 목소리 든 영상을 시간으로만 자르면
+    경계가 문장 한가운데 떨어진다). 발화 구간(speech_segs) 밖의 가장 가까운
+    지점으로 각 경계를 옮긴다 — max_shift 안에 무음이 없으면 그대로 둔다.
+    """
+    if not speech_segs:
+        return list(ranges)
+    segs = sorted((max(0, int(a)), min(dur_us, int(b))) for a, b in speech_segs)
+
+    def snap(x: int) -> int:
+        for a, b in segs:
+            if a <= x <= b:                       # 말 한가운데 → 앞뒤 무음 중 가까운 쪽
+                cands = [c for c in (a, b) if abs(c - x) <= max_shift_us]
+                return min(cands, key=lambda c: abs(c - x)) if cands else x
+        return x                                  # 이미 무음 지점
+
+    out: List[Tuple[int, int]] = []
+    for s0, e0 in ranges:
+        s1, e1 = snap(int(s0)), snap(int(e0))
+        s1 = max(0, min(s1, dur_us - min_len_us))
+        e1 = max(s1 + min_len_us, min(e1, dur_us))
+        if out and s1 < out[-1][1]:               # 앞 조각과 겹치면 이어붙임 지점 유지
+            s1 = out[-1][1]
+            e1 = max(e1, s1 + min_len_us)
+        out.append((s1, min(e1, dur_us)))
+    return out
+
+
 def shift_ranges_to_scenes(ranges: List[Tuple[int, int]], scenes: List[int],
                            duration_us: int, max_shift_us: int = 1_500_000) -> List[Tuple[int, int]]:
     """몽타주용 — 떨어져 있는 각 구간을 통째로 밀어 시작점을 장면 전환에 맞춘다.

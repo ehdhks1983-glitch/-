@@ -818,6 +818,15 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                         ranges = ve.shift_ranges_to_scenes(ranges, scenes, analysis.cut_us)
             except Exception:  # noqa: BLE001 — 감지 실패는 스냅 없이 진행
                 pass
+            try:  # 🗣 말 경계 스냅 (v1.09) — 목소리 든 영상(자막 인식 꺼짐 포함)을
+                # 시간으로만 자르면 문장 한가운데가 잘린다 (사용자 리포트
+                # "전환될 때마다 나래이션이 끊긴다"). 컷 경계를 무음 지점으로 이동.
+                _set_job(job_id, note="말이 안 끊기게 컷 지점을 무음에 맞추는 중…")
+                spch, _d = ve.detect_speech_segments(analysis.cut_video)
+                if spch and sum(e - s for s, e in spch) < analysis.cut_us * 0.98:
+                    ranges = ve.shift_ranges_to_silence(ranges, spch, analysis.cut_us)
+            except Exception:  # noqa: BLE001 — 감지 실패는 스냅 없이 진행
+                pass
             analysis.cut_video = ve.cut_and_concat(
                 analysis.cut_video, ranges,
                 str(Path(workdir) / job_id / "auto_montage.mp4"),
@@ -2127,6 +2136,12 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                         if dur < 20 * 60 * 1_000_000:
                             scenes = video_editor.detect_scene_changes(video)
                             ranges = video_editor.shift_ranges_to_scenes(ranges, scenes, dur)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:  # 🗣 말 경계 스냅 (v1.09) — 클립 속 말이 조각 경계에서 안 잘리게
+                        spch, _d = video_editor.detect_speech_segments(video)
+                        if spch and sum(e - s for s, e in spch) < dur * 0.98:
+                            ranges = video_editor.shift_ranges_to_silence(ranges, spch, dur)
                     except Exception:  # noqa: BLE001
                         pass
                     # ✂ 몽타주 조각은 하드컷 (v0.94) — 조각마다 검은 화면을 거치는
@@ -4377,7 +4392,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.08.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.09.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
