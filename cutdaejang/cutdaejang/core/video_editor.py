@@ -397,12 +397,15 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
     fd = min(0.3, per_s / 4)  # 사진 전환 페이드 — 장당 시간이 짧으면 비례 축소
     args = [ff.ffmpeg_bin(), "-y", "-v", "error"]
     parts = []
+    # ⚡ v1.08 속도: 블러 배경은 1/4 해상도에서 흐리고 다시 키움 — 시각적으론
+    # 동일한 backdrop인데 boxblur 비용이 ~16분의 1 (사용자 리포트 "50장 오래 걸림").
+    bw, bh = max(2, (w // 4) & ~1), max(2, (h // 4) & ~1)
     for i, img in enumerate(images):
         args += ["-loop", "1", "-t", f"{per_s:.3f}", "-i", str(img)]
         chain = (
             f"[{i}:v]split=2[bg{i}][fg{i}];"
-            f"[bg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,"
-            f"crop={w}:{h},boxblur=24:2,eq=brightness=-0.1[bgb{i}];"
+            f"[bg{i}]scale={bw}:{bh}:force_original_aspect_ratio=increase,"
+            f"crop={bw}:{bh},boxblur=6:1,eq=brightness=-0.1,scale={w}:{h}[bgb{i}];"
             f"[fg{i}]scale={w}:{h}:force_original_aspect_ratio=decrease[fgs{i}];"
             f"[bgb{i}][fgs{i}]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={fps}"
         )
@@ -419,8 +422,13 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
           + f"concat=n={len(images)}:v=1:a=0[v]")
     # 사진이 아주 많으면(수백 장) 그래프가 명령줄 한계를 넘을 수 있어 파일 경유
     args += ff.filter_complex_args(fc, Path(out_path).with_suffix(".filter.txt"))
+    # ⚡ v1.08: GPU(nvenc) 자동 사용 — 최종 렌더만 GPU였고 슬라이드쇼는 CPU였다
+    if ff.nvenc_available():
+        venc = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
+    else:
+        venc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
     args += ["-map", "[v]", "-map", f"{len(images)}:a",
-             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+             *venc,
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out_path)]
     ff.run(args)
     return str(out_path)

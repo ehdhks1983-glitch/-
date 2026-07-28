@@ -211,15 +211,20 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
     say = progress_cb or (lambda m: None)
     say("상품 페이지 여는 중…")
     html_text, final = "", (url or "").strip()
+    stages = []                       # 🩺 단계별 결과 (v1.08) — "왜 1장인지" 화면에 보이게
     try:
         html_text, final = _fetch_html(final)
         via = "직접"
     except urllib.error.HTTPError as e:
         final = getattr(e, "url", "") or getattr(e, "filename", "") or final
         via = ""
+        stages.append(f"직접 차단({e.code})")
     except Exception:  # noqa: BLE001 — 브라우저 경로로 넘어감
         via = ""
+        stages.append("직접 실패")
     parsed = parse_product(html_text) if html_text else {}
+    if html_text:
+        stages.append(f"직접 {len(parsed.get('images') or [])}장")
     # 📱 블로그 수집과 같은 요청 레시피로 모바일 페이지도 시도 (v1.06 — 사용자
     # 지시 "블로그봇의 쿠팡 크롤링 방식을 적용"): 블로그가 사진 5장이 잘 되는
     # 이유가 fetch_web의 모바일 UA(+cutdaejang 표식)·Referer 레시피라, 상품
@@ -232,6 +237,7 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
             try:
                 m_html, _mf = _fetch_html(m_url, ua=fetch_web._UA, referer=final)
                 p_m = parse_product(m_html)
+                stages.append(f"모바일 {len(p_m.get('images') or [])}장")
                 merged_m = list(dict.fromkeys(
                     (p_m.get("images") or []) + (parsed.get("images") or [])))[:12]
                 if _usable(p_m) and not (parsed and _usable(parsed)):
@@ -240,7 +246,7 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
                     parsed = parsed or {}
                     parsed["images"] = merged_m
             except Exception:  # noqa: BLE001 — 모바일 실패는 다음 단계로
-                pass
+                stages.append("모바일 차단")
     # 🖼 사진이 '적으면'(3장 미만) 브라우저로 재시도 (v1.04) — 상품 페이지는
     # 사진을 JS로 늦게 그려서 직접 요청 HTML엔 대표 사진 1장만 오는 일이 흔한데,
     # v0.97은 0장일 때만 재시도해 1장이면 그대로 끝났다 (사용자 리포트
@@ -250,6 +256,7 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
         dumped = _browser_dump(final)
         if dumped:
             p2 = parse_product(dumped)
+            stages.append(f"브라우저 {len(p2.get('images') or [])}장")
             merged = list(dict.fromkeys(
                 (p2.get("images") or []) + (parsed.get("images") or [])))[:12]
             if _usable(p2):
@@ -257,12 +264,17 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
                 parsed, via = p2, "브라우저"
             elif parsed and _usable(parsed) and merged:
                 parsed["images"] = merged
+        else:
+            stages.append("브라우저 차단")
     if not (parsed and _usable(parsed)):
         raise ShopBlockedError(
-            "쇼핑몰이 프로그램의 자동 접속을 차단했어요. 상품 페이지를 브라우저로 "
-            "열어뒀으니 Ctrl+A(전체 선택) → Ctrl+C(복사) 한 뒤, 이 화면에서 "
-            "Ctrl+V(붙여넣기) 하세요 — 사진·설명이 한 번에 들어와요")
-    parsed.update(final_url=final, via=via or "직접")
+            "쇼핑몰이 프로그램의 자동 접속을 차단했어요"
+            + (f" ({' · '.join(stages)})" if stages else "")
+            + ". 상품 페이지를 브라우저로 열어뒀으니 Ctrl+A(전체 선택) → "
+            "Ctrl+C(복사) 한 뒤, 이 화면에서 Ctrl+V(붙여넣기) 하세요 — "
+            "사진·설명이 한 번에 들어와요")
+    parsed.update(final_url=final, via=via or "직접",
+                  via_detail=" · ".join(stages))
     return parsed
 
 

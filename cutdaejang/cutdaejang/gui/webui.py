@@ -1810,12 +1810,16 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                         art["notes"] = [
                             f"🛒 링크에서 상품 사진 {len(local)}장을 자동 수집해 "
                             "붙여넣은 설명과 합쳤어요"
-                            + (f" (자잘한 그림 {skipped}장 제외)" if skipped else "")]
-                except Exception:  # noqa: BLE001 — 사진이 막혀도 글로는 대본 진행
+                            + (f" (자잘한 그림 {skipped}장 제외)" if skipped else "")
+                            + (f" [{prod.get('via_detail')}]"
+                               if prod.get("via_detail") else "")]
+                except Exception as ce:  # noqa: BLE001 — 사진이 막혀도 글로는 대본 진행
+                    why = str(ce)[:160] if isinstance(ce, product_page.ShopBlockedError) else ""
                     art["notes"] = [
-                        "🛒 링크 사진 자동 수집이 막혀 붙여넣은 정보로만 만들었어요 — "
-                        "상품 페이지에서 사진 부분을 복사(Ctrl+C)해 이 화면에 "
-                        "Ctrl+V 하면 사진이 한꺼번에 들어와요"]
+                        ("🛒 링크 사진 자동 수집이 막혀 붙여넣은 정보로만 만들었어요"
+                         + (f" — {why}" if why else "")
+                         + " · 상품 페이지에서 사진 부분을 복사(Ctrl+C)해 이 화면에 "
+                           "Ctrl+V 하면 사진이 한꺼번에 들어와요")]
         elif product_page.is_shop_url(url):
             # 🛒 상품 링크 자동 수집 (v0.92) — 직접 요청 → PC 브라우저 헤드리스 → 폴백 안내
             try:
@@ -1832,7 +1836,8 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
             if local:
                 note = (f"🛒 상품 페이지에서 자동 수집했어요 ({prod['via']} 경로) — "
                         f"사진 {len(local)}장"
-                        + (f", 자잘한 그림 {skipped}장 제외" if skipped else ""))
+                        + (f", 자잘한 그림 {skipped}장 제외" if skipped else "")
+                        + (f" [{prod.get('via_detail')}]" if prod.get("via_detail") else ""))
             else:
                 # 🖼 글은 왔는데 사진이 0장 (v0.97) — 페이지를 열어 복사 폴백으로 연결
                 note = ("🖼 글은 가져왔는데 사진은 자동으로 못 가져왔어요 — 방금 연 "
@@ -3278,6 +3283,24 @@ class _Handler(BaseHTTPRequestHandler):
                      title=f"🎞 {title}", params=params)
             _queue_job(job_id, _run_sections, job_id, params, workdir)  # 📋 작업 큐 (v0.88)
             self._send_json({"job_id": job_id})
+        elif path == "/api/quick_set":   # 🎛 카드 꾸미기 ↔ ⚙설정 연동 저장 (v1.08)
+            patch = params.get("patch") or {}
+            safe: dict = {}
+            sub = patch.get("subtitle") or {}
+            if isinstance(sub.get("font_size"), (int, float)):
+                safe.setdefault("subtitle", {})["font_size"] = int(
+                    max(40, min(120, sub["font_size"])))
+            if isinstance(sub.get("text_cards"), bool):
+                safe.setdefault("subtitle", {})["text_cards"] = sub["text_cards"]
+            bgm_p = patch.get("bgm") or {}
+            if isinstance(bgm_p.get("volume_db"), (int, float)):
+                safe.setdefault("bgm", {})["volume_db"] = float(
+                    max(-40.0, min(0.0, bgm_p["volume_db"])))
+            if not safe:
+                self._send_json({"error": "허용되지 않는 설정입니다"}, 400)
+                return
+            config.save_settings(safe)
+            self._send_json({"ok": True})
         elif path == "/api/draft":     # 📝 작업 임시 저장 (v1.07) — 카드별 폼 초안
             card = str(params.get("card") or "").strip()[:20]
             if not card:
@@ -4354,7 +4377,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.07.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.08.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5937,7 +5960,26 @@ _HTML = """<!doctype html>
   </div>
 
   <div class="card hidden" id="settingsCard">
-    <div style="font-weight:700">⚙ 설정 <span class="hint">— 필요한 묶음만 펼쳐서 바꾸세요 (저장하면 다음 작업부터 적용)</span></div>
+    <div style="font-weight:700">⚙ 설정 <span class="hint">— 여기 값은 <b>모든 영상에 항상</b> 적용돼요. 이번 영상만 다르게 하려면 만들기 화면의 🎨 꾸미기에서.</span></div>
+
+    <div style="margin-top:10px;padding:10px 12px;border:1px solid #2c3350;border-radius:10px">
+      <b style="font-size:14px">👵 자주 바꾸는 것 <span class="hint">— 버튼만 누르고 아래 [설정 저장]</span></b>
+      <div class="chk" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+        <span>자막 글씨</span>
+        <span class="ezchips" data-target="setFontSize" data-vals="64,84,104">
+          <button class="ghost ezchip" data-v="64">작게</button><button class="ghost ezchip" data-v="84">보통</button><button class="ghost ezchip" data-v="104">크게</button>
+        </span>
+        <span style="margin-left:10px">배경음악 소리</span>
+        <span class="ezchips" data-target="setBgmVol" data-vals="-22,-16,-9">
+          <button class="ghost ezchip" data-v="-22">작게</button><button class="ghost ezchip" data-v="-16">보통</button><button class="ghost ezchip" data-v="-9">크게</button>
+        </span>
+      </div>
+      <div class="chk" style="margin-top:6px"><input type="checkbox" id="setTextCards"><span>🅰 텍스트 카드 장면 <span class="hint">— 숫자·짧은 문장을 큰 글씨 연출로 (대본 줄 앞 [카드] = 수동 지정)</span></span></div>
+    </div>
+
+    <details class="opt" style="margin-top:10px">
+      <summary>🔧 전문가 설정 <span class="hint">— 숫자로 세밀하게 (몰라도 됩니다 — 위 버튼이면 충분해요)</span></summary>
+      <div>
 
     <details class="opt">
       <summary>📝 자막·제목 스타일 <span class="hint">— 크기 · 띠 · 강조 색 · 줄바꿈</span></summary>
@@ -5951,7 +5993,6 @@ _HTML = """<!doctype html>
         <div><label>강조 색</label><input type="color" id="setHlColor" style="height:40px;padding:4px"></div>
       </div>
       <div class="chk"><input type="checkbox" id="setFade"><span>자막 등장 페이드</span></div>
-      <div class="chk"><input type="checkbox" id="setTextCards"><span>🅰 텍스트 카드 장면 <span class="hint">— 숫자·짧은 펀치 문장을 풀스크린 큰 글씨 연출로 (모든 카테고리 공통 · 대본 줄 앞에 [카드]를 쓰면 수동 지정)</span></span></div>
       <div class="chk" style="gap:8px"><span>자막 등장 애니메이션</span>
         <select id="setSubAnim" style="width:auto;padding:6px 8px">
           <option value="none">없음</option>
@@ -6004,6 +6045,9 @@ _HTML = """<!doctype html>
           <option value="4">빠르게</option>
         </select>
         <span class="hint">내장 음성(키 없이 쓰는 목소리·폴백)에 적용 — 제미나이/일레븐 보이스와는 별개</span></div>
+    </details>
+
+      </div>
     </details>
 
     <details class="opt">
@@ -8180,8 +8224,82 @@ function restoreDrafts(s){
   });
   if(n) uiBanner('📝 이어서 작성하던 내용 ' + n + '칸을 불러왔어요 — 멈춘 곳부터 계속하세요');
 }
+// ── 👵 쉬운 3버튼 (v1.08) — 숫자 입력과 양방향 연동 ──
+function initEzChips(){
+  if(window._ezDone) return; window._ezDone = true;
+  document.querySelectorAll('.ezchips .ezchip').forEach(b => {
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      const el = $(b.parentElement.dataset.target);
+      if(el) el.value = b.dataset.v;
+      markEzChips();
+    });
+  });
+}
+function markEzChips(){
+  document.querySelectorAll('.ezchips').forEach(g => {
+    const el = $(g.dataset.target); if(!el) return;
+    const cur = parseFloat(el.value);
+    let best = null, bd = 1e9;
+    g.querySelectorAll('.ezchip').forEach(b => {
+      const d = Math.abs(parseFloat(b.dataset.v) - cur);
+      if(d < bd){ bd = d; best = b; }
+      b.style.borderColor = ''; b.style.color = '';
+    });
+    if(best){ best.style.borderColor = '#4266d5'; best.style.color = '#9db8ff'; }
+  });
+}
+// ── 🎛 카드 꾸미기 ↔ ⚙설정 연동 (v1.08) — 자주 바꾸는 걸 카드에서도, 값은 한 곳 ──
+async function quickSet(patch){
+  try{ await fetch('/api/quick_set', {method:'POST', body: JSON.stringify({patch})}); }
+  catch(e){ alert('저장에 실패했어요 — 다시 눌러주세요'); }
+}
+function markQuickDeco(){
+  const size = +((($('setFontSize')||{}).value) || 84);
+  const on = (($('setTextCards')||{}).checked);
+  document.querySelectorAll('.qd-size').forEach(b => {
+    const hit = Math.abs(+b.dataset.v - size) < 11;
+    b.style.borderColor = hit ? '#4266d5' : ''; b.style.color = hit ? '#9db8ff' : '';
+  });
+  document.querySelectorAll('.qd-cards').forEach(c => { c.checked = !!on; });
+}
+function injectQuickDeco(){
+  if(window._qdDone) return; window._qdDone = true;
+  const spots = [$('genSubStyleSel'), $('editSubStyleSel'),
+                 $('wlDecoBox'), $('secDecoBox'), $('shopDecoBox')];
+  spots.forEach(el => {
+    if(!el) return;
+    const host = (el.tagName === 'DETAILS') ? el : el.parentElement;
+    const d = document.createElement('div');
+    d.className = 'chk'; d.style.cssText = 'gap:8px;flex-wrap:wrap;margin-top:6px';
+    d.innerHTML = '<span>자막 글씨</span>'
+      + [['작게',64],['보통',84],['크게',104]].map(x =>
+          '<button class="ghost qd-size" data-v="' + x[1] + '" style="padding:4px 10px">' + x[0] + '</button>').join('')
+      + '<label style="margin-left:10px;display:flex;align-items:center;gap:4px">'
+      + '<input type="checkbox" class="qd-cards"><span>🅰 텍스트 카드</span></label>'
+      + '<span class="hint">— ⚙ 모든 영상에 함께 적용돼요</span>';
+    host.appendChild(d);
+    d.querySelectorAll('.qd-size').forEach(b => b.addEventListener('click', async (e) => {
+      e.preventDefault();
+      await quickSet({subtitle: {font_size: +b.dataset.v}});
+      if($('setFontSize')) $('setFontSize').value = b.dataset.v;
+      markEzChips(); markQuickDeco();
+      uiBanner('✅ 자막 글씨 크기를 바꿨어요 — 모든 영상에 적용 (⚙ 설정과 같은 값)');
+    }));
+    const cb = d.querySelector('.qd-cards');
+    cb.addEventListener('change', async () => {
+      await quickSet({subtitle: {text_cards: cb.checked}});
+      if($('setTextCards')) $('setTextCards').checked = cb.checked;
+      markQuickDeco();
+      uiBanner(cb.checked ? '🅰 텍스트 카드 장면을 켰어요 — 모든 영상에 적용'
+                          : '🅰 텍스트 카드 장면을 껐어요');
+    });
+  });
+}
 function fillSettings(s){
   restoreDrafts(s); bindDrafts();
+  initEzChips(); injectQuickDeco();
+  setTimeout(() => { markEzChips(); markQuickDeco(); }, 0);
   $('setFontSize').value = s.subtitle.font_size;
   $('setOutline').value = s.subtitle.outline;
   $('setMarginV').value = s.subtitle.margin_v;
@@ -8748,7 +8866,7 @@ function clearShopPhotos(ev){
 }
 function extractImgUrls(html){
   const out = [], seen = {};
-  const re = /<img[^>]+?(?:src|data-src|data-original)=["']([^"']+)["']/gi;
+  const re = /<img[^>]+?(?:src|data-src|data-original|data-lazy|data-lazy-src|data-image)=["']([^"']+)["']/gi;
   let m;
   while((m = re.exec(html)) !== null){
     let u = m[1];
