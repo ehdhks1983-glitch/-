@@ -617,7 +617,8 @@ XFADE_POOL = ["dissolve", "slideleft", "circleopen", "wipeleft", "smoothleft", "
 
 def concat_videos(clips: List[str], out_path: str, size=None,
                   fps: int = 30, still_s: float = 2.5,
-                  crossfade_s: float = 0.0, transition: str = "fade") -> str:
+                  crossfade_s: float = 0.0, transition: str = "fade",
+                  crf: int = 19) -> str:
     """여러 클립(영상/사진 혼합)을 순서대로 이어붙인다 (v0.80 구간 조립 공용).
 
     - 해상도가 제각각이어도 size(기본: 첫 영상 클립 크기)에 맞춰 축소+패딩.
@@ -626,6 +627,8 @@ def concat_videos(clips: List[str], out_path: str, size=None,
     - crossfade_s>0 (v0.83): 경계마다 화면은 디졸브(xfade). 소리는 페이드 없이
       원래 볼륨 그대로 이어붙인다 (v0.99 — 램프가 첫마디를 깎던 문제 폐지).
       전체 길이는 경계당 crossfade_s만큼 짧아진다.
+    - crf (v1.11.1): 합본 인코딩 압축 강도(기본 19). 이 합본을 뒤에서 4K로
+      업스케일할 거라면 압축 흠집도 2배로 커지므로 낮춰서(=고화질) 넘긴다.
     - N이 커서 필터 그래프가 길어지면 파일 경유(filter_complex_args).
     """
     clips = [str(c) for c in clips if (c or "").strip() and Path(str(c)).is_file()]
@@ -698,7 +701,7 @@ def concat_videos(clips: List[str], out_path: str, size=None,
         vmap, amap = "[v]", "[a]"
     args += ff.filter_complex_args(fc, Path(out_path).with_suffix(".filter.txt"))
     args += ["-map", vmap, "-map", amap,
-             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", str(int(crf)),
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
              "-movflags", "+faststart", str(out_path)]
     ff.run(args)

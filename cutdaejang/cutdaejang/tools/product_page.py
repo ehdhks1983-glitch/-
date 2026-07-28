@@ -22,35 +22,113 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+# 호스트 목록은 fetch_web 한 곳에서만 관리한다 (v1.12). fetch_web은 표준
+# 라이브러리만 import하므로 순환 import가 생기지 않는다(product_page → fetch_web
+# 단방향). 아래 함수들 안의 지연 import(UA 공유 등)는 그대로 둔다.
+from .fetch_web import SHOP_HOSTS, SHORTENER_HOSTS
+
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
-_SHOP_HOSTS = ("coupang.com", "coupa.ng", "smartstore.naver.com", "brand.naver.com",
-               "shopping.naver.com", "11st.co.kr", "gmarket.co.kr", "auction.co.kr")
+_SHOP_HOSTS = SHOP_HOSTS          # 🛒 원본은 fetch_web.SHOP_HOSTS 하나뿐
+_SHORT_HOSTS = SHORTENER_HOSTS    # 🔗 열어봐야 정체를 아는 단축 도메인
 
 # 상품 사진이 올라가는 공개 CDN — 페이지 어디에 있든 주소 패턴으로 전부 긁는다
 _IMG_RE = re.compile(
     r"(?:https?:)?//(?:thumbnail|image|static)\d*\.coupangcdn\.com/[^\s\"'<>\\)]+?"
     r"\.(?:jpg|jpeg|png|webp)|"
-    r"(?:https?:)?//(?:shop-phinf|shopping-phinf|phinf)\.pstatic\.net/[^\s\"'<>\\)]+?"
-    r"\.(?:jpg|jpeg|png|webp)|"
+    # 🟢 v1.12: 네이버(스마트스토어) 상품 사진은 확장자 없이 ?type=w860 같은 크기
+    # 쿼리만 붙는 주소가 흔해, .jpg/.png로 끝나는 것만 훑던 이 규칙이 통째로 놓쳤다.
+    # pstatic의 phinf 계열(상품·상세 사진 CDN)에 한해 확장자 없는 주소도 잡는다 —
+    # 다른 CDN까지 풀면 스크립트·아이콘 주소가 섞인다.
+    r"(?:https?:)?//[a-z0-9-]*phinf\.pstatic\.net/[^\s\"'<>\\)]{8,}|"
     r"(?:https?:)?//cdn\.011st\.com/[^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp)|"
     r"(?:https?:)?//gdimg\.gmarket\.co\.kr/[^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp)|"
     r"(?:https?:)?//image\.auction\.co\.kr/[^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp)|"
     r"(?:https?:)?//sitem\.ssgcdn\.com/[^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp)", re.I)
-_JUNK_IMG = ("logo", "icon", "sprite", "banner", "btn_", "/common/", "blank.")
+# 스티커·아이콘 CDN은 상품 사진이 아니다 (v1.12 — pstatic 수집 범위를 넓히며 추가)
+_JUNK_IMG = ("logo", "icon", "sprite", "banner", "btn_", "/common/", "blank.",
+             "storep-phinf.", "gfmarket-phinf.", "ssl.pstatic.net")
 
 
 class ShopBlockedError(ValueError):
     """상품 페이지가 프로그램 접속을 차단 — 화면에서 복사→붙여넣기 안내용."""
 
 
-def is_shop_url(url: str) -> bool:
+def _host_of(url: str) -> str:
     try:
-        host = urllib.parse.urlsplit((url or "").strip()).netloc.lower().split(":")[0]
+        return urllib.parse.urlsplit((url or "").strip()).netloc.lower().split(":")[0]
     except ValueError:
-        return False
-    return bool(host) and host.endswith(_SHOP_HOSTS)
+        return ""
+
+
+def _host_in(host: str, hosts: Tuple[str, ...]) -> bool:
+    # fetch_web와 같은 방식 — 점 경계로 비교해 'mycoupang.com'이 걸리지 않게
+    return bool(host) and any(host == h or host.endswith("." + h) for h in hosts)
+
+
+def is_shop_url(url: str) -> bool:
+    return _host_in(_host_of(url), _SHOP_HOSTS)
+
+
+def is_short_url(url: str) -> bool:
+    """naver.me 같은 단축·전달 링크인가 — 열어봐야 상품인지 블로그인지 안다."""
+    return _host_in(_host_of(url), _SHORT_HOSTS)
+
+
+# 중간 안내 페이지(자동 이동)에서 진짜 주소 찾기 — 단축 도메인에서만 쓴다
+_REDIRECT_RE = re.compile(
+    r"""(?:http-equiv=["']refresh["'][^>]*?url=|location\.(?:href|replace)\s*[=(]\s*)"""
+    r"""["']?([^"'\s>)]{4,400})""", re.I)
+
+
+def _landing_url(url: str, timeout: float = 8.0) -> str:
+    """단축링크가 실제로 가리키는 주소만 확인 — 페이지 본문은 받지 않는다.
+
+    HEAD가 막히면 GET으로 앞부분만 읽고, 중간 안내 페이지(meta refresh·
+    location.href)면 그 주소를 돌려준다. 못 알아내면 빈 문자열(=판정 포기).
+    UA는 평소와 같은 정직한 값이고, 차단이면 그대로 포기한다(우회 없음).
+    """
+    headers = {"User-Agent": _UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5"}
+    for method in ("HEAD", "GET"):
+        body = ""
+        try:
+            req = urllib.request.Request(url, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                landed = r.geturl() or url
+                if method == "GET":
+                    body = r.read(16_000).decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            landed = getattr(e, "url", "") or url
+            if landed != url:
+                return landed          # 최종 주소만 알면 충분(차단 안내는 뒷단계에서)
+            continue
+        except Exception:  # noqa: BLE001 — 판정 실패는 '쇼핑 아님'으로 조용히
+            continue
+        if landed != url:
+            return landed
+        m = _REDIRECT_RE.search(body)
+        if m:
+            return urllib.parse.urljoin(landed, m.group(1))
+    return ""
+
+
+def resolve_shop_url(url: str, timeout: float = 8.0) -> str:
+    """상품 링크면 '열어야 할 주소', 아니면 빈 문자열 (v1.12).
+
+    - 이미 쇼핑 호스트면 원본 그대로 (파트너스 추적 링크를 갈아치우지 않는다)
+    - naver.me 등 **알려진 단축 도메인일 때만** 한 번 따라가 최종 host로 재판정
+    - 그 밖의 주소는 네트워크를 전혀 건드리지 않는다 → 블로그 수집 흐름 그대로
+    """
+    u = (url or "").strip()
+    if not u.startswith(("http://", "https://")):
+        return ""
+    if is_shop_url(u):
+        return u
+    if not is_short_url(u):
+        return ""
+    landed = _landing_url(u, timeout=timeout)
+    return landed if landed and is_shop_url(landed) else ""
 
 
 def _fetch_html(url: str, timeout: float = 20.0, ua: str = "",
@@ -254,8 +332,24 @@ def parse_product(html: str, base_url: str = "") -> dict:
 
 
 def _usable(parsed: dict) -> bool:
+    """이 단계 결과를 쓸 만한가 — 사진 0장이어도 제목+설명 30자면 통과한다.
+
+    ⚠ 이 느슨함은 실수가 아니라 '사진은 못 가져와도 대본은 만들어 준다'는
+    붙여넣기 폴백을 살리려는 것이다. 여기서 실패로 바꾸면 링크만 넣은 회원님이
+    대본까지 통째로 잃는다. 대신 그동안 **사진만 0장인 상태가 조용히 성공**해
+    회원님이 알 수 없던 게 진짜 문제였으므로, 아래 photo_note()로 반드시 알린다.
+    """
     return bool(parsed.get("title")) and (bool(parsed.get("images"))
                                           or len(parsed.get("text") or "") >= 30)
+
+
+def photo_note(parsed: dict) -> str:
+    """사진이 0장이면 그 사실과 단계별 숫자를 한 줄로 — 있으면 빈 문자열 (v1.12)."""
+    if parsed.get("images"):
+        return ""
+    detail = parsed.get("via_detail") or ""
+    return ("페이지는 열렸지만 사진 주소를 한 장도 못 찾았어요"
+            + (f" [{detail}]" if detail else ""))
 
 
 def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
@@ -327,6 +421,9 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
             "사진·설명이 한 번에 들어와요")
     parsed.update(final_url=final, via=via or "직접",
                   via_detail=" · ".join(stages))
+    # 🖼 '사진만 0장'인 채 조용히 성공하던 구멍 (v1.12) — 호출한 쪽이 반드시
+    # 회원님께 알리도록 이유를 함께 돌려준다. 대본은 지금처럼 그대로 만들어진다.
+    parsed["photo_note"] = photo_note(parsed)
     return parsed
 
 

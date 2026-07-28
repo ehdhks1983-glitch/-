@@ -239,6 +239,12 @@ class OpenAITTS:
         return str(out_path)
 
 
+# 🎚 고정 시드 (v1.12) — 한 작업 안의 모든 블록, 그리고 재실행까지 같은 화자 샘플을
+# 뽑게 하는 기본값. 0~4294967295 사이면 값 자체는 아무거나 되지만, 이 값이 바뀌면
+# 일레븐랩스 캐시가 통째로 무효가 되므로 함부로 건드리지 않는다.
+ELEVEN_SEED_DEFAULT = 1_207_531
+
+
 class ElevenLabsTTS:
     """ElevenLabs — 내 목소리 클로닝 TTS (한국어 지원, 클로닝은 유료 구독 필요).
 
@@ -248,7 +254,7 @@ class ElevenLabsTTS:
     name = "elevenlabs"
 
     def __init__(self, api_key: Optional[str] = None, model: str = "eleven_multilingual_v2",
-                 stability: float = 0.75, similarity: float = 0.75):
+                 stability: float = 0.75, similarity: float = 0.75, seed: int = 0):
         self.api_key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
         self.model = model
         # 🎙 목소리 일관성 (v0.83) — 문장마다 따로 합성하면 톤이 들쑥날쑥해지는
@@ -256,8 +262,26 @@ class ElevenLabsTTS:
         # previous_text/next_text로 보내 이어읽기(문맥 조건화)한다.
         self.stability = max(0.0, min(1.0, float(stability)))
         self.similarity = max(0.0, min(1.0, float(similarity)))
+        # 🎚 음높이 리셋 방지 (v1.12) — seed를 고정하면 블록이 바뀌어도 같은 화자
+        # 샘플을 뽑는다(결정성은 best-effort). 0=기본 시드, 음수=시드 미사용.
+        try:
+            want_seed = int(seed)
+        except (TypeError, ValueError):
+            want_seed = 0
+        self.seed: Optional[int] = (
+            None if want_seed < 0
+            else (ELEVEN_SEED_DEFAULT if want_seed == 0 else want_seed % 4_294_967_296))
         self.cache_extra = f"stab{self.stability:.2f}|sim{self.similarity:.2f}|ctx1"
+        if self.seed is not None:     # 시드가 바뀌면 다른 소리 → 캐시 키에 반영
+            self.cache_extra += f"|seed{self.seed}"
         self.wants_context = True     # 엔진이 앞뒤 문장을 넣어줌
+        # 🔗 이어읽기(request stitching) — 응답 헤더 request-id를 최대 3개까지 모아
+        # 다음 요청에 넘기면 블록이 넘어가도 억양·음높이가 이어진다 (2시간 내 유효).
+        self._req_ids: deque = deque(maxlen=3)
+        # 일레븐랩스는 한 요청에 10,000자까지 받는다 → 1~2분 영상은 블록 1개로 끝내
+        # 경계 자체를 없앤다. 다른 제공자는 종전 상수 유지(= 기존 캐시 보존).
+        self.continuity_max_chars = 2000
+        self.continuity_max_sentences = 80
         self._prev_text = ""
         self._next_text = ""
         if not self.api_key:
@@ -274,6 +298,13 @@ class ElevenLabsTTS:
             p["previous_text"] = self._prev_text[-300:]
         if self._next_text:
             p["next_text"] = self._next_text[:300]
+        if self.seed is not None:
+            p["seed"] = self.seed          # 블록이 바뀌어도 같은 음색·음높이로
+        if self._req_ids:
+            # 직전 생성들에 프로소디를 이어붙인다(최대 3개). 서버는
+            # previous_request_ids가 있으면 previous_text를 무시하므로 함께 보내도
+            # 안전하고, 사슬이 끊긴 구간에서는 previous_text가 그대로 동작한다.
+            p["previous_request_ids"] = list(self._req_ids)
         return p
 
     def synthesize(self, text: str, voice: str, out_path: str) -> str:
@@ -286,10 +317,21 @@ class ElevenLabsTTS:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            # 블록 하나가 최대 2000자까지 커질 수 있어 여유 있게 기다린다.
+            with urllib.request.urlopen(req, timeout=300) as resp:
                 Path(out_path).write_bytes(resp.read())
+                # 🔗 이 생성의 request-id를 모아 다음 요청 조건화에 쓴다 (최대 3개).
+                rid = str(resp.headers.get("request-id") or "").strip()
+                if rid:
+                    self._req_ids.append(rid)
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "replace")
+            if e.code in (400, 422) and self._req_ids and "request_id" in body.lower():
+                # 사슬이 만료(2시간)·무효면 끊고 문맥만으로 한 번 더 시도한다.
+                # 이 가드가 없으면 4xx는 재시도 없이 곧장 다른 제공자 폴백이 되어
+                # 영상 중간부터 목소리가 통째로 바뀐다 (_synth_raw_with_retry 참고).
+                self._req_ids.clear()
+                return self.synthesize(text, voice, out_path)
             if "paid_plan_required" in body:
                 # 일레븐랩스 정책: 라이브러리 성우는 담기 무료·API 합성은 유료 (v0.65.1)
                 raise TTSNonRetryable(
@@ -680,6 +722,37 @@ def continuity_blocks(sentences: List[str], max_chars: int = CONTINUITY_MAX_CHAR
     return out
 
 
+CONTEXT_CHARS = 300   # 이어읽기 문맥으로 보낼 앞뒤 글자 수 (문맥은 과금되지 않는다)
+
+
+def context_tail(before: List[str], limit: int = CONTEXT_CHARS) -> str:
+    """블록 앞 문장들을 뒤에서부터 limit자까지 이어 붙인다 (previous_text용)."""
+    parts: List[str] = []
+    total = 0
+    for text in reversed([str(s).strip() for s in before]):
+        if not text:
+            continue
+        parts.append(text)
+        total += len(text) + 1
+        if total >= limit:
+            break
+    return " ".join(reversed(parts))[-limit:]
+
+
+def context_head(after: List[str], limit: int = CONTEXT_CHARS) -> str:
+    """블록 뒤 문장들을 앞에서부터 limit자까지 이어 붙인다 (next_text용)."""
+    parts: List[str] = []
+    total = 0
+    for text in [str(s).strip() for s in after]:
+        if not text:
+            continue
+        parts.append(text)
+        total += len(text) + 1
+        if total >= limit:
+            break
+    return " ".join(parts)[:limit]
+
+
 def _silence_midpoints(path: str) -> List[int]:
     """오디오 내부의 자연 무음 중앙 시각(μs). 감지 실패는 빈 목록."""
     try:
@@ -827,6 +900,17 @@ class TTSEngine:
     def cache_path(self, text: str, voice: str, ctx: str = "") -> Path:
         return self.cache_dir / f"{self._cache_key(text, voice, ctx)}.wav"
 
+    def _forget_stitch(self) -> None:
+        """캐시로 건너뛴 자리에서는 이어읽기 사슬을 끊는다 (v1.12).
+
+        request-id 사슬은 '바로 앞에서 실제로 합성한 소리'에만 의미가 있다. 캐시로
+        건너뛴 블록 뒤에 그대로 이어 붙이면 대본상 한참 앞의 억양에 조건화된다.
+        사슬을 끊으면 previous_text(앞 300자) 조건화로 자동으로 되돌아간다.
+        """
+        ids = getattr(self.provider, "_req_ids", None)
+        if ids is not None:
+            ids.clear()
+
     # ---------- 합성 ----------
 
     def _resolve_voice(self, voice: str) -> str:
@@ -957,6 +1041,7 @@ class TTSEngine:
         out = self.cache_path(text, voice, ctx)
         if out.exists():
             self.stats["cache_hits"] += 1
+            self._forget_stitch()
             return out
         raw = out.with_suffix(f".{uuid.uuid4().hex[:8]}.raw.wav")  # 동시 잡 경쟁 방지
         try:
@@ -1060,6 +1145,7 @@ class TTSEngine:
         ]
         if all(p.is_file() for p in parts):
             self.stats["cache_hits"] += 1
+            self._forget_stitch()
             return parts
 
         if not block.is_file():
@@ -1080,7 +1166,20 @@ class TTSEngine:
                 raw.unlink(missing_ok=True)
         else:
             self.stats["cache_hits"] += 1
+            self._forget_stitch()
         return parts if self._split_continuity_block(block, spoken, parts) else None
+
+    def _block_context(self, sentences: List[str], start: int, end: int) -> Tuple[str, str]:
+        """블록 [start, end) 앞뒤로 보낼 이어읽기 문맥 (v1.12).
+
+        문맥을 실제로 API에 보내는 제공자(일레븐랩스)에게만 앞뒤 300자를 넉넉히 준다.
+        나머지 제공자는 종전과 완전히 같은 문자열을 돌려주므로 캐시 키가 바뀌지 않는다
+        (_synth_continuity_block의 ctx가 제공자 종류와 무관하게 키에 들어가기 때문).
+        """
+        if not getattr(self.provider, "wants_context", False):
+            return ((sentences[start - 1] if start > 0 else ""),
+                    (sentences[end] if end < len(sentences) else ""))
+        return context_tail(sentences[:start]), context_head(sentences[end:])
 
     def _synth_all_continuous(
         self, sentences: List[str], voice: str,
@@ -1089,24 +1188,29 @@ class TTSEngine:
         """긴 원고를 1~2분 블록으로 이어 읽되 기존 문장별 타이밍 계약은 유지."""
         paths: List[Path] = []
         done = 0
-        blocks = continuity_blocks(sentences)
+        # 제공자가 한 번에 받을 수 있는 만큼 크게 묶는다 — 블록 경계가 없으면
+        # 음높이가 리셋될 자리도 없다 (일레븐랩스 2000자/80문장, 나머지는 종전값).
+        blocks = continuity_blocks(
+            sentences,
+            max_chars=getattr(self.provider, "continuity_max_chars",
+                              CONTINUITY_MAX_CHARS),
+            max_sentences=getattr(self.provider, "continuity_max_sentences",
+                                  CONTINUITY_MAX_SENTENCES))
         for start, end in blocks:
             texts = sentences[start:end]
             block_paths = None
             if len(texts) > 1:
+                prev_ctx, next_ctx = self._block_context(sentences, start, end)
                 block_paths = self._synth_continuity_block(
-                    texts, voice,
-                    prev_text=(sentences[start - 1] if start > 0 else ""),
-                    next_text=(sentences[end] if end < len(sentences) else ""))
+                    texts, voice, prev_text=prev_ctx, next_text=next_ctx)
             if block_paths is None:
                 # TTS가 문장 사이에 감지 가능한 자연 무음을 만들지 않은 경우에는
                 # 단어 중간을 자르지 않고 기존 문장별 방식으로 안전하게 되돌린다.
                 block_paths = []
                 for i, text in enumerate(texts, start):
+                    prev_ctx, next_ctx = self._block_context(sentences, i, i + 1)
                     block_paths.append(self.synth_sentence(
-                        text, voice,
-                        prev_text=(sentences[i - 1] if i > 0 else ""),
-                        next_text=(sentences[i + 1] if i + 1 < len(sentences) else "")))
+                        text, voice, prev_text=prev_ctx, next_text=next_ctx))
             paths.extend(block_paths)
             done += len(texts)
             if on_progress:
@@ -1133,7 +1237,8 @@ def make_provider(name: str, settings: dict) -> TTSProvider:
         return ElevenLabsTTS(
             model=tts_cfg.get("model_elevenlabs", "eleven_multilingual_v2"),
             stability=float(tts_cfg.get("eleven_stability", 0.75)),
-            similarity=float(tts_cfg.get("eleven_similarity", 0.75)))
+            similarity=float(tts_cfg.get("eleven_similarity", 0.75)),
+            seed=int(tts_cfg.get("eleven_seed", 0) or 0))
     if name == "sovits":
         return GPTSoVITSTTS(url=tts_cfg.get("sovits_url", ""),
                             ref_audio=tts_cfg.get("sovits_ref_audio", ""),

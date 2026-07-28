@@ -224,7 +224,17 @@ QUALITY_PRESETS = {
     "high":     {"mult": 1.0, "crf": 17, "preset": "medium", "sharpen": "unsharp"},
     # 4K 업스케일: 저압축(crf16) + CAS 적응형 선명화 — 업스케일 물러짐 보정 (v0.35)
     "ultra":    {"mult": 2.0, "crf": 16, "preset": "fast", "sharpen": "cas"},
+    # 🚀 v1.11.1 — 4K 등급의 '중간 산출물'용 내부 등급. 업스케일·선명화만 뺐다.
+    # 조각을 4K로 굽고 합본에서 1080p로 줄였다가 다시 4K로 올리면 인코딩이 3회로
+    # 늘고 최종 결과도 1080p 업스케일이 된다 → 업스케일은 마지막 한 번만.
+    # 선명화를 끈 이유: 이 단계는 리샘플을 하지 않아 보정할 물러짐이 없다
+    # (업스케일 뒤 CAS는 최종 패스에서 그대로 걸린다).
+    # 중간 산출물 규약(ultrafast·저손실)에 맞춰 crf 18 / veryfast.
+    # 이름 앞의 밑줄: 사용자가 고르는 등급이 아니라 내부 전용이라는 표시.
+    "_ultra_base": {"mult": 1.0, "crf": 18, "preset": "veryfast", "sharpen": False},
 }
+# 중간 산출물(구간 파일 등)을 구울 때 쓸 등급 — 해상도 배수만 1.0으로 낮춘다 (v1.11.1)
+BASE_QUALITY = {"ultra": "_ultra_base"}
 _SHARPEN = {"unsharp": "unsharp=5:5:0.8:5:5:0.0", "cas": "cas=0.55", True: "unsharp=5:5:0.8:5:5:0.0"}
 _MAX_DIM = 3840  # 과도한 업스케일 방지 캡
 # 잡음 제거(강도별): 저역 럼블 컷 + FFT 노이즈 리덕션 + 고역 히스 컷 (목소리 대역 보존)

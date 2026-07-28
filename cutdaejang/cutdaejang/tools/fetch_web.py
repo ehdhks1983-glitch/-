@@ -24,9 +24,18 @@ _IMG_CAP = 15_000_000        # 이미지 1장 최대 15MB
 _IMG_MIN = 10_000            # 10KB 미만은 아이콘·빈 이미지로 보고 스킵
 _TEXT_CAP = 8_000            # 본문 저장 상한(자)
 
+# 🛒 상품(쇼핑) 페이지 호스트 — product_page.is_shop_url()도 이 목록만 본다.
+# (v1.12) 목록이 두 군데로 갈라져 있어 naver.me가 블로그 수집엔 있고 상품
+# 수집엔 빠지는 사고가 났다 → 여기가 유일한 원본. 새 쇼핑몰은 여기에만 추가한다.
+SHOP_HOSTS = ("coupang.com", "coupa.ng", "smartstore.naver.com", "brand.naver.com",
+              "shopping.naver.com", "11st.co.kr", "gmarket.co.kr", "auction.co.kr")
+# 🔗 단축·전달 링크 — 열어보기 전에는 블로그인지 상품인지 알 수 없는 호스트.
+# 이 목록의 주소에 한해서만 리다이렉트를 따라가 최종 host로 다시 판정한다.
+# ⚠ 여기 있는 호스트를 SHOP_HOSTS에 넣으면 안 된다 — naver.me는 블로그 공유에도
+# 쓰여서 상품으로 단정하면 블로그 수집이 통째로 잘못된 경로를 탄다.
+SHORTENER_HOSTS = ("naver.me", "me2.do", "coupa.ng", "link.coupang.com")
 # 제휴·상품 링크로 인식할 호스트 (제품 프로필 link 칸 자동 채움용)
-_PARTNER_HOSTS = ("coupa.ng", "link.coupang.com", "coupang.com",
-                  "naver.me", "smartstore.naver.com", "shopping.naver.com")
+_PARTNER_HOSTS = SHOP_HOSTS + SHORTENER_HOSTS
 # 스티커·이모티콘 CDN — 본문 사진이 아님
 _STICKER_HOSTS = ("storep-phinf.pstatic.net", "gfmarket-phinf.pstatic.net")
 # 프로그램 접근을 막는 것으로 알려진 상품 페이지 호스트 → 전용 안내

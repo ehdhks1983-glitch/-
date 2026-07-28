@@ -1818,6 +1818,12 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
         def say(msg: str) -> None:
             _WEBLINK_TASK["msg"] = msg
 
+        # 🔗 단축링크(naver.me 등)는 열어봐야 상품인지 블로그인지 안다 (v1.12).
+        # 알려진 단축 도메인일 때만 리다이렉트를 한 번 따라가 최종 host로 재판정하고,
+        # 그 밖의 주소는 네트워크를 건드리지 않아 블로그 수집 흐름은 그대로다.
+        # (naver.me를 쇼핑 호스트 목록에 그냥 넣으면 naver.me로 공유된 '블로그 글'이
+        #  상품 수집으로 잘못 흘러간다 — 그래서 목록이 아니라 재판정으로 푼다.)
+        shop_url = product_page.resolve_shop_url(url)
         if pasted_text.strip():
             first = next((ln.strip() for ln in pasted_text.splitlines() if ln.strip()), "")
             art = {"title": first[:60] or "상품 소개",
@@ -1831,7 +1837,7 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
             # 그 상태로 [대본 만들기]를 누르면 붙여넣기 분기가 링크 수집을 통째로
             # 건너뛰어 API 대표 사진 1장만 남았다 (사용자 리포트 "블로그는
             # 5장인데 여긴 왜 그러는 거야"의 진짜 원인 — 수집기가 아예 안 돌았음)
-            if url and product_page.is_shop_url(url):
+            if shop_url:
                 try:
                     # 붙여넣은 설명은 이미 대본 근거로 충분하므로 사진 보강 때문에
                     # 전체 작업을 수 분 붙잡지 않는다. 25초 안에 수집되면 합류시키고,
@@ -1848,7 +1854,7 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                     def collect_link_photos() -> None:
                         try:
                             collected["result"] = product_page.collect_product(
-                                url, progress_cb=collect_progress)
+                                shop_url, progress_cb=collect_progress)
                         except Exception as exc:  # noqa: BLE001
                             collected["error"] = exc
 
@@ -1869,7 +1875,7 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                         url.encode("utf-8")).hexdigest()[:8]
                     local, skipped = product_page.download_images(
                         prod["images"], dest2,
-                        referer=prod.get("final_url") or url)
+                        referer=prod.get("final_url") or shop_url)
                     if local:
                         art["images"], dest = local, dest2
                         art["notes"] = [
@@ -1878,6 +1884,20 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                             + (f" (자잘한 그림 {skipped}장 제외)" if skipped else "")
                             + (f" [{prod.get('via_detail')}]"
                                if prod.get("via_detail") else "")]
+                    else:
+                        # 🖼 사진 0장인데 조용히 넘어가던 자리 (v1.12) — 주소를 못
+                        # 찾은 건지, 받다가 막힌 건지 숫자로 구분해 알려준다.
+                        found = len(prod.get("images") or [])
+                        detail = (f" [{prod.get('via_detail')}]"
+                                  if prod.get("via_detail") else "")
+                        why = (f"사진 주소 {found}개를 찾았지만 {skipped}장 모두 "
+                               f"내려받기에 실패했어요{detail}" if found
+                               else (prod.get("photo_note")
+                                     or "사진 주소를 한 장도 못 찾았어요"))
+                        art["notes"] = [
+                            "🛒 링크는 열렸는데 상품 사진은 못 가져왔어요 — " + why
+                            + " · 상품 페이지에서 사진 부분을 복사(Ctrl+C)해 이 화면에 "
+                              "Ctrl+V 하면 사진이 한꺼번에 들어와요"]
                 except Exception as ce:  # noqa: BLE001 — 사진이 막혀도 글로는 대본 진행
                     why = str(ce)[:160] if isinstance(ce, product_page.ShopBlockedError) else ""
                     art["notes"] = [
@@ -1885,13 +1905,13 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                          + (f" — {why}" if why else "")
                          + " · 상품 페이지에서 사진 부분을 복사(Ctrl+C)해 이 화면에 "
                            "Ctrl+V 하면 사진이 한꺼번에 들어와요")]
-        elif product_page.is_shop_url(url):
+        elif shop_url:
             # 🛒 상품 링크 자동 수집 (v0.92) — 직접 요청 → PC 브라우저 헤드리스 → 폴백 안내
             try:
-                prod = product_page.collect_product(url, progress_cb=say)
+                prod = product_page.collect_product(shop_url, progress_cb=say)
             except product_page.ShopBlockedError:
                 try:                             # 폴백을 바로 할 수 있게 페이지를 열어준다
-                    webbrowser.open(url)
+                    webbrowser.open(shop_url)
                 except Exception:  # noqa: BLE001
                     pass
                 raise
@@ -1899,17 +1919,25 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
             say(f"상품 사진 {len(prod['images'])}장 내려받는 중…")
             local, skipped = product_page.download_images(
                 prod["images"], dest,
-                referer=prod.get("final_url") or url)
+                referer=prod.get("final_url") or shop_url)
             if local:
                 note = (f"🛒 상품 페이지에서 자동 수집했어요 ({prod['via']} 경로) — "
                         f"사진 {len(local)}장"
                         + (f", 자잘한 그림 {skipped}장 제외" if skipped else "")
                         + (f" [{prod.get('via_detail')}]" if prod.get("via_detail") else ""))
             else:
-                # 🖼 글은 왔는데 사진이 0장 (v0.97) — 페이지를 열어 복사 폴백으로 연결
-                note = ("🖼 글은 가져왔는데 사진은 자동으로 못 가져왔어요 — 방금 연 "
-                        "상품 페이지에서 Ctrl+A(전체 선택) → Ctrl+C(복사) 후 이 화면에 "
-                        "Ctrl+V 하면 메인 사진들이 들어와요")
+                # 🖼 글은 왔는데 사진이 0장 (v0.97 → v1.12) — 어디서 죽었는지
+                # 숫자로 구분: 주소를 못 찾음 / 주소는 찾았는데 받기 실패
+                found = len(prod.get("images") or [])
+                detail = (f" [{prod.get('via_detail')}]"
+                          if prod.get("via_detail") else "")
+                why = (f"사진 주소 {found}개를 찾았지만 {skipped}장 모두 "
+                       f"내려받기에 실패했어요{detail}" if found
+                       else (prod.get("photo_note")
+                             or "사진 주소를 한 장도 못 찾았어요"))
+                note = ("🖼 글은 가져왔는데 사진은 자동으로 못 가져왔어요 — " + why
+                        + " · 방금 연 상품 페이지에서 Ctrl+A(전체 선택) → "
+                          "Ctrl+C(복사) 후 이 화면에 Ctrl+V 하면 사진이 들어와요")
                 try:
                     webbrowser.open(prod.get("final_url") or url)
                 except Exception:  # noqa: BLE001
@@ -2003,6 +2031,14 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             return
         layout = params.get("layout") if params.get("layout") in ("wide", "shorts") else "wide"
         quality = params.get("quality") or "standard"
+        # 🚀 v1.11.1: 구간(중간 산출물)은 배수 1.0으로 굽고, 4K 업스케일은 자막을
+        # 입히는 마지막 합본 패스에서 딱 한 번만 한다. 지금까지는 구간을 4K로 구운 뒤
+        # 합본에서 1080p로 줄이고 다시 4K로 올리는 왕복이라 인코딩이 3회였고
+        # (3분 영상 45분), 최종 결과도 '진짜 4K'가 아니라 1080p 업스케일이었다.
+        # ⚠ 구간이 1개면 concat(다운스케일)이 아예 실행되지 않는다 — 그 경로는
+        #    지금도 왕복이 없고 원본 화소가 그대로 살아 나가므로 손대지 않는다.
+        sec_quality = (edit_mode.BASE_QUALITY.get(quality, quality)
+                       if len(secs) > 1 else quality)
         transition = str(params.get("transition") or "fade").strip() or "fade"
         sec_xfade = 0.0 if transition == "none" else 0.45
         # 연속 낭독 자체에 이미 자연 호흡이 있으므로 별도 무음을 길게 더하지 않는다.
@@ -2064,7 +2100,13 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         params["hook"] = hook_txt          # 렌더·재사용 지문·재편집 모두 확정값 사용
         common_fp = (
             f"{style!r}|{layout}|{quality}|{voice}|{list(chain)}|{piece_us}"
-            f"|{params.get('hook') or ''}|bed1|bed3-final-sync|gap{narr_gap_us}|{transition}")
+            f"|{params.get('hook') or ''}|bed1|bed3-final-sync|gap{narr_gap_us}|{transition}"
+            # v1.11.1: 4K로 구웠던 옛 구간 파일은 재사용 금지 (이제 구간은 1080p 기준).
+            # 배수가 그대로인 등급(standard·high…)과 단일 구간 작업은 접미사가 붙지
+            # 않아 ♻ 재사용이 계속 살아 있다. 등급 이름이 아니라 '실제 배수'를 넣어
+            # 나중에 배수만 바뀌어도 자동으로 무효화되게 한다.
+            + (f"|secmult{edit_mode.QUALITY_PRESETS[sec_quality]['mult']}"
+               if sec_quality != quality else ""))
         # bed3-final-sync: 자막을 합본에 한 번만 입히는 새 구조. 옛 자막 구간 재사용 차단.
 
         def _sec_fp(sec_d: dict, rng: str) -> str:
@@ -2240,10 +2282,12 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 r = edit_mode.render_from_analysis(
                     cut, [], str(job_dir / f"sec_{i}.mp4"),
                     style=visual_style, layout=layout, hook="",
-                    quality=quality, narration_wav=None,
+                    quality=sec_quality, narration_wav=None,
                     orig_audio="mute",
+                    # v1.11.1: 구간 렌더는 전체의 앞 45%까지만 — 뒤에 오는
+                    # '자막 입히기' 단계가 실제로 가장 오래 걸리므로 그쪽에 절반을 준다.
                     progress_cb=lambda f, b=base: _set_job(
-                        job_id, frac=min(0.97, b + (0.4 + f * 0.6) / n)))
+                        job_id, frac=min(0.45, (b + (0.4 + f * 0.6) / n) * 0.45)))
                 if not r.ok:
                     raise RuntimeError("; ".join(r.errors) or "렌더 실패")
                 p["bed"] = (list(clips2), list(subs))   # 합본 내레이션 베드 재료
@@ -2261,7 +2305,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 json.dumps(fps_meta, ensure_ascii=False), encoding="utf-8")
         except OSError:
             pass
-        _set_job(job_id, stage="render", frac=0.97, note="🎞 구간들을 이어붙이는 중…")
+        _set_job(job_id, stage="render", frac=0.47, note="🎞 구간들을 이어붙이는 중…")
         cw, ch = (1080, 1920) if layout == "shorts" else (1920, 1080)
         # 🎬 구간 전환 (v0.83 크로스페이드 → v0.85 종류 선택: 디졸브/다양하게/밀기/컷…)
         durs = [ff.probe_duration_us(p) / 1e6 for p in outs]
@@ -2270,7 +2314,10 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         if len(outs) > 1:
             final = video_editor.concat_videos(
                 outs, str(job_dir / "sections_final.mp4"), size=(cw, ch),
-                crossfade_s=fade, transition=transition)
+                crossfade_s=fade, transition=transition,
+                # v1.11.1: 이 합본이 곧 최종 4K 업스케일의 원본 — 압축 흠집까지
+                # 2배로 확대되므로 중간 인코딩만 살짝 조인다 (기본 19 → 17).
+                crf=(17 if sec_quality != quality else 19))
         # v1.10.1: "영상을 다 합치고 → 그다음에 내레이션+자막".
         # 구간 파일은 화면만 담고, 실제 TTS 클립 배치표(abs_subs)를 음성과 자막이
         # 함께 사용한다. 부분 재편집·TTS 폴백으로 길이가 바뀌어도 둘이 어긋나지 않는다.
@@ -2284,8 +2331,15 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             all_clips += list(clips_b)
             off += durs[k] - (fade if k < len(outs) - 1 else 0.0)
         if all_clips:
-            _set_job(job_id, frac=0.975,
-                     note="🎙 합본 위에 내레이션과 자막을 같은 시간표로 입히는 중…")
+            # ⏱ v1.11.1 — 이 마지막 패스가 전체에서 가장 오래 걸리는 단계다(4K로
+            # 올리며 자막까지 굽는다). 예전엔 0.975~0.989 사이에 눌러 담아 화면이
+            # 계속 "98%"로 보였고, 회원님은 멈춘 줄 알고 45분을 기다렸다.
+            # 이제 이 단계에 진행률 절반(0.50~0.97)을 통째로 내주고, 오래 걸린다는
+            # 사실을 문구로 먼저 알린다.
+            _big = "🖼 4K로 올리며 " if quality == "ultra" else "🎙 "
+            _set_job(job_id, frac=0.50,
+                     note=f"{_big}합본 위에 내레이션과 자막을 같은 시간표로 입히는 중… "
+                          "— 이 단계가 가장 오래 걸려요 (멈춘 게 아닙니다)")
             try:
                 total_us = ff.probe_duration_us(final)
                 bed_wav = edit_mode.build_narration_wav(
@@ -2296,7 +2350,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                     hook=str(params.get("hook") or ""), quality=quality,
                     narration_wav=str(bed_wav), orig_audio="mute",
                     progress_cb=lambda f: _set_job(
-                        job_id, frac=min(0.989, 0.975 + f * 0.014)))
+                        job_id, frac=min(0.97, 0.50 + f * 0.47)))
                 if not synced_result.ok:
                     raise RuntimeError(
                         "; ".join(synced_result.errors)
@@ -2305,6 +2359,11 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             except Exception as be:  # noqa: BLE001 — 실패해도 화면 합본은 살린다
                 logging.getLogger("cutdaejang").error("내레이션·자막 동기화 실패: %s", be)
                 errors.append(f"내레이션·자막 동기화 실패: {str(be)[:200]}")
+                if quality == "ultra":
+                    # 🖼 이 경우 남는 파일은 업스케일 전 합본이다 — 4K인 줄 알고
+                    # 올리시면 안 되니 해상도가 내려갔다는 사실을 분명히 알린다.
+                    notes.append("⚠ 마지막 4K 단계가 실패해 1080p 합본으로 저장했어요 "
+                                 "— 4K가 필요하면 다시 만들어 주세요")
         if (params.get("bgm") or "").strip():        # 🎵 BGM은 최종 합본에 1회 (덕킹)
             b = resolve_bgm(params["bgm"], settings)
             if b and b.path:
@@ -2638,7 +2697,7 @@ class _Handler(BaseHTTPRequestHandler):
         # 작업 id에 한글이 들어가므로 퍼센트 인코딩된 경로를 복원해야 매칭된다
         path = urllib.parse.unquote(self.path.split("?", 1)[0])
         if path == "/":
-            body = _HTML.encode("utf-8")
+            body = _apply_links(_HTML).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -4355,6 +4414,40 @@ def serve(workdir: str = "jobs", port: int = 7860, open_browser: bool = True) ->
 
 # ─────────────────────────── 화면 (단일 페이지) ───────────────────────────
 
+# 🔗 외부 링크 단일 출처 (v1.11.1) — 주소가 바뀌면 여기만 고친다.
+# HTML 안에서는 {{LINK:키}} 토큰으로 쓰고, 서빙 직전에 _apply_links()가 치환한다.
+# ⚠ 주소를 바꿀 때는 반드시 브라우저로 직접 열어 확인한 뒤 고칠 것 (추측 금지 —
+#   shoppingconnect.naver.com 이 존재하지 않는 주소였던 사고가 여기서 나왔다).
+EXT_LINKS = {
+    "youtube_studio": "https://studio.youtube.com",
+    "tiktok_upload": "https://www.tiktok.com/tiktokstudio/upload",
+    "instagram": "https://www.instagram.com",
+    "naver_clip": "https://clipcreators.naver.com",
+    "threads": "https://www.threads.com",
+    "coupang_partners": "https://partners.coupang.com",
+    # 쇼핑커넥트는 독립 도메인이 아니라 브랜드커넥트 플랫폼 안의 메뉴다.
+    "naver_shopping_connect": "https://brandconnect.naver.com",
+    "naver_dev_apps": "https://developers.naver.com/apps/#/register",
+    "gemini_apikey": "https://aistudio.google.com/apikey",
+    "elevenlabs": "https://elevenlabs.io",
+    "elevenlabs_apikeys": "https://elevenlabs.io/app/settings/api-keys",
+    "elevenlabs_voicelib": "https://elevenlabs.io/app/voice-library",
+    "cc_by_40": "http://creativecommons.org/licenses/by/4.0/",
+}
+
+
+def _apply_links(html: str) -> str:
+    """``{{LINK:키}}`` 토큰을 EXT_LINKS 주소로 치환한다.
+
+    토큰이 하나도 없으면 원문 그대로라, 기존 하드코딩 href를 한 번에 옮기지 않고
+    하나씩 이관해도 안전하다. .format()이 아니라 replace를 쓰는 이유는 _HTML에
+    CSS/JS 중괄호가 대량으로 들어 있어 포맷 문자열로 다루면 즉시 깨지기 때문.
+    """
+    for key, url in EXT_LINKS.items():
+        html = html.replace("{{LINK:%s}}" % key, url)
+    return html
+
+
 _HTML = """<!doctype html>
 <html lang="ko">
 <head>
@@ -4492,7 +4585,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.11.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.11.1)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5664,7 +5757,7 @@ _HTML = """<!doctype html>
     </details>
     <details class="opt">
       <summary>🟢 네이버 쇼핑커넥트 <span class="hint" id="nvKeyState">— 무료 검색 API 키를 저장하면 상품 검색 자동</span>
-        <a href="https://shoppingconnect.naver.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 쇼핑커넥트 열기</a></summary>
+        <a href="{{LINK:naver_shopping_connect}}" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 브랜드커넥트(쇼핑커넥트) 열기</a></summary>
       <details class="opt" id="nvKeyBox" style="margin-top:4px">
         <summary>🔑 네이버 검색 API 키 <span class="hint">— developers.naver.com에서 앱 등록(무료) 후 발급</span>
           <a href="https://developers.naver.com/apps/#/register" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 앱 등록 페이지</a></summary>
@@ -5679,7 +5772,7 @@ _HTML = """<!doctype html>
         <button class="ghost" onclick="naverSearch(event)">🟢 상품 검색</button>
       </div>
       <div id="nvResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px"></div>
-      <div class="hint" style="margin-top:4px">쇼핑커넥트 수익 링크는 커넥트 대시보드에서 만들어 아래 「내 수익 링크」에 붙여넣어 주세요 (API로는 발급이 안 돼요)</div>
+      <div class="hint" style="margin-top:4px">쇼핑커넥트 수익 링크는 <b>브랜드커넥트</b>(위 ↗ 버튼) 로그인 → <b>쇼핑커넥트</b> 메뉴에서 만들어 아래 「내 수익 링크」에 붙여넣어 주세요 (API로는 발급이 안 돼요)</div>
     </details>
     </details>
     <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>수집 결과 확인 <span class="hint">— 사진은 아래 번호 순서대로 영상에 모두 반영됩니다</span></div>

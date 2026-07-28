@@ -34,6 +34,8 @@ DEFAULTS: dict = {
         "windows_rate": 0,                      # 내장 음성 말 속도 -10~10 (v0.44)
         "windows_voice": "",                    # 내장 음성 보이스명 (빈 값=한국어 첫 번째, v0.59)
         "eleven_favs": [],                      # ⭐ 일레븐랩스 즐겨찾기 voice_id 목록 (v0.67)
+        "eleven_seed": 0,                       # 🎚 음색 고정 시드 (v1.12) — 0=기본 시드,
+                                                # 음수=끄기(옛 캐시 유지), 1~4294967295=직접 지정
         "auto_pronounce": True,                 # TTS 앞 숫자·영어 한글 발음 변환 (v0.46.1)
     },
     "audio": {
