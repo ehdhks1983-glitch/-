@@ -325,7 +325,8 @@ def photo_sentence_spans(n_images: int, sub_starts_us: List[int],
     """사진 ↔ 내레이션 문장 매핑 → [(사진 번호, 지속 μs)] (v0.79 사진-문장 싱크).
 
     문장 j 블록 = [j 시작, j+1 시작) — 첫 블록은 0부터, 마지막은 total_us까지.
-    사진이 문장보다 많으면 앞쪽 문장 수만큼만 쓰고, 적으면 연속 블록을 묶어 커버.
+    사진이 문장보다 많으면 한 문장 안에서 여러 사진을 고르게 넘기고, 적으면
+    연속 문장 블록을 묶어 커버한다. 수집된 뒤쪽 사진을 조용히 버리지 않는다.
     지속 합계는 항상 total_us (내레이션 길이와 영상 길이가 정확히 일치).
     """
     m = len(sub_starts_us)
@@ -333,8 +334,27 @@ def photo_sentence_spans(n_images: int, sub_starts_us: List[int],
         return []
     bounds = [0] + [max(0, int(s)) for s in sub_starts_us[1:]] + [int(total_us)]
     durs = [max(0, bounds[j + 1] - bounds[j]) for j in range(m)]
-    n = min(n_images, m)
     spans: List[Tuple[int, int]] = []
+    if n_images > m:
+        # 쇼핑 링크에서 사진 8장을 모아도 대본이 3줄이면 예전에는 앞 3장만
+        # 렌더됐다. 각 문장 블록을 2~3장의 짧은 컷으로 나눠 전부 반영한다.
+        if not all(d > 0 for d in durs):
+            base, rem = divmod(int(total_us), n_images)
+            return [(i, base + (1 if i < rem else 0))
+                    for i in range(n_images) if base + (1 if i < rem else 0) > 0]
+        base_count, extra = divmod(n_images, m)
+        photo_i = 0
+        for j, dur in enumerate(durs):
+            count = base_count + (1 if j < extra else 0)
+            per, rem = divmod(dur, count)
+            for k in range(count):
+                piece = per + (1 if k < rem else 0)
+                if piece > 0:
+                    spans.append((photo_i, piece))
+                photo_i += 1
+        return spans
+
+    n = n_images
     for i in range(n):
         lo, hi = i * m // n, (i + 1) * m // n
         d = sum(durs[lo:hi])
@@ -462,45 +482,48 @@ def _nearest_scene(t_us: int, scenes: List[int], max_shift_us: int):
     return best
 
 
-def montage_piece_us(tempo: str = "", target_s: int = 0) -> int:
-    """자동 몽타주 조각 하나의 길이 — 템포 + 완성 길이에 맞춰 (v1.10).
-
-    쇼츠(30~60초)는 짧게 끊어 리듬을 만들지만, 긴 영상(2분↑)에서 같은 밀도로
-    자르면 조각이 수백 개가 되어 산만하고 렌더도 느려진다 → 조각을 2배로.
-    """
-    base = {"빠르게": 2_400_000, "아주 빠르게": 1_700_000}.get(str(tempo or ""), 3_500_000)
-    return base * 2 if int(target_s or 0) >= 120 else base
-
-
 def shift_ranges_to_silence(ranges: List[Tuple[int, int]],
-                            speech_segs: List[Tuple[int, int]], dur_us: int,
+                            speech_segs: List[Tuple[int, int]], duration_us: int,
                             max_shift_us: int = 1_500_000,
                             min_len_us: int = 600_000) -> List[Tuple[int, int]]:
-    """컷 경계를 '말하는 중간'에서 무음 지점으로 이동 (v1.09 — 사용자 리포트
-    "전환될 때마다 나래이션이 끊긴다": 목소리 든 영상을 시간으로만 자르면
-    경계가 문장 한가운데 떨어진다). 발화 구간(speech_segs) 밖의 가장 가까운
-    지점으로 각 경계를 옮긴다 — max_shift 안에 무음이 없으면 그대로 둔다.
+    """몽타주 컷 경계를 발화 중간에서 가까운 무음 지점으로 옮긴다.
+
+    시간 비율만으로 영상을 자르면 문장 한가운데서 화면과 원본 음성이 함께 끊길 수
+    있다. 각 경계가 발화 구간 안에 있을 때만 그 발화의 시작/끝 중 가까운 지점으로
+    이동하고, 허용 거리 안에 무음이 없으면 원래 경계를 유지한다.
     """
     if not speech_segs:
         return list(ranges)
-    segs = sorted((max(0, int(a)), min(dur_us, int(b))) for a, b in speech_segs)
+    segs = sorted(
+        (max(0, int(start)), min(duration_us, int(end)))
+        for start, end in speech_segs
+        if int(end) > int(start)
+    )
+    if not segs:
+        return list(ranges)
 
-    def snap(x: int) -> int:
-        for a, b in segs:
-            if a <= x <= b:                       # 말 한가운데 → 앞뒤 무음 중 가까운 쪽
-                cands = [c for c in (a, b) if abs(c - x) <= max_shift_us]
-                return min(cands, key=lambda c: abs(c - x)) if cands else x
-        return x                                  # 이미 무음 지점
+    def _snap(value: int) -> int:
+        for start, end in segs:
+            if start < value < end:
+                candidates = [
+                    point for point in (start, end)
+                    if abs(point - value) <= max_shift_us
+                ]
+                return min(candidates, key=lambda point: abs(point - value)) \
+                    if candidates else value
+        return value
 
     out: List[Tuple[int, int]] = []
-    for s0, e0 in ranges:
-        s1, e1 = snap(int(s0)), snap(int(e0))
-        s1 = max(0, min(s1, dur_us - min_len_us))
-        e1 = max(s1 + min_len_us, min(e1, dur_us))
-        if out and s1 < out[-1][1]:               # 앞 조각과 겹치면 이어붙임 지점 유지
-            s1 = out[-1][1]
-            e1 = max(e1, s1 + min_len_us)
-        out.append((s1, min(e1, dur_us)))
+    for raw_start, raw_end in ranges:
+        start, end = _snap(int(raw_start)), _snap(int(raw_end))
+        start = max(0, min(start, max(0, duration_us - min_len_us)))
+        end = max(start + min_len_us, min(end, duration_us))
+        if out and start < out[-1][1]:
+            start = out[-1][1]
+            end = max(end, start + min_len_us)
+        end = min(end, duration_us)
+        if end - start >= min_len_us:
+            out.append((start, end))
     return out
 
 

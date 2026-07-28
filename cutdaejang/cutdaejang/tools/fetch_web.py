@@ -250,9 +250,11 @@ def _sniff_ext(data: bytes, url: str) -> Optional[str]:
     return None
 
 
-def fetch_bytes(url: str, timeout: float = 20.0, cap: int = 15_000_000) -> bytes:
+def fetch_bytes(url: str, timeout: float = 20.0, cap: int = 15_000_000,
+                referer: str = "") -> bytes:
     """단일 파일(이미지 등) 내려받기 — 🛒 파트너스 상품 이미지 CDN용 (v0.88)."""
-    data, _final, _ct = _get(url, referer=url, timeout=timeout, cap=cap)
+    data, _final, _ct = _get(
+        url, referer=referer or url, timeout=timeout, cap=cap)
     return data
 
 

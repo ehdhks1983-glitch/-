@@ -646,6 +646,112 @@ OPENAI_STYLE_VOICES = {"정보형": "nova", "텐션형": "shimmer", "스토리�
 
 GEMINI_VOICES = ["Kore", "Puck", "Charon", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"]
 
+# 긴 대본을 문장마다 API 호출하면 같은 보이스를 골라도 호출마다 억양·음높이가
+# 조금씩 다시 샘플링된다. 실제 음성은 여러 문장을 한 호흡으로 합성한 뒤, 문장 사이
+# 자연 무음에서 다시 나눠 기존 자막 타이밍 파이프라인에 그대로 넣는다.
+CONTINUITY_PROVIDERS = {"gemini", "openai", "elevenlabs", "sovits"}
+CONTINUITY_MAX_CHARS = 1200       # OpenAI 4096자 제한보다 충분히 작고 약 1~2분 분량
+CONTINUITY_MAX_SENTENCES = 40     # 8분 롱폼도 호출 횟수를 줄여 화자·음높이·속도 변화 최소화
+_SILENCE_START = re.compile(r"silence_start:\s*([0-9.]+)")
+_SILENCE_END = re.compile(r"silence_end:\s*([0-9.]+)")
+
+
+def continuity_blocks(sentences: List[str], max_chars: int = CONTINUITY_MAX_CHARS,
+                      max_sentences: int = CONTINUITY_MAX_SENTENCES) -> List[Tuple[int, int]]:
+    """긴 대본을 연속 낭독 블록 ``[(시작, 끝), ...]`` 으로 묶는다.
+
+    구간(챕터) 경계와 무관하게 문장 순서만 보고 묶으므로, 구간이 바뀌는 곳에서도
+    같은 합성 호출의 음색과 호흡이 이어질 수 있다.
+    """
+    if not sentences:
+        return []
+    max_chars = max(80, int(max_chars))
+    max_sentences = max(2, int(max_sentences))
+    out: List[Tuple[int, int]] = []
+    start, chars = 0, 0
+    for i, text in enumerate(sentences):
+        add = len(str(text).strip()) + (2 if i > start else 0)
+        if i > start and (chars + add > max_chars or i - start >= max_sentences):
+            out.append((start, i))
+            start, chars = i, 0
+            add = len(str(text).strip())
+        chars += add
+    out.append((start, len(sentences)))
+    return out
+
+
+def _silence_midpoints(path: str) -> List[int]:
+    """오디오 내부의 자연 무음 중앙 시각(μs). 감지 실패는 빈 목록."""
+    try:
+        proc = ff.run([
+            ff.ffmpeg_bin(), "-hide_banner", "-v", "info", "-i", str(path),
+            "-af", "silencedetect=noise=-42dB:d=0.06", "-f", "null", "-",
+        ])
+    except Exception:  # noqa: BLE001 — 이어읽기만 포기하고 문장별 합성으로 폴백
+        return []
+    text = proc.stderr.decode("utf-8", "replace")
+    starts: List[float] = []
+    out: List[int] = []
+    for line in text.splitlines():
+        ms = _SILENCE_START.search(line)
+        if ms:
+            starts.append(float(ms.group(1)))
+        me = _SILENCE_END.search(line)
+        if me and starts:
+            start = starts.pop(0)
+            end = float(me.group(1))
+            if end > start:
+                out.append(int((start + end) * 500_000))
+    return out
+
+
+def _pick_sentence_boundaries(duration_us: int, texts: List[str],
+                              candidates: List[int]) -> List[int]:
+    """예상 문장 위치와 가장 가까운 무음 N-1개를 단조 증가하도록 고른다."""
+    n = len(texts)
+    if n < 2:
+        return []
+    cands = sorted({int(c) for c in candidates
+                    if 80_000 < int(c) < int(duration_us) - 80_000})
+    need = n - 1
+    if len(cands) < need:
+        return []
+    weights = [max(1, len(re.sub(r"\s+", "", str(t)))) for t in texts]
+    total = sum(weights)
+    acc = 0
+    targets = []
+    for w in weights[:-1]:
+        acc += w
+        targets.append(int(duration_us * acc / total))
+
+    # 동적 계획법: 각 목표에 후보 하나를 순서대로 대응시키는 최소 거리 조합.
+    inf = float("inf")
+    dp = [[inf] * len(cands) for _ in range(need)]
+    prev = [[-1] * len(cands) for _ in range(need)]
+    for k, c in enumerate(cands):
+        dp[0][k] = float((c - targets[0]) ** 2)
+    for j in range(1, need):
+        for k, c in enumerate(cands):
+            best, best_p = inf, -1
+            for p in range(k):
+                if c - cands[p] < 80_000:
+                    continue
+                score = dp[j - 1][p] + float((c - targets[j]) ** 2)
+                if score < best:
+                    best, best_p = score, p
+            dp[j][k], prev[j][k] = best, best_p
+    k = min(range(len(cands)), key=lambda x: dp[-1][x])
+    if dp[-1][k] == inf:
+        return []
+    picked = [cands[k]]
+    for j in range(need - 1, 0, -1):
+        k = prev[j][k]
+        if k < 0:
+            return []
+        picked.append(cands[k])
+    picked.reverse()
+    return picked
+
 
 # ─────────────────────────── 전처리 (지시서 PATCH 2) ───────────────────────────
 
@@ -735,11 +841,18 @@ class TTSEngine:
             return tts_cfg.get("voice_elevenlabs", "")
         return ""
 
-    def _speak_text(self, text: str) -> str:
+    def _speak_text(self, text: str, continuity: bool = False) -> str:
         """Gemini에만 스타일 지시문 부착 — 지시문 + 개행 + 문장 (지시서 PATCH 6)."""
         if self.provider.name == "gemini":
             instruction = STYLE_INSTRUCTIONS.get(self.style_preset)
             if instruction:
+                if continuity:
+                    instruction += (
+                        " 전체 원고를 처음부터 끝까지 같은 화자, 같은 음높이와 말속도로 "
+                        "자연스럽게 이어 읽고, 문단 사이에는 짧게만 호흡해줘. "
+                        "지시문은 읽지 말고 [낭독 원고]만 말해줘:"
+                    )
+                    return f"{instruction}\n[낭독 원고]\n{text}"
                 return f"{instruction}\n{text}"
         return text
 
@@ -755,7 +868,8 @@ class TTSEngine:
             self._sleep(step)
             remain -= step
 
-    def _synth_raw_with_retry(self, text: str, voice: str, raw_path: str) -> None:
+    def _synth_raw_with_retry(self, text: str, voice: str, raw_path: str,
+                              continuity: bool = False) -> None:
         tts_cfg = self.settings["tts"]
         max_retries = tts_cfg["max_retries"]
         wait_cap = tts_cfg["retry_wait_cap_s"]
@@ -767,7 +881,8 @@ class TTSEngine:
                 self.limiter.acquire(status_cb=self._status)
             try:
                 self.stats["api_calls"] += 1
-                self.provider.synthesize(self._speak_text(text), voice, raw_path)
+                self.provider.synthesize(
+                    self._speak_text(text, continuity=continuity), voice, raw_path)
                 return
             except TTSNonRetryable:
                 raise
@@ -826,7 +941,10 @@ class TTSEngine:
                        prev_text: str = "", next_text: str = "") -> Path:
         # 숫자·영어를 한글 발음으로 (2026년→이천이십육년, AI→에이아이) — 오독 방지 (v0.46.1).
         # 자막은 원문 그대로, TTS 입력만 바꾼다. 캐시 키도 변환 후 텍스트 기준.
-        text = text.replace("[카드]", " ").strip()   # 🅰 카드 표식은 읽지 않음 (v1.07)
+        from .text_cards import strip_mark  # noqa: PLC0415
+
+        text = text.replace("[카드]", " ")  # v1.07 캐시·테스트 하위호환
+        text = strip_mark(text).strip()   # 🅰 [카드:후기] 등 장면 표식은 읽지 않음
         text = self._pronounced(text)
         voice = self._resolve_voice(voice)
         # 🎙 이어읽기 문맥 (v0.83) — 지원 제공자(일레븐랩스)만: 앞뒤 문장을 함께
@@ -860,7 +978,11 @@ class TTSEngine:
         sentences: List[str],
         voice: str = "",
         on_progress: Optional[Callable[[int, int], None]] = None,
+        continuity: bool = False,
     ) -> List[Path]:
+        if (continuity and len(sentences) > 1
+                and self.provider.name in CONTINUITY_PROVIDERS):
+            return self._synth_all_continuous(sentences, voice, on_progress)
         paths = []
         for i, text in enumerate(sentences):
             try:
@@ -875,6 +997,124 @@ class TTSEngine:
         saved = self.stats["trim_saved_us"] / US_PER_SECOND
         self._status(
             f"TTS 완료 — API {self.stats['api_calls']}회, 캐시 {self.stats['cache_hits']}회, "
+            f"무음 트림 {saved:.1f}초 단축"
+        )
+        return paths
+
+    def _split_continuity_block(self, block_path: Path, texts: List[str],
+                                part_paths: List[Path]) -> bool:
+        duration_us = ff.probe_duration_us(str(block_path))
+        cuts = _pick_sentence_boundaries(
+            duration_us, texts, _silence_midpoints(str(block_path)))
+        if len(cuts) != len(texts) - 1:
+            return False
+        bounds = [0, *cuts, duration_us]
+        made: List[Path] = []
+        audio_cfg = self.settings["audio"]
+        threshold = min(audio_cfg.get("trim_threshold_db", -45), -50)
+        pad_ms = max(audio_cfg.get("edge_pad_ms", 30), 50)
+        pad_s = pad_ms / 1000.0
+        sr = f"silenceremove=start_periods=1:start_threshold={threshold}dB"
+        try:
+            for i, out in enumerate(part_paths):
+                tmp = out.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp.wav")
+                # 블록 안의 자연 무음을 경계로 잘랐으므로 각 조각의 앞뒤에 남은
+                # 반쪽 무음은 제거한다. 그렇지 않으면 원래 무음 + retime_narration의
+                # 문장 간격이 겹쳐 실제 호흡이 두 배 가까이 길어진다.
+                filters = (
+                    f"atrim=start={bounds[i] / 1e6:.6f}:"
+                    f"end={bounds[i + 1] / 1e6:.6f},asetpts=PTS-STARTPTS,"
+                    f"{sr},areverse,{sr},"
+                    "afade=t=in:d=0.02,areverse,afade=t=in:d=0.02,"
+                    "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo,"
+                    f"adelay={pad_ms}:all=1,apad=pad_dur={pad_s}"
+                )
+                ff.run([
+                    ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(block_path),
+                    "-af", filters,
+                    "-c:a", "pcm_s16le", str(tmp),
+                ])
+                tmp.replace(out)
+                made.append(out)
+        except Exception:  # noqa: BLE001
+            for p in made:
+                p.unlink(missing_ok=True)
+            return False
+        return all(p.is_file() for p in part_paths)
+
+    def _synth_continuity_block(self, texts: List[str], voice: str,
+                                prev_text: str = "", next_text: str = "") -> Optional[List[Path]]:
+        """여러 문장을 한 번에 합성하고 자연 무음에서 문장별 캐시 클립으로 분리."""
+        from .text_cards import strip_mark  # noqa: PLC0415
+
+        spoken = [self._pronounced(strip_mark(t).strip()) for t in texts]
+        joined = "\n\n".join(spoken)
+        voice = self._resolve_voice(voice)
+        prev_spoken = self._pronounced(prev_text) if prev_text else ""
+        next_spoken = self._pronounced(next_text) if next_text else ""
+        ctx = f"cont-v1:{prev_spoken}\x1f{next_spoken}"
+        block = self.cache_path("__CONTINUITY_V1__\n" + joined, voice, ctx)
+        parts = [
+            self.cache_dir / f"{block.stem}.cont-{i + 1:02d}.wav"
+            for i in range(len(spoken))
+        ]
+        if all(p.is_file() for p in parts):
+            self.stats["cache_hits"] += 1
+            return parts
+
+        if not block.is_file():
+            raw = block.with_suffix(f".{uuid.uuid4().hex[:8]}.raw.wav")
+            try:
+                if getattr(self.provider, "wants_context", False):
+                    self.provider._prev_text = prev_spoken
+                    self.provider._next_text = next_spoken
+                self._synth_raw_with_retry(
+                    joined, voice, str(raw), continuity=True)
+                raw_us, final_us = postprocess_clip(
+                    str(raw), str(block), self.settings["audio"])
+                self.stats["trim_saved_us"] += max(0, raw_us - final_us)
+            finally:
+                if getattr(self.provider, "wants_context", False):
+                    self.provider._prev_text = ""
+                    self.provider._next_text = ""
+                raw.unlink(missing_ok=True)
+        else:
+            self.stats["cache_hits"] += 1
+        return parts if self._split_continuity_block(block, spoken, parts) else None
+
+    def _synth_all_continuous(
+        self, sentences: List[str], voice: str,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Path]:
+        """긴 원고를 1~2분 블록으로 이어 읽되 기존 문장별 타이밍 계약은 유지."""
+        paths: List[Path] = []
+        done = 0
+        blocks = continuity_blocks(sentences)
+        for start, end in blocks:
+            texts = sentences[start:end]
+            block_paths = None
+            if len(texts) > 1:
+                block_paths = self._synth_continuity_block(
+                    texts, voice,
+                    prev_text=(sentences[start - 1] if start > 0 else ""),
+                    next_text=(sentences[end] if end < len(sentences) else ""))
+            if block_paths is None:
+                # TTS가 문장 사이에 감지 가능한 자연 무음을 만들지 않은 경우에는
+                # 단어 중간을 자르지 않고 기존 문장별 방식으로 안전하게 되돌린다.
+                block_paths = []
+                for i, text in enumerate(texts, start):
+                    block_paths.append(self.synth_sentence(
+                        text, voice,
+                        prev_text=(sentences[i - 1] if i > 0 else ""),
+                        next_text=(sentences[i + 1] if i + 1 < len(sentences) else "")))
+            paths.extend(block_paths)
+            done += len(texts)
+            if on_progress:
+                on_progress(done, len(sentences))
+        saved = self.stats["trim_saved_us"] / US_PER_SECOND
+        self._status(
+            f"TTS 연속 낭독 완료 — {len(blocks)}개 호흡 블록 · "
+            f"API {self.stats['api_calls']}회, 캐시 {self.stats['cache_hits']}회, "
             f"무음 트림 {saved:.1f}초 단축"
         )
         return paths
@@ -914,6 +1154,7 @@ def synth_with_fallback(
     status_cb: StatusCb = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
     providers: Optional[dict] = None,  # 테스트 주입용
+    continuity: bool = False,
 ) -> Tuple[List[Path], str, Optional[str]]:
     """체인 순서대로 시도, 실패 시 '작업 전체'를 다음 제공자로 재생성.
 
@@ -941,7 +1182,9 @@ def synth_with_fallback(
             continue
         engine = TTSEngine(provider, Path(cache_root), settings=settings, status_cb=status_cb)
         try:
-            paths = engine.synth_all(sentences, voice=voice, on_progress=on_progress)
+            paths = engine.synth_all(
+                sentences, voice=voice, on_progress=on_progress,
+                continuity=continuity)
             log.info("TTS %s로 %d문장 합성 완료", name, len(sentences))
             return paths, name, reason
         except (TTSNonRetryable, TTSExhausted) as e:

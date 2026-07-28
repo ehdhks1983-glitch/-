@@ -24,6 +24,17 @@ FONT_FAMILY_ALIASES = {
     "NanumPenScript-Regular": "Nanum Pen Script",
 }
 
+# 🔤 v1.11 용도별 제목+본문 글꼴 조합. 사용자는 수십 개 글꼴을 따로 고르지
+# 않고 영상 성격만 선택한다. 전부 동봉된 OFL 글꼴이라 오프라인 렌더에서도 같다.
+FONT_PACKS = {
+    "auto": {"font": "Pretendard-ExtraBold", "hook_font": ""},
+    "info": {"font": "Pretendard-ExtraBold", "hook_font": "DoHyeon-Regular"},
+    "impact": {"font": "DoHyeon-Regular", "hook_font": "BlackHanSans-Regular"},
+    "friendly": {"font": "Jua-Regular", "hook_font": "Jua-Regular"},
+    "retro": {"font": "DoHyeon-Regular", "hook_font": "Gugi-Regular"},
+    "ugc": {"font": "Jua-Regular", "hook_font": "NanumPenScript-Regular"},
+}
+
 SUBTITLE_STYLE_PRESETS = {
     # 기본 쇼츠 자막: 흰 글자 + 검정 외곽선 3px + 하단 그라데이션
     "shorts_basic": Style(

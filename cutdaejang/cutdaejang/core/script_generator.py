@@ -210,6 +210,88 @@ def split_long_sentences(script: Script, limit: int = 32) -> Script:
     )
 
 
+_NARRATION_ENDING_RE = re.compile(
+    r"(?:습니다|입니다|됩니다|합니다|했습니다|겠습니다|"
+    r"이에요|예요|거예요|거에요|네요|군요|죠|까요|나요|세요|십시오|"
+    r"어요|아요|해요|돼요|한다|된다|했다|였다|이다|다|자)"
+    r"[\"'”’」』)\]]*$"
+)
+_NARRATION_PUNCT_RE = re.compile(
+    r"(?<!\d)[.!?。！？]+(?!\d)[\"'”’」』)\]]*"
+)
+
+
+def narration_units(text: str, hard_limit: int = 360) -> List[str]:
+    """내레이션을 화면 줄이 아닌 자연스러운 *발화 문장* 단위로 정리한다.
+
+    입력창의 일반 줄바꿈은 화면 편의를 위한 것일 수 있다. 예를 들어
+    ``"먼저 사람이 하는\\n업무를 하는 거였습니다"``를 두 TTS 호출로 나누면
+    문장 한가운데에 긴 쉼과 음색 변화가 생긴다. 빈 줄은 문단 경계로 보존하되,
+    끝나지 않은 일반 줄바꿈은 이어 붙이고 실제 종결부호·한국어 종결어미에서만
+    발화 단위를 만든다.
+
+    비정상적으로 긴 무구두점 원고만 제공자 입력 한도를 피하도록 단어 경계에서
+    나눈다. 화면 자막 줄바꿈은 ASS 렌더러가 별도로 처리하므로 ``wrap_chars``와
+    의도적으로 무관하다.
+    """
+    hard_limit = max(120, int(hard_limit or 360))
+    paragraphs = re.split(r"\r?\n\s*\r?\n", str(text or "").strip())
+    natural: List[str] = []
+
+    for paragraph in paragraphs:
+        lines = [
+            re.sub(r"\s+", " ", line).strip()
+            for line in paragraph.splitlines()
+            if line.strip()
+        ]
+        if not lines:
+            continue
+        merged: List[str] = []
+        buf = ""
+        for line in lines:
+            buf = f"{buf} {line}".strip()
+            punct = _NARRATION_PUNCT_RE.search(line)
+            if ((punct and punct.end() == len(line))
+                    or _NARRATION_ENDING_RE.search(line)):
+                merged.append(buf)
+                buf = ""
+        if buf:
+            merged.append(buf)
+
+        for phrase in merged:
+            start = 0
+            for match in _NARRATION_PUNCT_RE.finditer(phrase):
+                piece = phrase[start:match.end()].strip()
+                if piece:
+                    natural.append(piece)
+                start = match.end()
+            tail = phrase[start:].strip()
+            if tail:
+                natural.append(tail)
+
+    out: List[str] = []
+    for phrase in natural:
+        if len(phrase) <= hard_limit:
+            out.append(phrase)
+            continue
+        words = phrase.split()
+        cur = ""
+        for word in words:
+            candidate = f"{cur} {word}".strip()
+            if cur and len(candidate) > hard_limit:
+                out.append(cur)
+                cur = word
+            else:
+                cur = candidate
+        if cur:
+            while len(cur) > hard_limit and " " not in cur:
+                out.append(cur[:hard_limit])
+                cur = cur[hard_limit:]
+            if cur:
+                out.append(cur)
+    return [unit for unit in out if unit]
+
+
 _HEADER_RE = re.compile(r"^#{1,6}\s*(.+?)\s*$")            # 마크다운 헤더
 _SPEAK_RE = re.compile(r"\[\s*말\s*\]")                     # **[말]** 표기
 _QUOTE_RE = re.compile(r"^>\s?(.*)$")                       # 블록 인용(> …)

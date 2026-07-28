@@ -2,8 +2,9 @@
 
 구간별로 목소리를 구우면 경계마다 톤 리셋·말 잘림이 생긴다는 사용자 진단:
 "작업순서가 영상을 다합치고 그다음에 나래이션을 넣는방향으로해야할꺼같은데"
-→ 구간 파일은 무음(화면·자막만)으로 렌더하고, 합본 전체 타임라인 위에
-내레이션 트랙을 딱 한 번 얹는다. 경계에서 잘릴 소리 자체가 없다.
+→ 구간 파일은 무음 화면으로 렌더하고, 합본 전체 타임라인 위에
+내레이션과 자막을 같은 시간표로 딱 한 번 얹는다. 경계에서 잘릴 소리와
+재편집 때 남을 예전 자막 타이밍 자체가 없다.
 """
 
 import json
@@ -86,7 +87,8 @@ def _mean_db(path, start=None, dur=None):
 
     af = "volumedetect" if start is None else f"atrim={start}:{start + dur},volumedetect"
     r = subprocess.run([ff.ffmpeg_bin(), "-i", str(path), "-af", af,
-                        "-vn", "-f", "null", "-"], capture_output=True, text=True)
+                        "-vn", "-f", "null", "-"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     m = re.search(r"mean_volume:\s*(-?[\d.]+) dB", r.stderr)
     return float(m.group(1)) if m else -120.0
 
@@ -107,8 +109,8 @@ def test_sections_voice_is_one_track_over_joined_video(server, tmp_path):
 
     final = Path(job["mp4"])
     job_dir = final.parent
-    # ① 최종 파일은 내레이션을 얹은 sections_voiced.mp4 — 다운로드 목록엔 이것 하나만
-    assert final.name == "sections_voiced.mp4", final
+    # ① 최종 파일은 내레이션+자막을 같은 시간표로 입힌 파일 — 목록엔 이것 하나만
+    assert final.name == "sections_synced.mp4", final
     assert (job.get("mp4s") or []) == [str(final)]
     assert (job_dir / "narration_bed.wav").is_file()
     # ② 구간 파일엔 목소리가 없다 (무음 렌더 — 경계에서 잘릴 소리 자체가 없음)
@@ -134,7 +136,7 @@ def test_single_section_also_gets_voiced_final(server, tmp_path):
     job = _wait(base, d["job_id"])
     assert job["status"] == "ok", job.get("errors")
     final = Path(job["mp4"])
-    assert final.name == "sections_voiced.mp4", final
+    assert final.name == "sections_synced.mp4", final
     assert _mean_db(final.parent / "sec_1.mp4") < -55
     assert _mean_db(final, 0.4, 1.0) > -35
 
@@ -147,9 +149,9 @@ def test_narration_last_wiring():
     assert "narration_wav=None" in body
     assert body.count("build_narration_wav(") == 1
     assert body.index("concat_videos(") < body.index("build_narration_wav(")
-    assert "sections_voiced" in body and "narration_bed" in body
-    # 재사용 지문에 bed1 — 내레이션 구워진 옛(v0.99↓) 구간 재사용 차단
-    assert "|bed1" in body
-    # 얹기는 볼륨 무변경(normalize=0)·영상 재인코딩 없음(c:v copy)
-    assert "amix=inputs=2:duration=first:normalize=0" in body
-    assert '"copy"' in body
+    assert "sections_synced" in body and "narration_bed" in body
+    # 재사용 지문은 예전 자막이 구워진 구간을 새 구조에서 재사용하지 않는다.
+    assert "bed3-final-sync" in body
+    # 동일 abs_subs를 음성 베드 배치와 최종 자막 렌더 양쪽에 사용한다.
+    assert "build_narration_wav(\n                    all_clips, abs_subs" in body
+    assert "final, abs_subs, synced" in body

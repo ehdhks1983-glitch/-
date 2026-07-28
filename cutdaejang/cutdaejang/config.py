@@ -90,7 +90,10 @@ DEFAULTS: dict = {
         "hook_style": "기본",          # 상단 제목 프리셋 (v0.52): 기본|예능 노랑|화이트 박스|네온
         "sub_style": "기본",           # 본문 자막 프리셋 (v0.54): 기본|예능 노랑|말풍선 띠|네온
         "info_pop": True,
-        "text_cards": True,   # 🅰 텍스트 카드 장면 (v1.07)             # 🔢 숫자 인포 팝 (v0.56) — 강조 문장 속 숫자를 크게
+        "text_cards": True,           # 🅰 의미 기반 텍스트 카드 장면
+        "card_pack": "auto",          # auto | info | shopping | review | promo
+        "card_density": "auto",       # low | auto | rich
+        "font_pack": "auto",          # auto | info | impact | friendly | retro | ugc
     },
     "branding": {                     # 인트로/아웃트로 (v0.43) — 영상 또는 사진 경로
         "intro": "",

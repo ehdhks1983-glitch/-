@@ -448,17 +448,23 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             + "\\fscx55\\fscy55\\t(0,140,\\fscx100\\fscy100)\\fad(60,200)}"
             + escape_ass_text(ip.text))
 
-    # 🅰 텍스트 카드 장면 (v1.07, 사용자 스샷 요청) — 숫자·펀치 문장 구간을
-    # 화면 전체를 어둡게 덮고 큰 타이포로. 오버레이 방식이라 길이·내레이션·
-    # 이음새를 안 건드려 생성·편집·사진·구간·블로그·쇼핑 전부에 그대로 적용.
+    # 🅰 의미 기반 텍스트 카드 장면 (v1.11) — 숫자·펀치·목록·비교·후기·
+    # 검색·단계·CTA 8종. 오버레이 방식이라 길이·내레이션·자막 싱크는 그대로다.
     from ..text_cards import (  # noqa: PLC0415
-        accent_spans, is_marked, pick_card_indices, strip_mark)
+        accent_spans, is_marked, pick_card_plan, strip_mark)
 
-    card_idx = set()
+    card_plan = {}
     if getattr(style, "text_cards", True) and spec.subtitles:
-        card_idx = set(pick_card_indices([s.text for s in spec.subtitles]))
+        card_plan = {
+            c.index: c.kind for c in pick_card_plan(
+                [s.text for s in spec.subtitles],
+                duration_us=spec.duration_us,
+                density=getattr(style, "card_density", "auto"),
+                content_pack=getattr(style, "card_pack", "auto"),
+            )
+        }
 
-    def _card_lines(sub) -> list:
+    def _card_lines(sub, kind: str) -> list:
         txt = re.sub(r"\[[/가-힣A-Za-z]*\]", "", strip_mark(sub.text)).strip()
         acc = _inline_color(getattr(style, "card_accent", "#4D8DFF") or "#4D8DFF")
         # 2줄 줄바꿈 — 가운데에서 가장 가까운 공백
@@ -468,13 +474,13 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             k = min((abs(j - mid), j) for j, ch in enumerate(txt) if ch == " ")[1]
             parts = [txt[:k].strip(), txt[k + 1:].strip()]
 
-        def _accentize(ln: str) -> str:
+        def _accentize(ln: str, base: str = "&H00FFFFFF&") -> str:
             out, pos = "", 0
             for a, b in accent_spans(ln):
                 out += escape_ass_text(ln[pos:a])
                 out += ("{\\1c" + acc + "\\blur" + str(max(3, sc(6))) + "\\b1}"
                         + escape_ass_text(ln[a:b])
-                        + "{\\1c&H00FFFFFF&\\blur0}")
+                        + "{\\1c" + base + "\\blur0}")
                 pos = b
             return out + escape_ass_text(ln[pos:])
 
@@ -482,19 +488,161 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         cx = spec.canvas.w // 2
         cy = round(spec.canvas.h * 0.47)
         st, en = us_to_ass(sub.start_us), us_to_ass(sub.end_us)
+
+        def _rect(layer: int, color: str, alpha: str,
+                  x1: int, y1: int, x2: int, y2: int,
+                  fade: str = "\\fad(130,150)") -> str:
+            return (
+                f"Dialogue: {layer},{st},{en},Card,,0,0,0,,"
+                + "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c"
+                + _inline_color(color) + "\\1a&H" + alpha + "&" + fade + "}"
+                + f"m {x1} {y1} l {x2} {y1} {x2} {y2} {x1} {y2}"
+            )
+
+        def _label(layer: int, text: str, tags: str) -> str:
+            return f"Dialogue: {layer},{st},{en},Card,,0,0,0,,{{{tags}}}{text}"
+
+        # 모든 템플릿의 첫 레이어는 안전한 풀스크린 덮개. 숫자 템플릿은
+        # v1.07 출력 형식(레이어 5/6)을 유지해 기존 프로젝트도 같은 느낌으로 연다.
         dim = (f"Dialogue: 5,{st},{en},Card,,0,0,0,,"
                + "{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c&H120F0C&\\1a&H22&\\fad(160,160)}"
                + f"m 0 0 l {spec.canvas.w} 0 {spec.canvas.w} {spec.canvas.h} 0 {spec.canvas.h}")
-        body = ("{\\an5\\pos(" + str(cx) + "," + str(cy) + ")"
-                + "\\fscx80\\fscy80\\t(0,170,\\fscx100\\fscy100)\\fad(150,170)}" + body_txt)
-        return [dim, f"Dialogue: 6,{st},{en},Card,,0,0,0,,{body}"]
+        w, h = spec.canvas.w, spec.canvas.h
+        ml = round(w * 0.09)
+
+        if kind == "number":
+            body = ("{\\an5\\pos(" + str(cx) + "," + str(cy) + ")"
+                    + "\\fscx80\\fscy80\\t(0,170,\\fscx100\\fscy100)"
+                    + "\\fad(150,170)}" + body_txt)
+            return [
+                dim,
+                f"Dialogue: 6,{st},{en},Card,,0,0,0,,{body}",
+                _label(7, "KEY NUMBER",
+                       f"\\an5\\pos({cx},{round(h * .32)})\\fs{sc(27)}"
+                       "\\c&H00B7FF&\\fsp5\\fad(110,150)"),
+            ]
+
+        if kind == "punch":
+            bar_y = round(h * .66)
+            return [
+                dim,
+                _rect(6, "#FF375F", "00", ml, bar_y, w - ml, bar_y + sc(10)),
+                _label(7, body_txt,
+                       f"\\an5\\pos({cx},{round(h * .47)})"
+                       "\\fscx58\\fscy58\\t(0,130,\\fscx108\\fscy108)"
+                       "\\t(130,220,\\fscx100\\fscy100)\\fad(80,150)"),
+            ]
+
+        if kind == "checklist":
+            panel_top, panel_bot = round(h * .29), round(h * .69)
+            black = _inline_color("#102018")
+            text = "\\N".join(_accentize(p, black) for p in parts if p)
+            return [
+                dim,
+                _rect(6, "#E9FFF1", "05", ml, panel_top, w - ml, panel_bot),
+                _rect(7, "#34C759", "00", ml, panel_top, ml + sc(18), panel_bot),
+                _label(8, "CHECK",
+                       f"\\an7\\pos({ml + sc(42)},{panel_top + sc(45)})"
+                       f"\\fs{sc(30)}\\c&H59C734&\\fsp4\\fad(120,140)"),
+                _label(9, text,
+                       f"\\an4\\pos({ml + sc(45)},{round(h * .51)})"
+                       "\\c&H182010&\\bord0\\shad0\\fscx92\\fscy92"
+                       "\\t(0,180,\\fscx100\\fscy100)\\fad(120,150)"),
+            ]
+
+        if kind == "compare":
+            return [
+                dim,
+                _rect(6, "#FF5B62", "18", 0, 0, cx, h),
+                _rect(7, "#326BFF", "18", cx, 0, w, h),
+                _label(8, "A",
+                       f"\\an5\\pos({round(w * .25)},{round(h * .28)})"
+                       f"\\fs{sc(35)}\\c&HFFFFFF&\\fad(90,140)"),
+                _label(8, "B",
+                       f"\\an5\\pos({round(w * .75)},{round(h * .28)})"
+                       f"\\fs{sc(35)}\\c&HFFFFFF&\\fad(90,140)"),
+                _label(9, body_txt,
+                       f"\\an5\\pos({cx},{round(h * .52)})"
+                       "\\bord5\\shad2\\fscx78\\fscy78"
+                       "\\t(0,170,\\fscx100\\fscy100)\\fad(100,160)"),
+            ]
+
+        if kind == "review":
+            panel_top, panel_bot = round(h * .28), round(h * .71)
+            black = _inline_color("#211A12")
+            text = "\\N".join(_accentize(p, black) for p in parts if p)
+            return [
+                dim,
+                _rect(6, "#FFF8E7", "00", ml, panel_top, w - ml, panel_bot),
+                _label(7, "REVIEW  ★★★★★",
+                       f"\\an8\\pos({cx},{panel_top + sc(48)})"
+                       f"\\fs{sc(27)}\\c&H00B9FF&\\bord0\\fsp2\\fad(110,150)"),
+                _label(8, text,
+                       f"\\an5\\pos({cx},{round(h * .51)})"
+                       "\\c&H121A21&\\bord0\\shad0\\fscx90\\fscy90"
+                       "\\t(0,170,\\fscx100\\fscy100)\\fad(120,160)"),
+            ]
+
+        if kind == "search":
+            top, bot = round(h * .39), round(h * .58)
+            black = _inline_color("#171717")
+            text = "\\N".join(_accentize(p, black) for p in parts if p)
+            return [
+                dim,
+                _rect(6, "#FFFFFF", "00", ml, top, w - ml, bot),
+                _rect(7, "#4D8DFF", "00", ml, bot - sc(9), w - ml, bot),
+                _label(8, "SEARCH",
+                       f"\\an7\\pos({ml + sc(36)},{top - sc(54)})"
+                       f"\\fs{sc(26)}\\c&HFFB06B&\\fsp5\\fad(100,140)"),
+                _label(9, text,
+                       f"\\an4\\pos({ml + sc(35)},{round((top + bot) / 2)})"
+                       "\\c&H171717&\\bord0\\shad0\\fscx92\\fscy92"
+                       "\\t(0,190,\\fscx100\\fscy100)\\fad(110,150)"),
+            ]
+
+        if kind == "steps":
+            badge_x1, badge_x2 = ml, ml + round(w * .23)
+            top, bot = round(h * .35), round(h * .64)
+            step_parts = list(parts)
+            if len(txt) > 8 and " " in txt:
+                mid = len(txt) // 2
+                k = min((abs(j - mid), j) for j, ch in enumerate(txt) if ch == " ")[1]
+                step_parts = [txt[:k].strip(), txt[k + 1:].strip()]
+            step_text = "\\N".join(_accentize(p) for p in step_parts if p)
+            return [
+                dim,
+                _rect(6, "#4D8DFF", "00", badge_x1, top, badge_x2, bot),
+                _rect(7, "#12151F", "04", badge_x2, top, w - ml, bot),
+                _label(8, "STEP",
+                       f"\\an5\\pos({round((badge_x1 + badge_x2) / 2)},{round((top + bot) / 2)})"
+                       f"\\fs{sc(31)}\\c&HFFFFFF&\\fsp2\\fad(80,150)"),
+                _label(9, step_text,
+                       f"\\an4\\pos({badge_x2 + sc(35)},{round((top + bot) / 2)})"
+                       "\\fscx68\\fscy68\\t(0,180,\\fscx82\\fscy82)"
+                       "\\fad(100,150)"),
+            ]
+
+        # CTA — 쇼핑·홍보 마무리. 알 수 없는 종류도 안전하게 CTA가 아니라 펀치로
+        # 들어오므로 이 분기는 명시적인 cta에만 도달한다.
+        panel_top, panel_bot = round(h * .38), round(h * .69)
+        return [
+            dim,
+            _rect(6, "#FF375F", "05", ml, panel_top, w - ml, panel_bot),
+            _label(7, "지금 확인",
+                   f"\\an8\\pos({cx},{panel_top + sc(50)})"
+                   f"\\fs{sc(32)}\\c&HFFFFFF&\\fsp3\\fad(80,130)"),
+            _label(8, body_txt,
+                   f"\\an5\\pos({cx},{round(h * .55)})"
+                   "\\fscx75\\fscy75\\t(0,120,\\fscx105\\fscy105)"
+                   "\\t(120,210,\\fscx100\\fscy100)\\fad(90,150)"),
+        ]
 
     pop_on = bool(ss.get("pop_rotate"))  # 🌈 다색 팝 — 문장마다 색 번갈아 (v0.73)
     for i, s in enumerate(spec.subtitles):
-        if i in card_idx:
-            lines += _card_lines(s)
+        if i in card_plan:
+            lines += _card_lines(s, card_plan[i])
             continue                     # 카드 문장은 하단 자막 생략 (글자가 화면 주인공)
-        if is_marked(s.text):            # 카드 끈 상태의 [카드] 표식은 표시에서 제거
+        if strip_mark(s.text) != s.text:  # [카드:*]·[일반] 편집 표식은 화면에서 제거
             from dataclasses import replace as _rep  # noqa: PLC0415
 
             s = _rep(s, text=strip_mark(s.text))

@@ -22,9 +22,13 @@ def _clear_cache():
 
 def _fake_ffmpeg(tmp_path, name, help_text):
     """-h full 요청에 help_text를 내놓는 가짜 ffmpeg 실행 파일."""
-    p = tmp_path / name
-    p.write_text("#!/bin/sh\necho '" + help_text + "'\n", encoding="utf-8")
-    p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    if os.name == "nt":
+        p = tmp_path / f"{name}.bat"
+        p.write_text(f"@echo off\r\necho {help_text}\r\n", encoding="utf-8")
+    else:
+        p = tmp_path / name
+        p.write_text("#!/bin/sh\necho '" + help_text + "'\n", encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC)
     return str(p)
 
 
@@ -55,9 +59,12 @@ def test_long_graph_new_build_uses_slash_option(tmp_path, monkeypatch):
 
 def test_detection_failure_falls_back_to_legacy(tmp_path, monkeypatch):
     """도움말 실행이 실패해도 죽지 않고 구형 옵션으로 (십수 년 지원돼 온 쪽)."""
-    p = tmp_path / "ffbroken"
-    p.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")  # 출력 없이 실패
-    p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    p = tmp_path / ("ffbroken.bat" if os.name == "nt" else "ffbroken")
+    if os.name == "nt":
+        p.write_text("@echo off\r\nexit /b 1\r\n", encoding="utf-8")
+    else:
+        p.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")  # 출력 없이 실패
+        p.chmod(p.stat().st_mode | stat.S_IEXEC)
     assert ff._filter_script_opt(str(p)) == "-filter_complex_script"
 
 

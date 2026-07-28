@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -184,6 +184,38 @@ def _atempo_chain(speed: float) -> str:
     return ",".join(parts)
 
 
+SPEED_MODES = ("all", "voice", "video")
+
+
+def normalize_speed_mode(mode: str) -> str:
+    """UI/저장값을 안전한 속도 모드로. 알 수 없는 옛 값은 기존 동작(all)."""
+    mode = str(mode or "all").lower()
+    return mode if mode in SPEED_MODES else "all"
+
+
+def _voice_speed_subtitles(subtitles: List[Subtitle], speed: float,
+                           duration_us: int) -> List[Subtitle]:
+    """말소리만 배속할 때 자막과 단어 강조도 같은 비율로 당긴다."""
+    if abs(speed - 1.0) <= 1e-3:
+        return list(subtitles)
+    out = []
+    for sub in subtitles:
+        start = max(0, min(duration_us, round(sub.start_us / speed)))
+        end = max(start + 40_000, min(duration_us, round(sub.end_us / speed)))
+        words = []
+        for word in (sub.words or []):
+            if len(word) >= 3:
+                words.append([
+                    max(0, round(int(word[0]) / speed)),
+                    max(1, round(int(word[1]) / speed)),
+                    word[2],
+                ])
+        if start < duration_us:
+            out.append(replace(sub, start_us=start, end_us=min(end, duration_us),
+                               words=words))
+    return out
+
+
 # 화질(선명도) 프리셋 — 유튜브는 고해상도 업로드에 더 좋은 코덱·비트레이트를 줘 체감 화질↑
 #  mult: 기준 해상도 배수(2.0=4K), crf: 낮을수록 고화질, sharpen: 선명화(unsharp)
 QUALITY_PRESETS = {
@@ -238,6 +270,7 @@ def render_edited(
     fonts_dir: str = DEFAULT_FONTS_DIR,
     opts: Optional[RenderOptions] = None,
     speed: float = 1.0,                # 저장(렌더) 속도 배수 (1.25/1.5/2배 등)
+    speed_mode: str = "all",           # all=화면+소리 | voice=말소리만 | video=화면만
     quality: str = "standard",         # 화질 등급: standard | high | ultra(4K)
     denoise=False,                     # 잡음 제거: False | True(중) | 'low'|'mid'|'high'
     narration_wav: Optional[str] = None,  # AI 내레이션 트랙(있으면 원본 소리는 덕킹)
@@ -250,12 +283,20 @@ def render_edited(
 ) -> str:
     """컷 영상에 자동 자막을 번인. 영상 자체 오디오를 유지한다.
 
-    speed>1이면 자막을 구운 뒤 영상·오디오를 통째로 배속 → 자막이 그대로 싱크 유지.
+    speed_mode=all은 기존처럼 화면·소리·자막을 함께 배속한다.
+    voice는 오디오와 자막 시각만 당기고 화면 길이는 유지한다. 별도 내레이션 트랙이
+    있으면 그 목소리만, 없으면 원본 오디오 전체에 적용한다.
+    video는 화면만 배속한 뒤 남은 길이를 마지막 프레임으로 유지해 소리를 자르지 않는다.
     quality가 high/ultra면 해상도·비트레이트↑ + 선명화(unsharp)로 화질을 올린다.
     denoise면 목소리 대역만 남기고 배경 잡음을 줄인다.
     """
     opts = opts or RenderOptions()
     speed = max(0.25, min(4.0, float(speed or 1.0)))
+    speed_mode = normalize_speed_mode(speed_mode)
+    speed_changed = abs(speed - 1.0) > 1e-3
+    speed_all = speed_changed and speed_mode == "all"
+    speed_voice = speed_changed and speed_mode == "voice"
+    speed_video_only = speed_changed and speed_mode == "video"
     src_w, src_h = ff.probe_video_size(cut_video)
     dur_us = ff.probe_duration_us(cut_video)
     has_src_audio = ff.has_audio_stream(cut_video)
@@ -270,7 +311,8 @@ def render_edited(
         duration_us=dur_us,
         hook=hook,
         background=Background(type="color", color="#000000"),
-        subtitles=subtitles,
+        subtitles=(_voice_speed_subtitles(subtitles, speed, dur_us)
+                   if speed_voice else subtitles),
         style=style,
     )
     work = Path(out_path).parent
@@ -314,15 +356,26 @@ def render_edited(
             f"[fg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=decrease:flags=lanczos{sharp}[fgs];"
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2[comp];"
         )
-        vf += (f"{wm_pre}[comp]{wm_over}{subs_arg}[vc]" if wm
-               else f"[comp]{subs_arg}[vc]")
+        visual = "[comp]"
     else:
         vf = f"[0:v]scale={canvas.w}:{canvas.h}:flags=lanczos{sharp}[base];"
-        vf += (f"{wm_pre}[base]{wm_over}{subs_arg}[vc]" if wm
-               else f"[base]{subs_arg}[vc]")
+        visual = "[base]"
 
-    slow = abs(speed - 1.0) > 1e-3
-    if slow:  # 자막 구운 뒤 영상 배속 (오디오는 아래 atempo)
+    # 화면만 배속은 자막을 굽기 전에 적용해야 자막이 원래 음성 시각을 유지한다.
+    # 빨라져 비는 꼬리는 마지막 프레임을 유지하므로 내레이션이 잘리지 않는다.
+    if speed_video_only:
+        sped_s = dur_us / 1e6 / speed
+        pad_s = max(0.0, dur_us / 1e6 - sped_s)
+        vf += (
+            f"{visual}setpts=PTS/{speed:.6f},"
+            f"tpad=stop_mode=clone:stop_duration={pad_s:.6f},"
+            f"trim=duration={dur_us / 1e6:.6f},setpts=PTS-STARTPTS[vtime];"
+        )
+        visual = "[vtime]"
+    vf += (f"{wm_pre}{visual}{wm_over}{subs_arg}[vc]" if wm
+           else f"{visual}{subs_arg}[vc]")
+
+    if speed_all:  # 자막을 구운 뒤 전체 배속 → 영상·말·자막 싱크 유지
         vf += f";[vc]setpts=PTS/{speed:.6f}[v]"
         vmap, out_us = "[v]", int(dur_us / speed)
     else:
@@ -332,7 +385,7 @@ def render_edited(
     dur_s = dur_us / 1e6
     plain_passthrough = (
         not narration_wav and not bgm_path and orig_audio == "keep"
-        and has_src_audio and not dn and not slow
+        and has_src_audio and not dn and not speed_all and not speed_voice
     )
     if plain_passthrough:
         amap = "0:a"
@@ -344,11 +397,21 @@ def render_edited(
         else:
             vol = 0.15 if orig_audio == "low" else 1.0
             dnf = f"{dn}," if dn else ""
-            aparts.append(f"[0:a]{dnf}volume={vol}[abase]")
+            base_filters = f"{dnf}volume={vol}"
+            # 별도 내레이션이 없으면 원본 오디오가 곧 말소리 트랙이다.
+            if speed_voice and not narration_wav:
+                base_filters += (
+                    f",{_atempo_chain(speed)},apad,atrim=0:{dur_s:.6f}"
+                )
+            aparts.append(f"[0:a]{base_filters}[abase]")
         streams.append("[abase]")
         nar_idx = 1
         if narration_wav:
-            aparts.append(f"[{nar_idx}:a]apad[anar]")
+            nar_filters = (
+                f"{_atempo_chain(speed)},apad,atrim=0:{dur_s:.6f}"
+                if speed_voice else "apad"
+            )
+            aparts.append(f"[{nar_idx}:a]{nar_filters}[anar]")
             streams.append("[anar]")
         if bgm_path:
             bgm_idx = nar_idx + (1 if narration_wav else 0)
@@ -379,7 +442,7 @@ def render_edited(
             last = "[apre]"
         else:
             last = "[abase]"
-        if slow:
+        if speed_all:
             aparts.append(f"{last}{_atempo_chain(speed)}[a]")
             last = "[a]"
         vf += ";" + ";".join(aparts)
@@ -945,7 +1008,7 @@ def spread_ranges(total_us: int, target_us: int, piece_us: int = 3_500_000) -> L
 
 def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_dir,
                      lead_us: int = 200_000, max_tempo: float = 1.25,
-                     fit: str = "drop") -> tuple:
+                     fit: str = "drop", gap_us: Optional[int] = None) -> tuple:
     """자막 타이밍을 TTS 클립 '실제 길이'에 맞춰 순차 재배치 → 목소리·자막 싱크 보장.
 
     글자 수 비례로 추정한 창은 실제 발화 길이와 어긋나 자막이 밀리고 목소리가
@@ -966,13 +1029,14 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
 
     if fit in ("freeze", "loop"):
         # 영상 쪽을 늘려 다 담는다 → 속도 올림·생략 없이 순차 배치
+        natural_gap = 350_000 if gap_us is None else max(60_000, int(gap_us))
         out_subs, out_clips, cursor = [], [], lead_us
         for clip, dur, sub in zip(clips, durs, subtitles):
             sub.start_us = cursor
             sub.end_us = cursor + dur
             out_subs.append(sub)
             out_clips.append(clip)
-            cursor = sub.end_us + 350_000
+            cursor = sub.end_us + natural_gap
         return out_subs, out_clips, ""
 
     min_gap = 120_000
@@ -1014,49 +1078,60 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
     return out_subs, out_clips, note
 
 
-_BED_CHUNK = 40   # 한 ffmpeg가 받는 클립 수 — Windows 명령줄 32K 한계 안전권
+_BED_CHUNK = 40
 
 
 def build_narration_wav(clips: List, subtitles: List[Subtitle], total_us: int,
                         out_wav) -> str:
-    """TTS 클립들을 각 자막 시작 시각에 배치해 하나의 내레이션 트랙으로 합침.
+    """TTS 클립들을 자막 시작 시각에 배치해 하나의 내레이션 트랙으로 합친다.
 
-    v1.09: 긴 영상(8분+ ≈ 문장 100개↑)은 클립 경로 전부를 한 명령줄에 실으면
-    Windows 32K 한계에 깨진다 — 40개 묶음으로 부분 트랙을 만들고 그 묶음들을
-    다시 겹쳐(전부 전체 길이·무음 패딩이라 결과 동일) 어떤 길이여도 안전하게.
+    긴 영상은 입력 파일이 수십~수백 개가 되므로 40개씩 부분 트랙을 만든 뒤 마지막에
+    합친다. Windows 명령줄 길이 제한을 피하면서 최종 영상에는 계속 한 트랙만 얹힌다.
     """
     if not clips:
         raise ValueError("내레이션 클립이 없습니다")
     total_s = max(0.1, total_us / 1e6)
     pairs = list(zip(clips, subtitles))
-    out_p = Path(out_wav)
+    out_path = Path(out_wav)
 
     def _mix(inputs: List, delays_ms: List[int], dest: Path) -> str:
         args = [ff.ffmpeg_bin(), "-y", "-v", "error"]
         parts, labels = [], []
         for i, src in enumerate(inputs):
             args += ["-i", str(src)]
-            ms = delays_ms[i]
-            head = f"[{i}:a]adelay={ms}|{ms}[n{i}]" if ms > 0 else f"[{i}:a]anull[n{i}]"
-            parts.append(head)
+            delay = delays_ms[i]
+            parts.append(
+                f"[{i}:a]adelay={delay}|{delay}[n{i}]"
+                if delay > 0 else f"[{i}:a]anull[n{i}]"
+            )
             labels.append(f"[n{i}]")
-        fc = (";".join(parts) + ";" + "".join(labels)
-              + f"amix=inputs={len(labels)}:normalize=0,apad,atrim=0:{total_s:.3f}[a]")
-        args += ff.filter_complex_args(fc, dest.with_suffix(".filter.txt"))
+        graph = (
+            ";".join(parts) + ";" + "".join(labels)
+            + f"amix=inputs={len(labels)}:normalize=0,apad,"
+              f"atrim=0:{total_s:.3f}[a]"
+        )
+        args += ff.filter_complex_args(graph, dest.with_suffix(".filter.txt"))
         args += ["-map", "[a]", "-ar", "44100", str(dest)]
         ff.run(args)
         return str(dest)
 
     if len(pairs) <= _BED_CHUNK:
-        return _mix([c for c, _ in pairs],
-                    [max(0, s.start_us // 1000) for _, s in pairs], out_p)
+        return _mix(
+            [clip for clip, _ in pairs],
+            [max(0, sub.start_us // 1000) for _, sub in pairs],
+            out_path,
+        )
+
     partials = []
-    for gi in range(0, len(pairs), _BED_CHUNK):
-        grp = pairs[gi:gi + _BED_CHUNK]
+    for start in range(0, len(pairs), _BED_CHUNK):
+        group = pairs[start:start + _BED_CHUNK]
         partials.append(_mix(
-            [c for c, _ in grp], [max(0, s.start_us // 1000) for _, s in grp],
-            out_p.with_name(f"{out_p.stem}_part{gi // _BED_CHUNK:02d}.wav")))
-    return _mix(partials, [0] * len(partials), out_p)
+            [clip for clip, _ in group],
+            [max(0, sub.start_us // 1000) for _, sub in group],
+            out_path.with_name(
+                f"{out_path.stem}_part{start // _BED_CHUNK:02d}.wav"),
+        ))
+    return _mix(partials, [0] * len(partials), out_path)
 
 
 def split_into_clips(subtitles: List[Subtitle], target_sec: float = 30.0,
@@ -1093,6 +1168,7 @@ def render_from_analysis(
     hook: str = "",
     opts: Optional[RenderOptions] = None,
     speed: float = 1.0,
+    speed_mode: str = "all",
     quality: str = "standard",
     denoise=False,
     narration_wav: Optional[str] = None,
@@ -1103,9 +1179,10 @@ def render_from_analysis(
     watermark: Optional[dict] = None,
     progress_cb: Optional[Callable[[float], None]] = None,
 ) -> EditResult:
-    """2단계: (수정된) 자막으로 최종 렌더. speed 배속, quality 화질, denoise 잡음 제거."""
+    """2단계 최종 렌더. 속도 대상·화질·잡음 제거를 반영한다."""
     style = style or presets.SUBTITLE_STYLE_PRESETS["shorts_basic"]
     speed = max(0.25, min(4.0, float(speed or 1.0)))
+    speed_mode = normalize_speed_mode(speed_mode)
     result = EditResult(ok=False, out_path=out_path)
     result.cut_us = ff.probe_duration_us(cut_video)
     result.subtitles = [s.text for s in subtitles]
@@ -1115,12 +1192,13 @@ def render_from_analysis(
             save_srt(subtitles, Path(out_path).parent / "subtitles.srt")
         render_edited(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
-            speed=speed, quality=quality, denoise=denoise,
+            speed=speed, speed_mode=speed_mode, quality=quality, denoise=denoise,
             narration_wav=narration_wav, orig_audio=orig_audio,
             bgm_path=bgm_path, bgm_db=bgm_db, bgm_duck=bgm_duck, watermark=watermark,
             progress_cb=progress_cb,
         )
-        if not _fits_us(ff.probe_duration_us(out_path), int(result.cut_us / speed), tol=200_000):
+        expected_us = int(result.cut_us / speed) if speed_mode == "all" else result.cut_us
+        if not _fits_us(ff.probe_duration_us(out_path), expected_us, tol=200_000):
             result.errors.append("출력 길이가 예상과 다릅니다")
         if not ff.has_audio_stream(out_path):
             result.errors.append("출력에 오디오가 없습니다")

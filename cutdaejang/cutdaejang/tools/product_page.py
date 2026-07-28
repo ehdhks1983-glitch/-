@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+import html as _html
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -125,10 +127,16 @@ def _browser_dump(url: str, timeout: float = 50.0) -> str:
     UA를 바꾸지 않는다(HeadlessChrome으로 자신을 알림) — 사이트가 헤드리스를
     차단하기로 했다면 그 결정을 존중하고 빈 문자열을 돌려준다.
     """
+    # timeout은 브라우저 '각각'이 아니라 전체 후보에 대한 총 예산이다. 엣지와
+    # 크롬이 모두 설치된 PC에서 각각 50초씩 기다려 UI가 수 분 멈추는 일을 막는다.
+    deadline = time.monotonic() + max(1.0, float(timeout))
     for exe in _browser_candidates():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
             r = subprocess.run(_browser_args(exe, url),
-                               capture_output=True, timeout=timeout)
+                               capture_output=True, timeout=max(1.0, remaining))
             out = (r.stdout or b"").decode("utf-8", errors="replace")
             if len(out) > 3000 and "<html" in out.lower():
                 return out
@@ -152,42 +160,86 @@ def _meta(html: str, prop: str) -> str:
     return ""
 
 
-def extract_image_urls(html: str, limit: int = 12) -> List[str]:
+def extract_image_urls(html: str, limit: int = 12, base_url: str = "") -> List[str]:
     # 🧩 v1.04: 상품 사진 주소는 페이지 JSON 안에 "https:\/\/…"(이스케이프)로
     # 실리는 일이 흔한데 그동안 못 잡았다 — 메타태그의 대표 사진 1장만 오던
     # 주범 (사용자 리포트 "아직도 한 장만 들어오네"). 이스케이프를 풀고 긁는다.
-    html = ((html or "").replace("\\/", "/")
-            .replace("\\u002F", "/").replace("\\u002f", "/"))
+    html = _html.unescape(
+        ((html or "").replace("\\/", "/")
+         .replace("\\u002F", "/").replace("\\u002f", "/")))
     out: List[str] = []
     seen = set()
-    for m in _IMG_RE.finditer(html or ""):
-        u = m.group(0)
+
+    def add(raw: str) -> None:
+        u = _html.unescape((raw or "").strip().strip("\"'"))
+        if not u or u.startswith(("data:", "blob:")):
+            return
         if u.startswith("//"):
             u = "https:" + u
+        elif base_url:
+            u = urllib.parse.urljoin(base_url, u)
+        if not u.startswith(("http://", "https://")):
+            return
         low = u.lower()
         if any(j in low for j in _JUNK_IMG):
-            continue
-        if u in seen:
-            continue
-        seen.add(u)
-        out.append(u)
+            return
+        key = u.replace(" ", "%20")
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(key)
+
+    # 태그에 원본/고해상도 후보가 명시됐으면 페이지에 먼저 등장하는 작은
+    # ``src`` 썸네일보다 우선한다.
+    for tag_m in re.finditer(r"<img\b[^>]*>", html or "", re.I | re.S):
+        tag = tag_m.group(0)
+        attrs = {
+            k.lower(): v for k, _q, v in re.findall(
+                r"([:\w-]+)\s*=\s*([\"'])(.*?)\2", tag, re.I | re.S)
+        }
+        for key in ("data-original", "data-lazy-src", "data-src",
+                    "data-image", "data-lazy"):
+            add(attrs.get(key, ""))
+            if len(out) >= limit:
+                break
         if len(out) >= limit:
             break
+        srcset = attrs.get("data-srcset") or attrs.get("srcset") or ""
+        if srcset:
+            choices = [x.strip().split()[0] for x in srcset.split(",") if x.strip()]
+            for choice in reversed(choices):       # 가장 큰 폭/배율 후보 우선
+                add(choice)
+                if len(out) >= limit:
+                    break
+        add(attrs.get("src", ""))
+        if len(out) >= limit:
+            break
+
+    # <img> 밖의 상품 JSON/스크립트에만 들어 있는 CDN 주소도 뒤이어 수집한다.
+    if len(out) < limit:
+        for m in _IMG_RE.finditer(html or ""):
+            add(m.group(0))
+            if len(out) >= limit:
+                break
     return out
 
 
-def parse_product(html: str) -> dict:
+def parse_product(html: str, base_url: str = "") -> dict:
     """렌더된(또는 원본) HTML → {title, text, images(url 목록)}."""
     title = _meta(html, "og:title")
     if not title:
         m = re.search(r"<title[^>]*>([^<]{2,120})</title>", html or "", re.I)
         title = (m.group(1).strip() if m else "")
     desc = _meta(html, "og:description") or _meta(html, "description")
-    imgs = extract_image_urls(html)
+    imgs = extract_image_urls(html, base_url=base_url)
     og_img = _meta(html, "og:image")
-    if og_img.startswith("//"):
-        og_img = "https:" + og_img
-    if og_img.startswith("http") and og_img not in imgs:
+    if og_img:
+        og_img = urllib.parse.urljoin(base_url, og_img) if base_url else (
+            "https:" + og_img if og_img.startswith("//") else og_img)
+    if og_img.startswith("http"):
+        # 대표 사진은 태그/JSON 수집 중 이미 발견됐더라도 항상 첫 장으로 보낸다.
+        # lazy 원본 우선 수집으로 순서가 바뀐 뒤 og:image가 중간에 남는 회귀 방지.
+        imgs = [u for u in imgs if u != og_img]
         imgs.insert(0, og_img)
     price = ""
     pm = re.search(r'"(?:salePrice|discountedPrice|lprice|price)"\s*:\s*"?(\d{3,9})', html or "")
@@ -222,7 +274,7 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
     except Exception:  # noqa: BLE001 — 브라우저 경로로 넘어감
         via = ""
         stages.append("직접 실패")
-    parsed = parse_product(html_text) if html_text else {}
+    parsed = parse_product(html_text, final) if html_text else {}
     if html_text:
         stages.append(f"직접 {len(parsed.get('images') or [])}장")
     # 📱 블로그 수집과 같은 요청 레시피로 모바일 페이지도 시도 (v1.06 — 사용자
@@ -236,7 +288,7 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
             say("모바일 페이지에서 사진 찾는 중…")
             try:
                 m_html, _mf = _fetch_html(m_url, ua=fetch_web._UA, referer=final)
-                p_m = parse_product(m_html)
+                p_m = parse_product(m_html, m_url)
                 stages.append(f"모바일 {len(p_m.get('images') or [])}장")
                 merged_m = list(dict.fromkeys(
                     (p_m.get("images") or []) + (parsed.get("images") or [])))[:12]
@@ -255,7 +307,7 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
         say("사진을 더 실으려고 PC의 엣지/크롬으로 페이지 읽는 중… (최대 30초)")
         dumped = _browser_dump(final)
         if dumped:
-            p2 = parse_product(dumped)
+            p2 = parse_product(dumped, final)
             stages.append(f"브라우저 {len(p2.get('images') or [])}장")
             merged = list(dict.fromkeys(
                 (p2.get("images") or []) + (parsed.get("images") or [])))[:12]
@@ -279,7 +331,7 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
 
 
 def download_images(urls: List[str], dest_dir, limit: int = 12,
-                    min_bytes: int = 12_000) -> Tuple[List[str], int]:
+                    min_bytes: int = 12_000, referer: str = "") -> Tuple[List[str], int]:
     """사진 URL들을 고화질 우선으로 내려받아 dest/img_NN.ext 로 저장 → (경로들, 스킵 수)."""
     from . import coupang_api, fetch_web, naver_shop_api  # noqa: PLC0415
 
@@ -293,12 +345,12 @@ def download_images(urls: List[str], dest_dir, limit: int = 12,
         ok = False
         for cand in dict.fromkeys(cands):
             try:
-                raw = fetch_web.fetch_bytes(cand)
+                raw = fetch_web.fetch_bytes(cand, referer=referer)
             except Exception:  # noqa: BLE001 — 다음 후보로
                 continue
             ext = fetch_web.sniff_image_ext(raw) or ""
             if ext not in ("jpg", "jpeg", "png", "webp", "bmp") or len(raw) < min_bytes:
-                break                          # 아이콘·버튼 같은 자잘한 그림
+                continue                       # 고화질 변환 URL 실패면 원본 후보도 시도
             p = dest / f"img_{len(saved) + 1:02d}.{ext}"
             p.write_bytes(raw)
             saved.append(str(p))

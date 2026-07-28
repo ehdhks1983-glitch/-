@@ -31,7 +31,7 @@ def test_pasted_plus_shop_link_collects_photos(monkeypatch, tmp_path):
                 "images": [f"https://thumbnail1.coupangcdn.com/t/{i}.jpg" for i in range(5)],
                 "final_url": url, "via": "브라우저"}
 
-    def fake_dl(urls, dest_dir, limit=12, min_bytes=12_000):
+    def fake_dl(urls, dest_dir, limit=12, min_bytes=12_000, **_kwargs):
         d = Path(dest_dir); d.mkdir(parents=True, exist_ok=True)
         out = []
         for i, _u in enumerate(urls[:limit], 1):

@@ -97,6 +97,9 @@ class Style:
     tone: str = "기본"             # 화면 톤(색보정) 프리셋 (v0.56) — composer.TONE_PRESETS 키
     text_cards: bool = True        # 🅰 텍스트 카드 장면 (v1.07) — 숫자·펀치 문장 풀스크린 타이포
     card_accent: str = "#4D8DFF"   # 카드 숫자 강조색 (스샷의 파랑 글로우)
+    card_pack: str = "auto"        # v1.11 자동 장면 성격: auto | info | shopping | review | promo
+    card_density: str = "auto"     # v1.11 장면 빈도: low | auto | rich
+    font_pack: str = "auto"        # v1.11 제목+자막 글꼴 조합 이름
 
 
 @dataclass

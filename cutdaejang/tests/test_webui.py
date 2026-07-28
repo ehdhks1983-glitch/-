@@ -1,6 +1,7 @@
 """웹 UI 서버 E2E — 생성 API → 진행 → 완료 → 영상 서빙(Range)까지 (ffmpeg 필요)."""
 
 import json
+import sys
 import threading
 import time
 import urllib.parse
@@ -715,7 +716,9 @@ def test_win_voices_api_and_settings(server):
     from cutdaejang import config
 
     d = _post(server, "/api/win_voices", {})
-    assert d["voices"] == [] and d["win"] is False  # 리눅스 CI
+    assert d["win"] is (sys.platform == "win32")
+    if sys.platform != "win32":
+        assert d["voices"] == []
 
     html = _get(server, "/").read().decode("utf-8")
     assert 'id="setWinVoice"' in html and "자동 (한국어 첫 번째)" in html
@@ -726,15 +729,16 @@ def test_win_voices_api_and_settings(server):
     assert config.load_settings()["tts"]["windows_voice"] == "Microsoft Heami Desktop"
     _post(server, "/api/settings", {"settings": {"tts": {"windows_voice": ""}}})  # 원복
 
-    # 리눅스에서 내장 음성 미리듣기 → 명확한 오류 메시지
-    import urllib.error
-    try:
-        _post(server, "/api/preview", {"tts_provider": "windows", "voice": "아무거나"})
-        raised = False
-    except urllib.error.HTTPError as e:
-        raised = True
-        assert "Windows" in e.read().decode("utf-8")
-    assert raised
+    # 비 Windows에서 내장 음성 미리듣기 → 명확한 오류 메시지
+    if sys.platform != "win32":
+        import urllib.error
+        try:
+            _post(server, "/api/preview", {"tts_provider": "windows", "voice": "아무거나"})
+            raised = False
+        except urllib.error.HTTPError as e:
+            raised = True
+            assert "Windows" in e.read().decode("utf-8")
+        assert raised
 
 
 def test_edit_with_recorded_narration_file(server, tmp_path):
@@ -1528,11 +1532,11 @@ def test_v068_font_route_and_length(server):
             code = e.code
         assert code == 404, bad
 
-    # ── 길이 직접 입력: 15분(900초)까지 기억, 초과는 클램프 ──
-    w._apply_bg_style({"target_sec": 900}, config.load_settings())
-    assert config.load_settings()["ui"].get("gen_target_sec") == 900
-    w._apply_bg_style({"target_sec": 1200}, config.load_settings())  # 20분 → 15분으로
-    assert config.load_settings()["ui"].get("gen_target_sec") == 900
+    # ── 길이 직접 입력: v1.10부터 30분(1800초)까지 기억, 초과는 클램프 ──
+    w._apply_bg_style({"target_sec": 1800}, config.load_settings())
+    assert config.load_settings()["ui"].get("gen_target_sec") == 1800
+    w._apply_bg_style({"target_sec": 2400}, config.load_settings())  # 40분 → 30분으로
+    assert config.load_settings()["ui"].get("gen_target_sec") == 1800
 
     # 화면: 직접 입력 UI + 실물 미리보기 요소가 실려 있어야 한다
     html = _get(server, "/").read().decode("utf-8")

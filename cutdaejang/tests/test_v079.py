@@ -87,7 +87,8 @@ def test_spans_fewer_images_group_blocks():
 
 def test_spans_more_images_than_sentences():
     spans = photo_sentence_spans(8, [0, 1_000_000, 2_000_000], 3_000_000)
-    assert [i for i, _ in spans] == [0, 1, 2]  # 앞 3장만 사용
+    assert [i for i, _ in spans] == list(range(8))  # 뒤 사진도 버리지 않고 전부 사용
+    assert all(d >= 333_333 for _, d in spans)
     assert sum(d for _, d in spans) == 3_000_000
 
 

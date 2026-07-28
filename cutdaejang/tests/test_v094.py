@@ -26,7 +26,7 @@ def _black_periods(path):
 
     r = subprocess.run([ff.ffmpeg_bin(), "-i", str(path),
                         "-vf", "blackdetect=d=0.03:pix_th=0.15", "-an", "-f", "null", "-"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     return re.findall(r"black_start:\S+", r.stderr)
 
 

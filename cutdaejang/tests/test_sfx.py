@@ -71,7 +71,7 @@ def test_mix_sfx_audible_at_position(tmp_path):
         r = subprocess.run(
             [ff.ffmpeg_bin(), "-v", "info", "-ss", str(ss), "-t", str(t), "-i", path,
              "-af", "volumedetect", "-f", "null", "-"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         line = next(l for l in r.stderr.splitlines() if "max_volume" in l)
         return float(line.split("max_volume:")[1].replace("dB", "").strip())
 

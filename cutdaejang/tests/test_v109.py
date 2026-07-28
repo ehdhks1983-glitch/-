@@ -1,69 +1,130 @@
-"""v1.09 — 🗣 말 경계 스냅 + 긴 영상 내레이션 얹기 안정화 (사용자 리포트 "아직도 끊김").
+"""v1.09 — 긴 내레이션 연속 낭독 + 쇼핑 사진 전량 반영·검증."""
 
-8분30초급에서 남아 있던 끊김 경로 2개를 구조적으로 막는다:
-① 목소리 든 영상을 완전 자동(목표초 몽타주)으로 자르면 자막 인식이 꺼져 있을 때
-   말 위치를 모른 채 시간으로만 잘라 문장 한가운데가 끊겼다 → 컷 경계를 무음으로 스냅
-② 내레이션 베드가 클립 전부를 한 명령줄에 실어 문장 100개↑(긴 영상)에서
-   Windows 32K 한계에 깨질 수 있었다 → 40개 묶음 부분 합성 + 필터 파일 경유
-"""
+import inspect
+import math
+import struct
+import wave
+from pathlib import Path
 
-from cutdaejang.core.video_editor import shift_ranges_to_silence
+from cutdaejang.core import tts_engine
+from cutdaejang.gui import webui
+from cutdaejang.tools import product_page
 from tests.conftest import requires_ffmpeg
 
 
-def test_snap_moves_cut_out_of_speech():
-    """말 한가운데 떨어진 컷 경계가 가장 가까운 무음 지점으로 이동한다."""
-    speech = [(1_000_000, 3_000_000), (5_000_000, 7_000_000)]
-    out = shift_ranges_to_silence([(2_000_000, 6_200_000)], speech, 10_000_000)
-    (s, e), = out
-    for x in (s, e):                       # 두 경계 모두 발화 구간 밖
-        assert not any(a < x < b for a, b in speech), (s, e)
-    assert abs(s - 2_000_000) <= 1_500_000 and abs(e - 6_200_000) <= 1_500_000
+class _PausingGemini:
+    """여러 문장 사이에 자연 무음을 만드는 가짜 Gemini TTS."""
+
+    name = "gemini"
+    model = "fake-continuity"
+
+    def __init__(self):
+        self.calls = 0
+
+    def synthesize(self, text, voice, out_path):
+        self.calls += 1
+        spoken = text.split("[낭독 원고]\n", 1)[-1]
+        count = spoken.count("\n\n") + 1
+        rate = 24_000
+        tone_n = int(rate * 0.28)
+        silence_n = int(rate * 0.14)
+        frames = bytearray()
+        for i in range(count):
+            for n in range(tone_n):
+                sample = int(6000 * math.sin(2 * math.pi * 440 * n / rate))
+                frames += struct.pack("<h", sample)
+            if i + 1 < count:
+                frames += b"\0\0" * silence_n
+        with wave.open(str(out_path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(frames)
+        return str(out_path)
 
 
-def test_snap_keeps_faraway_and_silent_sources():
-    speech = [(1_000_000, 3_000_000)]
-    # 무음이 허용 이동폭 안에 없으면 그대로 (억지로 안 옮김)
-    out = shift_ranges_to_silence([(1_700_000, 2_400_000)], speech, 10_000_000,
-                                  max_shift_us=200_000)
-    assert out == [(1_700_000, 2_400_000)]
-    # 말이 없는 영상은 스냅 없음
-    assert shift_ranges_to_silence([(0, 5_000_000)], [], 10_000_000) == [(0, 5_000_000)]
-    # 순서·최소 길이 보존 (겹침 방지)
-    out2 = shift_ranges_to_silence(
-        [(0, 2_900_000), (3_100_000, 6_000_000)], speech, 10_000_000)
-    assert out2[0][1] <= out2[1][0] and all(e - s >= 600_000 for s, e in out2)
+def test_continuity_blocks_cross_section_sized_groups():
+    lines = [f"{i}번째 문장 " + ("가" * 90) for i in range(30)]
+    blocks = tts_engine.continuity_blocks(lines, max_chars=500, max_sentences=8)
+    assert blocks[0][0] == 0 and blocks[-1][1] == len(lines)
+    assert all(2 <= end - start <= 8 for start, end in blocks)
+    assert len(blocks) < len(lines) // 2
 
 
 @requires_ffmpeg
-def test_long_bed_survives_many_clips(tmp_path):
-    """문장 90개(긴 영상급) 내레이션 베드가 명령줄 한계 없이 완성된다."""
-    from cutdaejang.core import edit_mode
-    from cutdaejang.spec import Subtitle
-    from cutdaejang.utils import ffmpeg as ff
+def test_continuous_tts_calls_once_and_keeps_sentence_clips(tmp_path):
+    provider = _PausingGemini()
+    lines = ["첫 구간의 마지막 문장입니다.", "둘째 구간도 같은 목소리입니다.",
+             "마지막까지 같은 속도로 읽습니다."]
+    eng = tts_engine.TTSEngine(provider, tmp_path / "cache")
+    paths = eng.synth_all(lines, continuity=True)
+    assert provider.calls == 1                         # 문장별 3회가 아니라 한 호흡 1회
+    assert len(paths) == len(lines) and all(p.is_file() for p in paths)
+    assert all(".cont-" in p.name for p in paths)
+    # 경계 무음의 절반씩이 조각에 중복으로 남아 명시적 문장 간격과 더해지지 않는다.
+    assert all(tts_engine.ff.probe_duration_us(str(p)) < 500_000 for p in paths)
 
-    clips, subs = [], []
-    for i in range(90):
-        p = tmp_path / f"c{i:03d}.wav"
-        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
-                "-i", "sine=frequency=500:duration=0.35",
-                "-ar", "24000", str(p)])
-        clips.append(str(p))
-        subs.append(Subtitle(text=f"문장{i}", start_us=i * 500_000,
-                             end_us=i * 500_000 + 350_000))
-    total = 90 * 500_000 + 1_000_000
-    out = edit_mode.build_narration_wav(clips, subs, total, tmp_path / "bed.wav")
-    dur = ff.probe_duration_us(out)
-    assert abs(dur - total) < 200_000, dur          # 전체 길이 유지
-    # 묶음 부분 파일이 실제로 만들어졌다 (40개 초과 → 분할 경로)
-    assert list(tmp_path.glob("bed_part*.wav")), "묶음 분할이 안 돌았음"
+    # 다시 만들면 블록·분할 캐시를 그대로 써 API를 추가 호출하지 않는다.
+    eng2 = tts_engine.TTSEngine(provider, tmp_path / "cache")
+    paths2 = eng2.synth_all(lines, continuity=True)
+    assert provider.calls == 1 and paths2 == paths
 
 
-def test_wiring_snap_and_chunked_bed():
-    src_w = open("cutdaejang/gui/webui.py", encoding="utf-8").read()
-    assert src_w.count("shift_ranges_to_silence") == 2      # 편집 완전자동 + 구간 몽타주
-    assert "말이 안 끊기게 컷 지점을 무음에 맞추는 중" in src_w
-    src_e = open("cutdaejang/core/edit_mode.py", encoding="utf-8").read()
-    body = src_e.split("def build_narration_wav")[1].split("\ndef ")[0]
-    assert "_BED_CHUNK" in src_e and "filter_complex_args" in body
-    assert '"-filter_complex", fc' not in body               # 명령줄 직접 탑재 제거
+def test_product_parser_prefers_lazy_and_srcset_without_extension():
+    html = """<html><meta property="og:title" content="테스트 상품">
+    <img src="/thumb.jpg" data-src="/detail/original"
+         srcset="/detail/mid 640w, https://cdn.example.com/detail/large 1600w">
+    </html>"""
+    out = product_page.parse_product(html, "https://shop.example.com/items/1")
+    assert out["images"][0] == "https://shop.example.com/detail/original"
+    assert "https://cdn.example.com/detail/large" in out["images"]
+    assert "https://shop.example.com/thumb.jpg" in out["images"]
+
+    relative_og = product_page.parse_product(
+        '<meta property="og:title" content="상품">'
+        '<meta property="og:image" content="/images/cover.jpg">',
+        "https://shop.example.com/items/1")
+    assert relative_og["images"][0] == "https://shop.example.com/images/cover.jpg"
+
+
+def test_hi_res_failure_retries_original(monkeypatch, tmp_path):
+    from cutdaejang.tools import fetch_web
+
+    tried = []
+    tiny = b"\x89PNG\r\n\x1a\n" + b"x" * 100
+    valid = b"\x89PNG\r\n\x1a\n" + b"x" * 20_000
+
+    def fake_fetch(url, **_kwargs):
+        tried.append(url)
+        return tiny if "1024x1024ex" in url else valid
+
+    monkeypatch.setattr(fetch_web, "fetch_bytes", fake_fetch)
+    src = "https://thumbnail7.coupangcdn.com/thumbnails/remote/492x492ex/image/a.jpg"
+    saved, skipped = product_page.download_images([src], tmp_path, referer="https://coupang.com/p/1")
+    assert len(saved) == 1 and skipped == 0
+    assert "1024x1024ex" in tried[0] and src in tried
+
+
+def test_shop_ui_shows_exact_render_order_and_controls():
+    html = webui._HTML
+    for token in ("영상에 반영할 사진", "function removeShopPhoto",
+                  "function moveShopPhoto", "사진 배열과 항상 같은 인덱스",
+                  "referer:(($('shopLinkInput')"):
+        assert token in html
+    body = open(webui.__file__, encoding="utf-8").read().split(
+        "def _run_sections", 1)[1].split("\ndef ", 1)[0]
+    assert "continuity=True" in body
+    assert "gap_us=narr_gap_us" in body
+    assert "bed3-final-sync" in body
+    assert 'cut_dur > narr_end + 50_000' in body
+    assert 'f"sec_{i}_fit.mp4"' in body
+    src = open(webui.__file__, encoding="utf-8").read()
+    assert "photo_manifest.json" in src
+    assert "빠짐없이 내레이션 문장 타이밍에 맞춰 배치" in src
+
+
+def test_ui_start_message_is_cp949_safe():
+    """한국어 Windows의 기본 콘솔에서도 서버가 안내문 출력 중 죽지 않아야 한다."""
+    src = inspect.getsource(webui.serve)
+    message = src[src.index('print(f"컷대장 UI:'):]
+    message.splitlines()[0].encode("cp949")

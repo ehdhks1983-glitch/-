@@ -185,7 +185,9 @@ def test_fallback_chain_falls_to_stub(tmp_path):
         chain=["gemini"],
         cache_root=tmp_path / "cache",
         status_cb=notes.append,
-        providers={"gemini": AlwaysAuthFail()},
+        # Windows에서는 SAPI가 stub보다 먼저 오므로 그것도 실패 제공자로 주입해
+        # 운영체제와 무관하게 이 테스트의 최종 stub 경로를 검증한다.
+        providers={"gemini": AlwaysAuthFail(), "windows": AlwaysAuthFail()},
     )
     assert used == "stub"
     assert len(paths) == 1 and paths[0].exists()

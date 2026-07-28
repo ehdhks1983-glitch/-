@@ -1,4 +1,6 @@
 """v0.59 — Windows 내장 음성 보이스 선택 (SAPI 스크립트·목록·설정 전달)."""
+import sys
+
 from cutdaejang.core import tts_engine as te
 
 
@@ -17,7 +19,8 @@ def test_build_sapi_script_empty_voice_keeps_ko_default():
     assert "$want = ''" in s and "$s.Rate = 0" in s
 
 
-def test_list_windows_voices_empty_on_non_windows():
+def test_list_windows_voices_empty_on_non_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     assert te.list_windows_voices() == []
 
 

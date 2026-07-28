@@ -122,9 +122,8 @@ def _ensure_queue_worker() -> None:
 _EDIT_LAST_KEYS = (
     "layout", "auto_subtitle", "cut_silence", "denoise", "orig_audio",
     "bgm", "bgm_db", "hook_scale", "hook_style", "sub_style", "tone", "narr_voice", "narr_style", "narr_subs_only",
-    "stt_provider", "whisper_model", "speed", "quality", "narr_fit", "transition",
+    "stt_provider", "whisper_model", "speed", "speed_mode", "quality", "narr_fit", "transition",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
-    "auto_mode",  # 🖥 만들기 방식 3종(쇼츠1개·긴영상·나누기) 기억 (v1.10)
     "tempo",  # ⚡ 빠른 템포 — 몽타주 컷 밀도 (v0.73)
     "cold_open", "hook_voice",  # 🪝 훅 팩 (v0.75)
     "filler_cut", "take_clean",  # 🧹 말 다듬기 팩 (v0.76)
@@ -623,7 +622,7 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
         over_ui["gen_product"] = str(params.get("product") or "")
     if params.get("target_sec"):  # ⏱ 영상 길이 기억 (v0.61)
         try:
-            over_ui["gen_target_sec"] = max(10, min(900, int(params["target_sec"])))  # 최대 15분 (v0.68)
+            over_ui["gen_target_sec"] = max(10, min(1800, int(params["target_sec"])))  # 최대 30분 (v1.10)
         except (TypeError, ValueError):
             pass
     if params.get("tts_provider") == "elevenlabs" and (params.get("voice") or "").strip():
@@ -805,12 +804,10 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 and not params.get("auto_multi")
                 and analysis.cut_us > (tgt_auto + 3) * 1_000_000):
             from ..core import video_editor as ve  # noqa: PLC0415
-            _tgt_txt = (f"{tgt_auto // 60}분 {tgt_auto % 60}초" if tgt_auto >= 60
-                        else f"{tgt_auto}초")   # 🖥 긴 영상은 분으로 읽기 쉽게 (v1.10)
-            _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {_tgt_txt}를 뽑는 중…")
+            _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {tgt_auto}초를 뽑는 중…")
             # ⚡ 빠른 템포(v0.73) — 조각을 더 짧게 잡아 컷을 촘촘하게 (몽타주 리듬 up)
-            # 🖥 긴 영상(2분↑)은 조각을 길게 — 산만함·조각 수 폭증 방지 (v1.10)
-            _piece = ve.montage_piece_us(params.get("tempo"), tgt_auto)
+            _piece = {"빠르게": 2_400_000, "아주 빠르게": 1_700_000}.get(
+                str(params.get("tempo") or ""), 3_500_000)
             ranges = edit_mode.spread_ranges(
                 analysis.cut_us, tgt_auto * 1_000_000, piece_us=_piece)
             try:  # 🎬 장면 전환에 맞춰 조각 시작점을 스냅 — 컷이 장면 중간에서 안 끊기게 (v0.44)
@@ -821,14 +818,13 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                         ranges = ve.shift_ranges_to_scenes(ranges, scenes, analysis.cut_us)
             except Exception:  # noqa: BLE001 — 감지 실패는 스냅 없이 진행
                 pass
-            try:  # 🗣 말 경계 스냅 (v1.09) — 목소리 든 영상(자막 인식 꺼짐 포함)을
-                # 시간으로만 자르면 문장 한가운데가 잘린다 (사용자 리포트
-                # "전환될 때마다 나래이션이 끊긴다"). 컷 경계를 무음 지점으로 이동.
+            try:  # 🗣 말 경계 스냅 (v1.09) — 문장 한가운데서 컷이 나지 않게
                 _set_job(job_id, note="말이 안 끊기게 컷 지점을 무음에 맞추는 중…")
-                spch, _d = ve.detect_speech_segments(analysis.cut_video)
-                if spch and sum(e - s for s, e in spch) < analysis.cut_us * 0.98:
-                    ranges = ve.shift_ranges_to_silence(ranges, spch, analysis.cut_us)
-            except Exception:  # noqa: BLE001 — 감지 실패는 스냅 없이 진행
+                speech, _duration = ve.detect_speech_segments(analysis.cut_video)
+                if speech and sum(end - start for start, end in speech) < analysis.cut_us * 0.98:
+                    ranges = ve.shift_ranges_to_silence(
+                        ranges, speech, analysis.cut_us)
+            except Exception:  # noqa: BLE001 — 감지 실패는 기존 컷으로 계속
                 pass
             analysis.cut_video = ve.cut_and_concat(
                 analysis.cut_video, ranges,
@@ -837,7 +833,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             from ..utils import ffmpeg as ff  # noqa: PLC0415
             analysis.cut_us = ff.probe_duration_us(analysis.cut_video)
             _set_job(job_id, tts_warn=(
-                f"자막(발화)이 없어 영상 전체에서 고르게 {_tgt_txt}를 골라 담았어요"))
+                f"자막(발화)이 없어 영상 전체에서 고르게 {tgt_auto}초를 골라 담았어요"))
         review_subs = analysis.subtitles
         narr_subs_only = bool(params.get("narr_subs_only"))
         if narr_file:  # 🎤 녹음 내레이션: 자막은 녹음에서 — 대본 있으면 그 글대로 (v0.58)
@@ -954,6 +950,9 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                              else "keep"),
                          "bgm": (params.get("bgm") or "").strip(),
                          "bgm_db": params.get("bgm_db"),
+                         "speed": params.get("speed") or 1.0,
+                         "speed_mode": params.get("speed_mode") or "all",
+                         "quality": params.get("quality") or "standard",
                          "hook_scale": params.get("hook_scale"),
                          "hook_style": params.get("hook_style") or "",  # v0.52 프리셋
                          "sub_style": params.get("sub_style") or "",    # v0.54 자막 프리셋
@@ -1007,6 +1006,10 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 auto_speed = float(params.get("speed") or 1.0)
             except (TypeError, ValueError):
                 auto_speed = 1.0
+            auto_speed_mode = (
+                params.get("speed_mode") if params.get("speed_mode") in ("all", "voice", "video")
+                else "all"
+            )
             multi = bool(params.get("auto_multi")) and not photo_path
             if multi and (narr_topic or narr_file or narr_analyze or script_tts):  # 내레이션은 영상 전체 기준 → 분할과 배타
                 multi = False
@@ -1017,7 +1020,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 _do_edit_split(job_id, subs_d, (params.get("hook") or "").strip(),
                                params.get("layout") or edit_cfg["layout"],
                                analysis.cut_video, workdir, float(tgt), auto_speed,
-                               params.get("quality") or "standard", denoise)
+                               auto_speed_mode, params.get("quality") or "standard", denoise)
                 return
             # 내레이션 대본은 이미 목표 길이로 새로 쓴 글 → 핵심 선별로 또 자르지 않음
             # (🧠 화면분석 대본도 길이를 이미 정했으므로 재차 자르지 않음 — v0.71)
@@ -1045,7 +1048,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             _do_edit_render(job_id, subs_d, (params.get("hook") or "").strip(),
                             params.get("layout") or edit_cfg["layout"],
                             analysis.cut_video, workdir, keep, auto_speed,
-                            params.get("quality") or "standard", denoise,
+                            auto_speed_mode, params.get("quality") or "standard", denoise,
                             climax=climax)
             return
         if analysis.subtitles:  # STT/입력 대본/내레이션 대본이 있으면 검토 화면으로
@@ -1064,7 +1067,11 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             # 자막 없음(b-roll 등) → 바로 렌더
             _do_edit_render(job_id, [], params.get("hook", ""),
                             params.get("layout") or edit_cfg["layout"],
-                            analysis.cut_video, workdir, denoise=denoise)
+                            analysis.cut_video, workdir,
+                            speed=float(params.get("speed") or 1.0),
+                            speed_mode=(params.get("speed_mode") or "all"),
+                            quality=params.get("quality") or "standard",
+                            denoise=denoise)
     except Exception as e:
         import traceback  # noqa: PLC0415
 
@@ -1136,7 +1143,8 @@ def _narr_tts_pref(ep: dict, settings: dict) -> tuple:
 
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     cut_video: str, workdir: str, keep: Optional[list] = None,
-                    speed: float = 1.0, quality: str = "standard",
+                    speed: float = 1.0, speed_mode: str = "all",
+                    quality: str = "standard",
                     denoise=False, trim=(0, 0), climax: int = -1) -> None:
     """2단계: (수정된) 자막으로 최종 렌더. keep이 일부면 그 구간만 남겨 쇼츠로 재컷."""
     try:
@@ -1273,6 +1281,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 texts, chain, Path(workdir) / "cache" / "tts", settings,
                 voice=voice,
                 on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
+                continuity=True,
             )
             # 고른 보이스가 반영 안 되는 폴백이면 이유를 사용자에게 알림
             want = {"__mine__": "elevenlabs", "__sovits__": "sovits"}.get(narr_voice)
@@ -1322,6 +1331,15 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     spans = video_editor.photo_sentence_spans(
                         len(photo_files), [s.start_us for s in subs], narr_end_us)
                     if spans:
+                        # 실제 렌더 반영 순서를 남겨 링크 크롤링 결과가 어느 사진까지
+                        # 쓰였는지 작업 폴더에서 바로 확인할 수 있게 한다.
+                        (Path(workdir) / job_id / "photo_manifest.json").write_text(
+                            json.dumps([
+                                {"order": order + 1, "source_index": i,
+                                 "path": photo_files[i], "duration_us": d}
+                                for order, (i, d) in enumerate(spans)
+                            ], ensure_ascii=False, indent=2),
+                            encoding="utf-8")
                         cw, ch = (1920, 1080) if layout == "wide" else (1080, 1920)
                         synced_path = str(Path(workdir) / job_id / "photo_sync.mp4")
                         bg_gen.scene_slideshow(
@@ -1331,9 +1349,9 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                         cut_us = ff.probe_duration_us(cut_video)
                         photo_synced = True
                         used = len({i for i, _ in spans})
-                        w3 = f"📸 사진 {used}장을 내레이션 문장 타이밍에 맞춰 배치했어요"
+                        w3 = f"📸 사진 {used}장을 빠짐없이 내레이션 문장 타이밍에 맞춰 배치했어요"
                         if used < len(photo_files):
-                            w3 += f" (문장 수보다 많은 사진 {len(photo_files) - used}장은 뺐어요)"
+                            w3 += f" (표시 시간이 너무 짧은 {len(photo_files) - used}장은 제외)"
                         prev = (_get_job(job_id) or {}).get("tts_warn") or ""
                         _set_job(job_id, tts_warn=f"{prev} · {w3}" if prev else w3)
                 except Exception:  # noqa: BLE001 — 실패 시 기존 늘림/트림 방식으로 계속
@@ -1375,7 +1393,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     "워터마크 파일을 찾지 못해 없이 렌더: %s", ep["wm_path"])
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=style,
-            layout=layout, hook=hook, speed=speed, quality=quality, denoise=denoise,
+            layout=layout, hook=hook, speed=speed, speed_mode=speed_mode,
+            quality=quality, denoise=denoise,
             narration_wav=narration_wav,
             orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
             bgm_duck=bool(settings["bgm"].get("duck", True)),
@@ -1451,7 +1470,8 @@ _SPLIT_MAX = 30  # 분할 쇼츠 상한 — 초장편 영상이 수백 개 렌�
 
 def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                    cut_video: str, workdir: str, target_sec: float = 30.0,
-                   speed: float = 1.0, quality: str = "standard",
+                   speed: float = 1.0, speed_mode: str = "all",
+                   quality: str = "standard",
                    denoise=False, trim=(0, 0)) -> None:
     """긴 영상을 목표 길이 단위 쇼츠 여러 개로 분할 렌더 (edited_1..N.mp4).
 
@@ -1559,7 +1579,8 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 base = (gi - 1) / len(plan)
                 r = edit_mode.render_from_analysis(
                     clip_video, clip_subs, out, style=style, layout=layout,
-                    hook=hook, speed=speed, quality=quality, denoise=denoise,
+                    hook=hook, speed=speed, speed_mode=speed_mode,
+                    quality=quality, denoise=denoise,
                     orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
                     bgm_duck=bool(settings["bgm"].get("duck", True)),
                     watermark=watermark,
@@ -1812,11 +1833,43 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
             # 5장인데 여긴 왜 그러는 거야"의 진짜 원인 — 수집기가 아예 안 돌았음)
             if url and product_page.is_shop_url(url):
                 try:
-                    prod = product_page.collect_product(url, progress_cb=say)
+                    # 붙여넣은 설명은 이미 대본 근거로 충분하므로 사진 보강 때문에
+                    # 전체 작업을 수 분 붙잡지 않는다. 25초 안에 수집되면 합류시키고,
+                    # 차단·지연이면 설명 대본부터 즉시 계속한다. 수집 스레드는 결과
+                    # 객체를 직접 건드리지 않아 늦게 끝나도 완료 화면을 바꾸지 않는다.
+                    collected: dict = {}
+                    collect_active = threading.Event()
+                    collect_active.set()
+
+                    def collect_progress(msg: str) -> None:
+                        if collect_active.is_set():
+                            say(msg)
+
+                    def collect_link_photos() -> None:
+                        try:
+                            collected["result"] = product_page.collect_product(
+                                url, progress_cb=collect_progress)
+                        except Exception as exc:  # noqa: BLE001
+                            collected["error"] = exc
+
+                    collector = threading.Thread(
+                        target=collect_link_photos, daemon=True,
+                        name="cutdaejang-shop-photo-quick")
+                    collector.start()
+                    collector.join(25.0)
+                    collect_active.clear()
+                    if collector.is_alive():
+                        raise product_page.ShopBlockedError(
+                            "사진 수집이 25초를 넘어 설명 대본부터 준비했어요")
+                    if collected.get("error"):
+                        raise collected["error"]
+                    prod = collected["result"]
                     say(f"상품 사진 {len(prod['images'])}장 내려받는 중…")
                     dest2 = Path(workdir) / "weblink" / _hl.sha1(
                         url.encode("utf-8")).hexdigest()[:8]
-                    local, skipped = product_page.download_images(prod["images"], dest2)
+                    local, skipped = product_page.download_images(
+                        prod["images"], dest2,
+                        referer=prod.get("final_url") or url)
                     if local:
                         art["images"], dest = local, dest2
                         art["notes"] = [
@@ -1844,7 +1897,9 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                 raise
             dest = Path(workdir) / "weblink" / _hl.sha1(url.encode("utf-8")).hexdigest()[:8]
             say(f"상품 사진 {len(prod['images'])}장 내려받는 중…")
-            local, skipped = product_page.download_images(prod["images"], dest)
+            local, skipped = product_page.download_images(
+                prod["images"], dest,
+                referer=prod.get("final_url") or url)
             if local:
                 note = (f"🛒 상품 페이지에서 자동 수집했어요 ({prod['via']} 경로) — "
                         f"사진 {len(local)}장"
@@ -1937,7 +1992,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
     try:
         from ..core import edit_mode, tts_engine, video_editor  # noqa: PLC0415
         from ..core.orchestrator import build_style, resolve_bgm  # noqa: PLC0415
-        from ..core.script_generator import Script, split_long_sentences  # noqa: PLC0415
+        from ..core.script_generator import narration_units  # noqa: PLC0415
         from ..utils import ffmpeg as ff  # noqa: PLC0415
 
         settings = config.load_settings()
@@ -1948,8 +2003,20 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             return
         layout = params.get("layout") if params.get("layout") in ("wide", "shorts") else "wide"
         quality = params.get("quality") or "standard"
+        transition = str(params.get("transition") or "fade").strip() or "fade"
+        sec_xfade = 0.0 if transition == "none" else 0.45
+        # 연속 낭독 자체에 이미 자연 호흡이 있으므로 별도 무음을 길게 더하지 않는다.
+        # 기본 0.15초, 빠른 템포는 0.10/0.08초로 줄여 롱폼 흐름이 처지지 않게 한다.
+        tempo = str(params.get("tempo") or "")
+        gap_cap_us = {"빠르게": 100_000, "아주 빠르게": 80_000}.get(
+            tempo, 150_000)
+        configured_gap_us = int(settings["audio"].get("gap_ms", 220) or 220) * 1000
+        narr_gap_us = max(60_000, min(gap_cap_us, configured_gap_us))
+        narr_lead_us = 120_000
+        narr_tail_us = max(
+            120_000, narr_gap_us + int(sec_xfade * 1_000_000) - narr_lead_us)
         piece_us = {"빠르게": 2_400_000, "아주 빠르게": 1_700_000}.get(
-            str(params.get("tempo") or ""), 3_500_000)
+            tempo, 3_500_000)
         job_dir = Path(workdir) / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         style = build_style(settings)
@@ -1968,7 +2035,6 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         ep_voice = {"narr_voice": (params.get("narr_voice") or "").strip(),
                     "narr_style": (params.get("narr_style") or "").strip()}
         chain, voice = _narr_tts_pref(ep_voice, settings)
-        wrap = int(settings["subtitle"].get("wrap_chars", 16) or 16)
         # 🎬 풀영상 하나로 (v0.84) — 영상 1개에서 구간별 시간 범위를 잘라 쓴다
         full_video, full_us = "", 0
         if str(params.get("full_video") or "").strip():
@@ -1996,9 +2062,10 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 hook_txt = ""
         params = dict(params)
         params["hook"] = hook_txt          # 렌더·재사용 지문·재편집 모두 확정값 사용
-        common_fp = (f"{style!r}|{layout}|{quality}|{voice}|{list(chain)}|{piece_us}"
-                     f"|{params.get('hook') or ''}|bed1")  # bed1: v1.00 무음 구간 렌더
-        # (🪝 훅 바뀌면 재사용 안 함 v0.96 · bed1 마커로 내레이션 구운 옛 구간 재사용 차단)
+        common_fp = (
+            f"{style!r}|{layout}|{quality}|{voice}|{list(chain)}|{piece_us}"
+            f"|{params.get('hook') or ''}|bed1|bed3-final-sync|gap{narr_gap_us}|{transition}")
+        # bed3-final-sync: 자막을 합본에 한 번만 입히는 새 구조. 옛 자막 구간 재사용 차단.
 
         def _sec_fp(sec_d: dict, rng: str) -> str:
             key = json.dumps({"n": sec_d.get("narration"),
@@ -2020,10 +2087,8 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         outs, out_titles, errors, notes = [], [], [], []
         if auto_hook:
             notes.append(f"🪝 훅 제목을 AI가 지었어요: “{auto_hook}” — 다음엔 직접 넣거나 '없음'으로 끌 수 있어요")
-        # 🎙 목소리는 전체 대본을 한 번에 (v0.95) — 구간마다 따로 합성하면 경계에서
-        # 톤이 리셋돼 끊겨 들린다(사용자 리포트 "전체 대본 바탕으로 만들어야").
-        # 문장별 클립은 그대로 받아 자막 싱크를 유지하면서, 이어읽기 문맥
-        # (previous_text/next_text)이 구간 경계를 넘어 대본 전체를 관통한다.
+        # 🎙 목소리는 구간 경계를 무시하고 전체 대본 순서로 묶어 합성한다. 여러 문장을
+        # 한 호흡으로 읽은 뒤 자연 무음에서만 문장 클립으로 나눠 자막 싱크를 유지한다.
         plan = []
         for i, sec in enumerate(secs, 1):
             p = {"i": i, "sec": sec, "rng": "", "fp": "", "reuse": False,
@@ -2046,11 +2111,9 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 # v1.00: 재사용 구간도 대본은 합성 목록에 넣는다 — 내레이션은 이제
                 # 합본 위에 한 트랙으로 얹으므로(사용자 제안 구조) 모든 구간의
                 # 문장 클립이 필요하다. 같은 문장·목소리는 TTS 캐시 적중이라 빠름.
-                lines = [ln.strip() for ln in str(sec["narration"]).splitlines()
-                         if ln.strip()]
-                p["lines"] = split_long_sentences(  # 🛡 자막 2줄 안전장치 (v0.77)
-                    Script(title="", sentences=lines),
-                    limit=max(8, wrap * 2)).sentences
+                # 화면 편의 줄바꿈과 TTS 발화 경계를 분리한다. 끝나지 않은 줄은
+                # 이어 붙여 "먼저 사람이 하는 / 업무를…" 같은 문장 중간 쉼을 막는다.
+                p["lines"] = narration_units(str(sec["narration"]))
             except Exception as pe:  # noqa: BLE001 — 이 구간만 실패, 나머지는 계속
                 p["err"] = str(pe)[:200]
             plan.append(p)
@@ -2059,12 +2122,12 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         if to_synth:
             all_lines = [ln for p in to_synth for ln in p["lines"]]
             _set_job(job_id, status="running", stage="tts", frac=0.0,
-                     note=f"🎙 전체 대본 {len(all_lines)}문장 목소리를 한 번에 합성 중 — "
-                          "구간이 넘어가도 톤이 이어져요")
+                     note=f"🎙 전체 대본 {len(all_lines)}문장을 긴 호흡으로 연속 낭독 중 — "
+                          "구간이 넘어가도 톤이 이어져요 (목소리·속도 고정)")
             try:
                 clips_all, _used, tnote = tts_engine.synth_with_fallback(
                     all_lines, list(chain), Path(workdir) / "cache" / "tts",
-                    settings, voice=voice)
+                    settings, voice=voice, continuity=True)
                 if tnote and tnote not in notes:
                     notes.append(tnote)
                 pos = 0
@@ -2089,7 +2152,8 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                     subs0_r = edit_mode.dicts_to_subtitles(
                         [{"text": t, "start_us": 0, "end_us": 1_000} for t in p["lines"]])
                     subs_r, clips2_r, _ = edit_mode.retime_narration(
-                        clips_r, subs0_r, 0, job_dir, fit="freeze")
+                        clips_r, subs0_r, 0, job_dir, fit="freeze",
+                        lead_us=narr_lead_us, gap_us=narr_gap_us)
                     p["bed"] = (list(clips2_r), list(subs_r))
                     outs.append(str(dst))
                     out_titles.append((str(sec.get("title") or "").strip() or f"구간 {i}"))
@@ -2111,8 +2175,9 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 subs0 = edit_mode.dicts_to_subtitles(
                     [{"text": t, "start_us": 0, "end_us": 1_000} for t in lines])
                 subs, clips2, _ = edit_mode.retime_narration(
-                    clips, subs0, 0, job_dir, fit="freeze")  # 순차 배치 (실측 길이)
-                narr_end = (subs[-1].end_us + 700_000) if subs else 1_000_000
+                    clips, subs0, 0, job_dir, fit="freeze",
+                    lead_us=narr_lead_us, gap_us=narr_gap_us)  # 순차 배치 (실측 길이)
+                narr_end = (subs[-1].end_us + narr_tail_us) if subs else 1_000_000
                 dur = ff.probe_duration_us(video)
                 # ⏩ 구간별 배속 (v0.82) — ""=자동(몽타주) | "fit"=배속으로 길이 맞춤 | "1.5"/"2"/"3"
                 sp = str(sec.get("speed") or "").strip()
@@ -2141,10 +2206,11 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                             ranges = video_editor.shift_ranges_to_scenes(ranges, scenes, dur)
                     except Exception:  # noqa: BLE001
                         pass
-                    try:  # 🗣 말 경계 스냅 (v1.09) — 클립 속 말이 조각 경계에서 안 잘리게
-                        spch, _d = video_editor.detect_speech_segments(video)
-                        if spch and sum(e - s for s, e in spch) < dur * 0.98:
-                            ranges = video_editor.shift_ranges_to_silence(ranges, spch, dur)
+                    try:  # 🗣 말 경계 스냅 (v1.09) — 원본 발화를 중간에서 자르지 않게
+                        speech, _duration = video_editor.detect_speech_segments(video)
+                        if speech and sum(end - start for start, end in speech) < dur * 0.98:
+                            ranges = video_editor.shift_ranges_to_silence(
+                                ranges, speech, dur)
                     except Exception:  # noqa: BLE001
                         pass
                     # ✂ 몽타주 조각은 하드컷 (v0.94) — 조각마다 검은 화면을 거치는
@@ -2155,14 +2221,25 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 elif dur < narr_end:                 # 짧으면 마지막 장면 정지로 연장
                     cut = video_editor.extend_video(
                         video, narr_end, str(job_dir / f"sec_{i}_ext.mp4"))
+                # 기존에는 내레이션보다 1초 이내로 긴 클립을 그대로 두어 구간마다
+                # 0~1초의 제각각인 정적 여백이 생길 수 있었다. 몽타주/연장 결과까지
+                # 목표 길이에 맞춰 경계 호흡을 일정하게 유지한다.
+                cut_dur = ff.probe_duration_us(cut)
+                if cut_dur > narr_end + 50_000:
+                    cut = video_editor.extract_segment(
+                        cut, 0, narr_end, str(job_dir / f"sec_{i}_fit.mp4"))
+                elif cut_dur < narr_end - 50_000:
+                    cut = video_editor.extend_video(
+                        cut, narr_end, str(job_dir / f"sec_{i}_fit.mp4"))
                 _set_job(job_id, stage="render", frac=base + 0.4 / n,
-                         note=f"🎞 구간 {i}/{n} — 자막 입혀 렌더 중…")
-                # 🎙 v1.00 (사용자 제안 구조): 구간엔 내레이션을 굽지 않는다 —
-                # 영상을 전부 합친 뒤 전체 타임라인 위에 한 트랙으로 얹어,
-                # 구간 경계에서 목소리가 끊기거나 톤이 리셋될 여지를 없앤다.
+                         note=f"🎞 구간 {i}/{n} — 화면 렌더 중…")
+                # v1.10.1: 구간에는 내레이션뿐 아니라 자막도 미리 굽지 않는다.
+                # 재편집 때 TTS 길이가 달라져도 예전 자막 시간이 남지 않도록,
+                # 합본 뒤 실제 음성 시간표와 같은 시간표로 자막을 한 번만 입힌다.
+                visual_style = dataclasses.replace(style, tone="기본")
                 r = edit_mode.render_from_analysis(
-                    cut, subs, str(job_dir / f"sec_{i}.mp4"), style=style, layout=layout,
-                    hook=str(params.get("hook") or ""),   # 🪝 훅 제목 (v0.96 — 카드 공통)
+                    cut, [], str(job_dir / f"sec_{i}.mp4"),
+                    style=visual_style, layout=layout, hook="",
                     quality=quality, narration_wav=None,
                     orig_audio="mute",
                     progress_cb=lambda f, b=base: _set_job(
@@ -2187,8 +2264,6 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         _set_job(job_id, stage="render", frac=0.97, note="🎞 구간들을 이어붙이는 중…")
         cw, ch = (1080, 1920) if layout == "shorts" else (1920, 1080)
         # 🎬 구간 전환 (v0.83 크로스페이드 → v0.85 종류 선택: 디졸브/다양하게/밀기/컷…)
-        transition = str(params.get("transition") or "fade").strip() or "fade"
-        sec_xfade = 0.0 if transition == "none" else 0.45
         durs = [ff.probe_duration_us(p) / 1e6 for p in outs]
         fade = video_editor.xfade_clamp(sec_xfade, durs)
         final = outs[0]
@@ -2196,10 +2271,9 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             final = video_editor.concat_videos(
                 outs, str(job_dir / "sections_final.mp4"), size=(cw, ch),
                 crossfade_s=fade, transition=transition)
-        # 🎙 v1.00 (사용자 제안 구조): "영상을 다 합치고 → 그다음에 내레이션".
-        # 구간 파일은 전부 무음(화면·자막만)이라 경계에서 말이 잘리거나 톤이
-        # 리셋될 소리 자체가 없고, 목소리는 합본 전체 타임라인 위에 '한 트랙'
-        # 으로 한 번만 얹는다. 구간 k의 절대 시작 시각 = Σ(앞 구간 길이 − 전환 겹침).
+        # v1.10.1: "영상을 다 합치고 → 그다음에 내레이션+자막".
+        # 구간 파일은 화면만 담고, 실제 TTS 클립 배치표(abs_subs)를 음성과 자막이
+        # 함께 사용한다. 부분 재편집·TTS 폴백으로 길이가 바뀌어도 둘이 어긋나지 않는다.
         all_clips, abs_subs, off = [], [], 0.0
         for k, p in enumerate([q for q in plan if "bed" in q]):
             clips_b, subs_b = p["bed"]
@@ -2210,24 +2284,27 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             all_clips += list(clips_b)
             off += durs[k] - (fade if k < len(outs) - 1 else 0.0)
         if all_clips:
-            _set_job(job_id, frac=0.975, note="🎙 합본 위에 내레이션을 한 트랙으로 얹는 중…")
+            _set_job(job_id, frac=0.975,
+                     note="🎙 합본 위에 내레이션과 자막을 같은 시간표로 입히는 중…")
             try:
                 total_us = ff.probe_duration_us(final)
                 bed_wav = edit_mode.build_narration_wav(
                     all_clips, abs_subs, total_us, job_dir / "narration_bed.wav")
-                voiced = str(job_dir / "sections_voiced.mp4")
-                ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
-                        "-i", str(final), "-i", str(bed_wav),
-                        "-filter_complex",
-                        "[1:a]aresample=44100,aformat=channel_layouts=stereo[nb];"
-                        "[0:a][nb]amix=inputs=2:duration=first:normalize=0[a]",
-                        "-map", "0:v", "-map", "[a]", "-c:v", "copy",
-                        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
-                        voiced])
-                final = voiced
-            except Exception as be:  # noqa: BLE001 — 실패해도 무음 합본은 살린다
-                logging.getLogger("cutdaejang").error("내레이션 얹기 실패: %s", be)
-                errors.append(f"내레이션 얹기 실패: {str(be)[:200]}")
+                synced = str(job_dir / "sections_synced.mp4")
+                synced_result = edit_mode.render_from_analysis(
+                    final, abs_subs, synced, style=style, layout="keep",
+                    hook=str(params.get("hook") or ""), quality=quality,
+                    narration_wav=str(bed_wav), orig_audio="mute",
+                    progress_cb=lambda f: _set_job(
+                        job_id, frac=min(0.989, 0.975 + f * 0.014)))
+                if not synced_result.ok:
+                    raise RuntimeError(
+                        "; ".join(synced_result.errors)
+                        or "최종 내레이션·자막 동기화 렌더 실패")
+                final = synced
+            except Exception as be:  # noqa: BLE001 — 실패해도 화면 합본은 살린다
+                logging.getLogger("cutdaejang").error("내레이션·자막 동기화 실패: %s", be)
+                errors.append(f"내레이션·자막 동기화 실패: {str(be)[:200]}")
         if (params.get("bgm") or "").strip():        # 🎵 BGM은 최종 합본에 1회 (덕킹)
             b = resolve_bgm(params["bgm"], settings)
             if b and b.path:
@@ -2263,6 +2340,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         # v1.00: 구간별 파일(sec_N.mp4)은 무음 중간산출물이라 다운로드 목록에서 제외
         _set_job(job_id, status=("ok" if not errors else "partial"), stage="done",
                  frac=1.0, mp4=final, mp4s=[final],
+                 mode="sections",
                  chapters=("\n".join(chap_lines) if len(chap_lines) > 1 else ""),
                  note="", tts_warn=" · ".join([msg] + notes + errors))
     except Exception as e:
@@ -2823,6 +2901,10 @@ class _Handler(BaseHTTPRequestHandler):
                 speed = float(params.get("speed") or 1.0)
             except (TypeError, ValueError):
                 speed = 1.0
+            speed_mode = (
+                params.get("speed_mode") if params.get("speed_mode") in ("all", "voice", "video")
+                else "all"
+            )
             quality = params.get("quality") or "standard"
             # 잡음 제거는 편집 폼에서 정한 값(edit_params)을 따름
             denoise = ep.get("denoise") or False
@@ -2834,7 +2916,7 @@ class _Handler(BaseHTTPRequestHandler):
             _queue_job(job["id"], _do_edit_render,
                        job["id"], params.get("subtitles") or [], hook,
                        ep.get("layout", "shorts"), job.get("cut_video"), workdir,
-                       keep, speed, quality, denoise, trim)  # 📋 작업 큐 (v0.88)
+                       keep, speed, speed_mode, quality, denoise, trim)  # 📋 작업 큐 (v0.88)
             self._send_json({"ok": True})
         elif path == "/api/refine_subtitles":
             _apply_keys(params)
@@ -2885,6 +2967,10 @@ class _Handler(BaseHTTPRequestHandler):
                 speed = float(params.get("speed") or 1.0)
             except (TypeError, ValueError):
                 target, speed = 30.0, 1.0
+            speed_mode = (
+                params.get("speed_mode") if params.get("speed_mode") in ("all", "voice", "video")
+                else "all"
+            )
             try:
                 trim = (int(params.get("trim_start_us") or 0),
                         int(params.get("trim_end_us") or 0))
@@ -2894,7 +2980,7 @@ class _Handler(BaseHTTPRequestHandler):
                        job["id"], params.get("subtitles") or [],
                        params.get("hook", ep.get("hook", "")),
                        ep.get("layout", "shorts"), job.get("cut_video"), workdir,
-                       target, speed, params.get("quality") or "standard",
+                       target, speed, speed_mode, params.get("quality") or "standard",
                        ep.get("denoise") or False, trim)  # 📋 작업 큐 (v0.88)
             self._send_json({"ok": True})
         elif path == "/api/suggest_thumbnail":
@@ -3298,7 +3384,7 @@ class _Handler(BaseHTTPRequestHandler):
             title = (str(secs[0].get("title") or "").strip() or "구간대본영상")[:24]
             job_id = orchestrator.new_job_id(title)
             _set_job(job_id, status="running", stage="tts", frac=0.0,
-                     title=f"🎞 {title}", params=params)
+                     title=f"🎞 {title}", mode="sections", params=params)
             _queue_job(job_id, _run_sections, job_id, params, workdir)  # 📋 작업 큐 (v0.88)
             self._send_json({"job_id": job_id})
         elif path == "/api/quick_set":   # 🎛 카드 꾸미기 ↔ ⚙설정 연동 저장 (v1.08)
@@ -3480,7 +3566,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             token = _hl.sha1(("shopimgs:" + uniq[0]).encode("utf-8")).hexdigest()[:8]
             dest = Path(workdir) / "weblink" / token
-            imgs, skipped = product_page.download_images(uniq, dest)  # v0.92 공용화
+            imgs, skipped = product_page.download_images(
+                uniq, dest, referer=str(params.get("referer") or ""))  # v0.92 공용화
             previews = [f"/weblink/{token}/{Path(p).name}" for p in imgs]
             self._send_json({"ok": True, "images": imgs, "previews": previews,
                              "skipped": skipped})
@@ -4252,7 +4339,9 @@ def serve(workdir: str = "jobs", port: int = 7860, open_browser: bool = True) ->
         print(f"[!] {port}~{port + 9} 포트를 모두 사용 중입니다. 켜져 있는 컷대장 창을 닫아주세요.")
         return 1
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
-    print(f"컷대장 UI: {url}   (끝내려면 Ctrl+C — 이 창을 닫으면 UI도 꺼집니다)")
+    # 한국어 Windows의 기본 CP949 콘솔에서도 UI 시작 안내가 깨지지 않게
+    # CP949에 없는 특수 대시 문자는 사용하지 않는다.
+    print(f"컷대장 UI: {url}   (끝내려면 Ctrl+C - 이 창을 닫으면 UI도 꺼집니다)")
     if open_browser:
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
     try:
@@ -4347,6 +4436,14 @@ _HTML = """<!doctype html>
   .modecard .mc-emoji { font-size:34px; display:block; }
   .modecard .mc-title { font-size:16px; font-weight:800; display:block; margin-top:8px; color:#fff; }
   .modecard .mc-desc { font-size:12px; color:#8b93a7; display:block; margin-top:6px; line-height:1.5; }
+  .mode-group-title { display:flex;align-items:center;gap:8px;margin-top:14px;font-size:14px;font-weight:800;color:#e8eaf0; }
+  .mode-group-title .pill { font-size:11px;color:#a9d7ff;background:#18304a;border:1px solid #2f5f8d;border-radius:12px;padding:2px 7px; }
+  details.home-more { margin-top:14px;border:1px solid #2c3347;border-radius:12px;padding:0 12px;background:#151821; }
+  details.home-more > summary { cursor:pointer;padding:12px 0;font-weight:700;color:#cdd3e0; }
+  details.home-more > summary::-webkit-details-marker { display:none; }
+  details.home-more > summary::before { content:'＋ ';color:#7da8ff; }
+  details.home-more[open] > summary::before { content:'－ '; }
+  details.home-more .home-cards { margin:0 0 12px; }
   .backrow { display:flex; align-items:center; gap:10px; }
   .backrow b { font-size:16px; }
   .backrow button { margin:0; }
@@ -4395,7 +4492,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.10.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.11.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -4413,33 +4510,39 @@ _HTML = """<!doctype html>
 
   <div class="card" id="homeCard">
     <div style="font-size:17px;font-weight:800">무엇을 만들까요?</div>
-    <div class="hint" style="margin-top:4px">카드를 누르면 시작돼요. 꼭 필요한 것만 물어보고, 나머지는 컷대장이 알아서 합니다.</div>
+    <div class="hint" style="margin-top:4px">자주 쓰는 3가지만 먼저 보입니다. 나머지 기능도 아래 「더 많은 만들기 도구」에 그대로 있어요.</div>
+    <div class="mode-group-title">빠르게 시작 <span class="pill">추천</span></div>
     <div class="home-cards">
-      <button class="modecard" onclick="openMode('gen')">
-        <span class="mc-emoji">🤖</span><span class="mc-title">AI 영상 만들기</span>
-        <span class="mc-desc">주제 한 줄만 쓰면<br>대본·목소리·자막·배경까지 자동</span>
+      <button class="modecard" onclick="openMode('shop')">
+        <span class="mc-emoji">🛒</span><span class="mc-title">쇼핑 상품 영상</span>
+        <span class="mc-desc">상품 링크 하나로 사진·대본 수집<br>홍보 영상까지 자동</span>
       </button>
       <button class="modecard" onclick="openMode('edit')">
         <span class="mc-emoji">✂️</span><span class="mc-title">내 영상 편집</span>
         <span class="mc-desc">내 영상을 넣으면 무음 컷·자막을<br>자동으로, 쇼츠로도 줄여줘요</span>
       </button>
-      <button class="modecard" onclick="openMode('photo')">
-        <span class="mc-emoji">📸</span><span class="mc-title">사진으로 영상</span>
-        <span class="mc-desc">사진 몇 장이면<br>내레이션 넣은 영상 완성</span>
-      </button>
-      <button class="modecard" onclick="openMode('weblink')">
-        <span class="mc-emoji">🔗</span><span class="mc-title">블로그 글로 만들기</span>
-        <span class="mc-desc">내 블로그 글 주소만 넣으면<br>사진+내레이션 홍보 영상</span>
-      </button>
       <button class="modecard" onclick="openMode('sections')">
-        <span class="mc-emoji">🎞</span><span class="mc-title">구간 대본 영상</span>
-        <span class="mc-desc">대본 구간마다 클립을 넣으면<br>압축·내레이션·이어붙이기 자동</span>
-      </button>
-      <button class="modecard" onclick="openMode('shop')">
-        <span class="mc-emoji">🛒</span><span class="mc-title">쇼핑 상품 영상</span>
-        <span class="mc-desc">쿠팡 파트너스 · 네이버 쇼핑커넥트<br>상품 검색 → 홍보 영상 자동</span>
+        <span class="mc-emoji">🖥</span><span class="mc-title">긴 영상 (가로 16:9)</span>
+        <span class="mc-desc">8분 30초 같은 풀영상을 넣고<br>구간별 화면과 한 흐름 내레이션으로</span>
       </button>
     </div>
+    <details class="home-more" id="homeMoreModes">
+      <summary>더 많은 만들기 도구 3개 <span class="hint">— AI · 사진 · 블로그</span></summary>
+      <div class="home-cards">
+        <button class="modecard" onclick="openMode('gen')">
+          <span class="mc-emoji">🤖</span><span class="mc-title">AI 영상 만들기</span>
+          <span class="mc-desc">주제 한 줄만 쓰면<br>대본·목소리·자막·배경까지 자동</span>
+        </button>
+        <button class="modecard" onclick="openMode('photo')">
+          <span class="mc-emoji">📸</span><span class="mc-title">사진으로 영상</span>
+          <span class="mc-desc">사진 몇 장이면<br>내레이션 넣은 영상 완성</span>
+        </button>
+        <button class="modecard" onclick="openMode('weblink')">
+          <span class="mc-emoji">🔗</span><span class="mc-title">블로그 글로 만들기</span>
+          <span class="mc-desc">내 블로그 글 주소만 넣으면<br>사진+내레이션 홍보 영상</span>
+        </button>
+      </div>
+    </details>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
       <button class="ghost" onclick="openVoice(event)">🎤 내 목소리 등록</button>
       <span class="hint">녹음 파일 하나로 <b>나만의 AI 목소리</b>를 만들어 내레이션에 쓸 수 있어요</span>
@@ -4507,15 +4610,9 @@ _HTML = """<!doctype html>
         <span>만들기</span>
         <select id="autoMultiSel" style="width:auto;padding:6px 8px" onchange="onAutoMultiChange()">
           <option value="one" selected>쇼츠 1개 — 핵심 장면만 뽑아서</option>
-          <option value="long">긴 영상 1개 — 원본 비율 그대로 (유튜브 일반)</option>
           <option value="multi">여러 개로 나누기 — 영상 전체를 쇼츠 여러 개로</option>
         </select>
         <span class="hint" id="autoMultiHint"></span>
-      </div>
-      <div class="hint hidden" id="autoLongTip" style="margin:2px 0 4px;padding:6px 8px;border-radius:8px;background:#1b2436">
-        🖥 <b>긴 영상 모드</b> — 가로 영상이 세로로 잘리지 않게 <b>출력 형태</b>를 [원본 비율 유지]로 맞췄어요
-        (아래 「⚙️ 세부 설정」에서 확인·변경). 길이를 정하면 그 길이로 <b>핵심만 골라 압축</b>하고,
-        [원본 길이 그대로]면 자르지 않고 자막·제목·소리만 손봐요.
       </div>
       <div class="chk" style="gap:8px">
         <span id="autoLenLabel">완성 길이</span>
@@ -4525,13 +4622,19 @@ _HTML = """<!doctype html>
           <option value="0">원본 길이 그대로</option>
           <option value="custom">직접 입력…</option>
         </select>
-        <input type="number" id="autoTargetSec" value="30" min="0" max="1800" style="width:64px;padding:6px" class="hidden">
+        <input type="number" id="autoTargetSec" value="30" min="0" max="1800" style="width:74px;padding:6px" class="hidden">
         <span class="hint">· 재생 속도</span>
         <select id="editSpeedSel" style="width:auto;padding:6px 8px">
           <option value="1">1배</option>
           <option value="1.25">1.25배</option>
           <option value="1.5">1.5배</option>
           <option value="2">2배</option>
+        </select>
+        <select id="editSpeedModeSel" style="width:auto;padding:6px 8px"
+                title="전체는 기존 배속, 말소리만은 화면 길이 유지, 화면만은 소리를 자르지 않고 끝 장면을 유지합니다">
+          <option value="all">화면+말소리 같이</option>
+          <option value="voice">말소리만 빠르게</option>
+          <option value="video">영상 화면만 빠르게</option>
         </select>
         <span class="hint">· ⚡ 빠른 템포</span>
         <select id="editTempoSel" style="width:auto;padding:6px 8px"
@@ -5043,11 +5146,11 @@ _HTML = """<!doctype html>
         <option value="custom">직접 입력…</option>
       </select>
       <span id="genLenCustomBox" class="hidden" style="margin-left:4px">
-        <input type="number" id="genLenCustomMin" min="1" max="15" step="0.5" value="7"
+        <input type="number" id="genLenCustomMin" min="1" max="30" step="0.5" value="7"
                style="width:64px;padding:6px 8px"> 분
       </span>
       <span class="hint">길이는 AI 대본 분량 기준(말 속도에 따라 조금 달라져요) — 대본을 직접 넣으면 그 분량대로</span>
-      <div class="hint" style="margin-top:4px">💡 기본을 5분까지만 둔 이유: 더 길면 AI 대본이 반복·빈약해지고, 문장마다 목소리(TTS)를 만들어 시간·비용이 커져요. 더 필요하면 [직접 입력]으로 최대 15분까지 — 이땐 대본을 직접 넣는 걸 권장해요.</div>
+      <div class="hint" style="margin-top:4px">💡 기본을 5분까지만 둔 이유: 더 길면 AI 대본이 반복·빈약해지고, 문장마다 목소리(TTS)를 만들어 시간·비용이 커져요. 더 필요하면 [직접 입력]으로 최대 30분(1800초)까지 — 이땐 대본을 직접 넣는 걸 권장해요.</div>
     </div>
     <details class="opt" style="margin-top:8px">
       <summary>📝 대본 직접 넣기 <span class="hint">— 써둔 대본이 있으면 AI 대본 대신 그대로 (한 줄 = 자막 하나)</span></summary>
@@ -5419,7 +5522,7 @@ _HTML = """<!doctype html>
   <div class="card hidden" id="sectionCard">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
       <button class="ghost" onclick="showHome(event)">← 처음으로</button>
-      <b>🎞 구간 대본 영상</b>
+      <b>🖥 긴 영상 (가로 16:9) · 구간 대본</b>
     </div>
     <div class="hint">촬영 대본의 구간(장면)마다 화면녹화 클립을 넣으면: 클립을 <b>내레이션 길이에 맞게
       핵심 장면만 남기고 압축</b>하고, 내레이션을 AI 목소리로 읽고, 자막을 넣어 <b>순서대로 이어붙인</b>
@@ -5460,6 +5563,10 @@ _HTML = """<!doctype html>
       </div>
       <span style="margin-left:6px">목소리</span>
       <select id="secVoiceSel" style="width:auto;min-width:180px"></select>
+    </div>
+    <details class="opt" id="secAdvancedBox">
+      <summary>세부 설정 <span class="hint">— 압축 템포 · 배경음악 · 구간 전환 · 화질 (안 바꾸면 추천값)</span></summary>
+      <div class="chk" style="gap:10px;flex-wrap:wrap">
       <span style="margin-left:6px" title="구간 클립이 내레이션보다 길면 핵심 장면만 골라 압축해요 — 그때 한 장면(조각)을 몇 초씩 보여줄지예요. 짧을수록 컷이 잦은 빠른 편집 느낌">압축 템포 ⓘ</span>
       <select id="secTempoSel" style="width:auto;padding:6px 8px" title="영상이 대본보다 길 때만 작동 — 핵심 장면 조각 하나의 길이">
         <option value="">보통 — 한 장면 3.5초</option>
@@ -5487,7 +5594,8 @@ _HTML = """<!doctype html>
         <option value="high">고화질</option>
         <option value="ultra">초고화질 (4K)</option>
       </select>
-    </div>
+      </div>
+    </details>
     <div class="chk" style="gap:8px">
       <span>훅 제목</span>
       <input type="text" id="secHook" style="flex:1" placeholder="비우면 AI가 대본을 보고 자동으로 지어요 · 훅을 빼려면 '없음' 입력">
@@ -5526,10 +5634,17 @@ _HTML = """<!doctype html>
       <button class="ghost" onclick="showHome()">← 처음으로</button>
       <h2 style="margin:0">🛒 쇼핑 상품 영상 <span class="hint">— 쿠팡 파트너스 · 네이버 쇼핑커넥트</span></h2>
     </div>
-    <div class="hint">상품을 검색해 고르면 이름·가격·대표 사진이 자동으로 채워지고,
-      AI가 홍보 대본을 써서 <b>사진+내레이션 영상</b>으로 완성해요. 수익 링크는 영상 설명란에 붙여넣으면 됩니다.</div>
-    <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>상품 고르기 <span class="hint">— 두 방법 중 편한 쪽 (검색 또는 직접 붙여넣기)</span></div>
-    <details class="opt" open>
+    <div class="hint">가장 쉬운 방법은 상품 링크 하나를 붙여넣는 것입니다. 사진 수집 결과를 확인한 뒤
+      AI가 홍보 대본과 <b>사진+내레이션 영상</b>을 만듭니다.</div>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>상품 링크 붙여넣기 <span class="hint">— 추천 · 쿠팡·네이버·11번가·지마켓 등</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+      <input type="text" id="shopLinkInput" style="flex:1;min-width:240px" placeholder="상품 주소 또는 내 수익 링크를 여기에 붙여넣으세요">
+      <button class="ghost" style="border-color:#4266d5;white-space:nowrap" onclick="makeShopScript(event)" title="링크에서 사진·설명을 자동 수집하고 대본까지 만들어요">🔗 사진·대본 자동 수집</button>
+    </div>
+    <div class="hint" style="margin-top:4px">수집이 막히면 상품 페이지의 사진·설명 부분을 복사해 아래 결과 칸에 붙여넣으면 됩니다.</div>
+    <details class="home-more" id="shopSearchTools">
+      <summary>다른 방법: 상품 검색으로 고르기 <span class="hint">— 파트너스·쇼핑커넥트 API를 쓰는 분만</span></summary>
+    <details class="opt">
       <summary>🛒 쿠팡 파트너스 <span class="hint" id="cpKeyState">— API 키를 저장하면 상품 검색·파트너스 링크 자동</span>
         <a href="https://partners.coupang.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 파트너스 열기</a></summary>
       <details class="opt" id="cpKeyBox" style="margin-top:4px">
@@ -5566,7 +5681,8 @@ _HTML = """<!doctype html>
       <div id="nvResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px"></div>
       <div class="hint" style="margin-top:4px">쇼핑커넥트 수익 링크는 커넥트 대시보드에서 만들어 아래 「내 수익 링크」에 붙여넣어 주세요 (API로는 발급이 안 돼요)</div>
     </details>
-    <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>상품 정보 확인 <span class="hint">— 자동으로 채워져요. 상세설명을 덧붙이면 대본이 풍부해져요</span></div>
+    </details>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>수집 결과 확인 <span class="hint">— 사진은 아래 번호 순서대로 영상에 모두 반영됩니다</span></div>
     <textarea id="shopPasteText" style="min-height:100px" placeholder="상품 이름·특징·후기 등 — 위에서 상품을 고르면 자동으로 채워지고, 상품 페이지의 상세설명을 복사해 덧붙일 수 있어요"></textarea>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
       <button class="ghost" onclick="pickShopPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
@@ -5575,11 +5691,7 @@ _HTML = """<!doctype html>
     </div>
     <div id="shopPhotoPrev" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
     <div class="hint" style="margin-top:4px">📋 <b>사진 한꺼번에 넣기</b> — 상품 페이지에서 사진 있는 부분을 마우스로 드래그해 복사(Ctrl+C)한 뒤 이 화면에 붙여넣기(Ctrl+V)하면 사진 여러 장이 자동으로 들어와요. 스크린샷(Win+Shift+S)을 바로 붙여넣어도 됩니다</div>
-    <div class="chk" style="gap:8px;margin-top:6px">
-      <span style="white-space:nowrap">🔗 내 수익 링크</span>
-      <input type="text" id="shopLinkInput" style="flex:1" placeholder="상품 링크를 붙여넣고 아래 [🤖 대본 만들기]를 누르면 사진·설명 자동 수집 (파트너스·쇼핑커넥트 링크도 이 칸)">
-    </div>
-    <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)" title="상세설명이 비어 있어도 링크가 있으면 상품 페이지에서 사진·설명을 자동으로 수집해요 (안 되면 페이지 복사→붙여넣기 안내)">🤖 이 상품으로 대본 만들기</button>
+    <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)" title="수집된 설명을 수정한 뒤 대본만 다시 만들 때 사용하세요">🤖 수정한 정보로 대본 다시 만들기</button>
     <div class="chk" style="gap:8px;margin-top:8px">
       <span style="white-space:nowrap">🪝 훅 제목</span>
       <input type="text" id="shopHook" style="flex:1" placeholder="영상 상단에 크게 붙는 후킹 문구 — 비우면 대본 만들 때 AI가 자동으로 지어요">
@@ -5744,13 +5856,19 @@ _HTML = """<!doctype html>
         <button class="ghost" onclick="applyBulk(event)">이 대본으로 자막 텍스트 교체</button>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px">
-        <span class="hint">⏩ 저장 속도 <span style="color:#8b93a7">(완성 영상에 적용 · 자막도 같이 빨라짐)</span></span>
+        <span class="hint">⏩ 저장 속도</span>
         <select id="outSpeed" style="width:auto;padding:6px 8px">
           <option value="1">1배 (원본)</option>
           <option value="1.25">1.25배</option>
           <option value="1.5">1.5배</option>
           <option value="2">2배</option>
         </select>
+        <select id="outSpeedMode" style="width:auto;padding:6px 8px">
+          <option value="all">화면+말소리 같이 (기존 방식)</option>
+          <option value="voice">말소리만 빠르게 · 자막도 맞춤</option>
+          <option value="video">영상 화면만 빠르게 · 소리는 유지</option>
+        </select>
+        <span class="hint">화면만 배속하면 빨라진 화면 뒤에는 마지막 장면을 유지해 목소리를 자르지 않아요.</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
         <span class="hint">🎞️ 화질</span>
@@ -5781,7 +5899,7 @@ _HTML = """<!doctype html>
       </div>
       <button class="ghost" style="margin-top:10px" onclick="openFolder(event)">📂 폴더 열기</button>
       <button class="ghost" style="margin-top:10px" onclick="sendDoneToEdit(event,'shorts')" title="완성된 이 영상을 편집 카드로 보내 세로 쇼츠(9:16)로 다시 만들어요 — 핵심만 남겨 60초 쇼츠 여러 개로 나누는 완전 자동을 추천으로 맞춰둬요">📱 쇼츠로 만들기</button>
-      <button class="ghost" style="margin-top:10px" onclick="sendDoneToEdit(event,'keep')" title="완성된 이 영상을 편집 카드로 보내 자르고 다듬어요 — 자막·훅·BGM·배속을 다시 설정할 수 있어요">✂ 이 영상 편집</button>
+      <button id="doneEditBtn" class="ghost" style="margin-top:10px" onclick="editDoneVideo(event)" title="일반 영상은 편집 카드로 보내고, 구간 영상은 기존 구간·대본을 그대로 열어 오류 난 부분만 고쳐요">✂ 이 영상 편집</button>
       <button class="ghost" style="margin-top:10px" onclick="shrinkVideo(event)" title="용량이 커서 업로드가 안 될 때 — 화질 거의 그대로 파일 크기를 크게 줄인 업로드용 mp4를 하나 더 만들어요 (원본은 그대로)">📦 용량 줄이기 (업로드용)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'mix')" title="완성 영상의 소리(목소리+BGM+효과음)를 mp3로 저장">🔊 소리 저장(mp3)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'voice')" title="BGM·원본 소리 없이 내레이션 목소리만 mp3로 저장 — 다른 편집기·팟캐스트에 재사용">🎙 목소리만(mp3)</button>
@@ -5998,7 +6116,33 @@ _HTML = """<!doctype html>
           <button class="ghost ezchip" data-v="-22">작게</button><button class="ghost ezchip" data-v="-16">보통</button><button class="ghost ezchip" data-v="-9">크게</button>
         </span>
       </div>
-      <div class="chk" style="margin-top:6px"><input type="checkbox" id="setTextCards"><span>🅰 텍스트 카드 장면 <span class="hint">— 숫자·짧은 문장을 큰 글씨 연출로 (대본 줄 앞 [카드] = 수동 지정)</span></span></div>
+      <div class="chk" style="margin-top:6px"><input type="checkbox" id="setTextCards"><span>🅰 다양한 텍스트 장면 <span class="hint">— 숫자·비교·후기·검색·목록·단계·CTA를 대본에 맞게 자동 선택</span></span></div>
+      <div class="chk" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+        <span>영상 성격</span>
+        <select id="setCardPack" style="width:auto;padding:6px 8px">
+          <option value="auto">알아서 (추천)</option>
+          <option value="info">정보·교육</option>
+          <option value="shopping">쇼핑·제품</option>
+          <option value="review">후기·리뷰</option>
+          <option value="promo">홍보·이벤트</option>
+        </select>
+        <span>장면 다양성</span>
+        <select id="setCardDensity" style="width:auto;padding:6px 8px">
+          <option value="low">적게</option>
+          <option value="auto">자동 (추천)</option>
+          <option value="rich">풍부하게</option>
+        </select>
+        <span>글씨 조합</span>
+        <select id="setFontPack" style="width:auto;padding:6px 8px">
+          <option value="auto">기본·깔끔</option>
+          <option value="info">정보형</option>
+          <option value="impact">강한 임팩트</option>
+          <option value="friendly">친근·생활</option>
+          <option value="retro">레트로·예능</option>
+          <option value="ugc">후기·UGC</option>
+        </select>
+      </div>
+      <div class="hint" style="margin-top:5px">직접 지정: 대본 줄 앞에 [카드:후기], [카드:비교], [카드:검색], [카드:CTA]처럼 붙이면 그 장면으로 나옵니다.</div>
     </div>
 
     <details class="opt" style="margin-top:10px">
@@ -6520,7 +6664,6 @@ function applyTargetPreset(){
 function ensureShortsLayout(){
   // 📐 쇼츠 모드(길이 목표 있음)인데 '원본 비율 유지'가 기억돼 있으면 세로로 자동 전환 (v0.76.1)
   // — "쇼츠로 나눴는데 가로로 나와요" 방지. 사용자가 다시 원본 비율을 고르면 그대로 둔다.
-  if((($('autoMultiSel')||{}).value) === 'long') return;  // 🖥 긴 영상 모드는 쇼츠 강제 없음 (v1.10)
   if((($('autoTargetPreset')||{}).value) === '0') return;
   const keep = document.querySelector('input[name=editLayout][value=keep]');
   const sh = document.querySelector('input[name=editLayout][value=shorts]');
@@ -6530,56 +6673,22 @@ function ensureShortsLayout(){
     if(h){ h.textContent = '📐 쇼츠 모드라 세로(9:16)로 자동 선택했어요 — 원본 비율을 원하면 위에서 다시 고르세요'; h.classList.remove('hidden'); }
   }
 }
-// 🖥 만들기 방식에 맞춰 완성 길이 후보를 갈아끼움 (v1.10) — 긴 영상은 분 단위
-function rebuildTargetPreset(long){
-  const p = $('autoTargetPreset');
-  if(!p) return;
-  const want = long ? 'long' : 'short';
-  if(p.getAttribute('data-kind') === want) return;
-  const cur = p.value;
-  const opts = long
-    ? [['0','원본 길이 그대로 (자르지 않음)'], ['900','15분으로 압축'], ['600','10분으로 압축'],
-       ['300','5분으로 압축'], ['180','3분으로 압축'], ['custom','직접 입력…(초)']]
-    : [['30','쇼츠 30초 — 핵심만 자동 선별'], ['60','쇼츠 60초'], ['0','원본 길이 그대로'],
-       ['custom','직접 입력…']];
-  p.innerHTML = '';
-  opts.forEach(function(o){ p.add(new Option(o[1], o[0])); });
-  p.setAttribute('data-kind', want);
-  p.value = opts.some(function(o){ return o[0] === cur; }) ? cur : (long ? '0' : '30');
-}
-function ensureLongLayout(){
-  // 🖥 긴 영상 모드인데 세로(9:16)가 기억돼 있으면 원본 비율로 되돌림 (v1.10)
-  // — 가로 영상이 세로로 잘려 나가는 사고 방지.
-  const sh = document.querySelector('input[name=editLayout][value=shorts]');
-  const kp = document.querySelector('input[name=editLayout][value=keep]');
-  const h = $('layoutAutoHint');
-  if(sh && sh.checked && kp){
-    kp.checked = true;
-    if(h){ h.textContent = '🖥 긴 영상 모드라 [원본 비율 유지]로 바꿨어요 — 세로 쇼츠가 필요하면 여기서 다시 고르세요';
-           h.classList.remove('hidden'); }
-  }
-}
 function onAutoMultiChange(){
-  const mode = (($('autoMultiSel')||{}).value) || 'one';
-  const multi = mode === 'multi', long = mode === 'long';
+  const multi = $('autoMultiSel').value === 'multi';
   $('autoLenLabel').textContent = multi ? '쇼츠 1개당 길이' : '완성 길이';
   $('autoMultiHint').textContent = multi
-    ? '예) 10분 영상 ÷ 60초 = 약 10개 (edited_1.mp4, edited_2.mp4 …)'
-    : (long ? '가로(16:9) 8분·10분짜리도 그대로 — 유튜브 일반 영상용 (원본 비율 유지)' : '');
-  rebuildTargetPreset(long);
+    ? '예) 10분 영상 ÷ 60초 = 약 10개 (edited_1.mp4, edited_2.mp4 …)' : '';
   const p = $('autoTargetPreset');
-  if(multi && p.value === '0') p.value = '60';   // 나누기엔 길이 필수
-  applyTargetPreset();
-  if(long) ensureLongLayout();
-  const st = $('autoLongTip');
-  if(st) st.classList.toggle('hidden', !long);
+  if(multi && p.value === '0'){ p.value = '60'; applyTargetPreset(); }  // 나누기엔 길이 필수
+  ensureShortsLayout();
 }
 // 지난번 편집 세팅 복원 (v0.38) — 경로·주제·대본만 빼고 전부 이어받아 "영상만 바꿔 반복"
 function applyEditLast(el){
   if(!el || !Object.keys(el).length) return;
   const set = (id, v) => { const e = $(id); if(e && v !== undefined && v !== null) e.value = String(v); };
   const chk = (id, v) => { const e = $(id); if(e && v !== undefined && v !== null) e.checked = !!v; };
-  set('editSpeedSel', el.speed); set('editTempoSel', el.tempo||''); set('autoQualitySel', el.quality);
+  set('editSpeedSel', el.speed); set('editSpeedModeSel', el.speed_mode||'all');
+  set('editTempoSel', el.tempo||''); set('autoQualitySel', el.quality);
   set('denoiseSel', el.denoise); set('origAudioSel', el.orig_audio);
   if(el.orig_audio && el.orig_audio !== 'keep') window._origTouched = true;  // 복원값 보호
   set('bgmEditSel', el.bgm); set('bgmVolSel', el.bgm_db);
@@ -6596,19 +6705,16 @@ function applyEditLast(el){
   chk('editFillerCut', el.filler_cut); chk('editTakeClean', el.take_clean);  // 🧹 말 다듬기 (v0.76)
   set('whisperModelSel', el.whisper_model);
   window._wantStt = el.stt_provider || '';   // STT 목록은 늦게 채워짐 → loadStt에서 적용
-  const fin = document.querySelector('input[name=editFinish][value="' + (el.auto_edit ? 'auto' : 'review') + '"]');
-  if(fin) fin.checked = true;
-  if($('autoMultiSel')) $('autoMultiSel').value = el.auto_mode || (el.auto_multi ? 'multi' : 'one');
-  onAutoMultiChange();   // 🖥 길이 후보를 모드(쇼츠/긴 영상)에 맞게 먼저 갈아끼움 (v1.10)
-  const t = String(el.auto_target_sec !== undefined && el.auto_target_sec !== null ? el.auto_target_sec : 30);
-  const tp = $('autoTargetPreset');
-  tp.value = [].some.call(tp.options, function(o){ return o.value === t; }) ? t : 'custom';
-  applyTargetPreset();
-  if(tp.value === 'custom') $('autoTargetSec').value = t;
-  onFinishChange(); onAutoMultiChange(); toggleAutoSub();
-  // 📐 화면 비율은 맨 마지막에 — 지난번에 고른 비율이 자동 보정보다 우선 (v1.10)
   const lay = document.querySelector('input[name=editLayout][value="' + (el.layout || 'shorts') + '"]');
   if(lay) lay.checked = true;
+  const fin = document.querySelector('input[name=editFinish][value="' + (el.auto_edit ? 'auto' : 'review') + '"]');
+  if(fin) fin.checked = true;
+  if($('autoMultiSel')) $('autoMultiSel').value = el.auto_multi ? 'multi' : 'one';
+  const t = String(el.auto_target_sec !== undefined && el.auto_target_sec !== null ? el.auto_target_sec : 30);
+  $('autoTargetPreset').value = ['30','60','0'].includes(t) ? t : 'custom';
+  applyTargetPreset();
+  if($('autoTargetPreset').value === 'custom') $('autoTargetSec').value = t;
+  onFinishChange(); onAutoMultiChange(); toggleAutoSub();
 }
 
 const STT_KO = {whisper:'내장 Whisper (무료·오프라인)', gemini:'Gemini (내 키)', openai:'OpenAI (내 키)'};
@@ -6774,6 +6880,7 @@ async function startEdit(){
     wm_path: ($('wmPath')||{}).value||'', wm_pos: ($('wmPos')||{}).value||'tr',
     wm_scale: +(($('wmScale')||{}).value)||0.14,
     speed: +$('editSpeedSel').value || 1,
+    speed_mode: (($('editSpeedModeSel')||{}).value)||'all',
     tempo: (($('editTempoSel')||{}).value)||'',   // ⚡ 빠른 템포 — 몽타주 컷 밀도 (v0.73)
     quality: (($('autoQualitySel')||{}).value)||'standard',
     cold_open: !!(($('editColdOpen')||{}).checked),   // ⚡ 첫 3초 티저 (v0.75)
@@ -6782,7 +6889,6 @@ async function startEdit(){
     take_clean: !!(($('editTakeClean')||{}).checked), // ↻ 반복 정리 (v0.76)
     auto_edit: pick('editFinish') === 'auto', auto_target_sec: +$('autoTargetSec').value||0,
     auto_multi: (($('autoMultiSel')||{}).value) === 'multi',
-    auto_mode: (($('autoMultiSel')||{}).value) || 'one',   // 🖥 쇼츠1개/긴영상/나누기 (v1.10)
     script: $('editScript').value,
     script_tts: !!(($('scriptTtsChk')||{}).checked),  // 🔊 붙여넣은 대본을 목소리로 (v0.78)
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
@@ -6885,6 +6991,35 @@ async function suggestHooks(ev, topicId, targetId){
 
 // ── 자막 검토·수정 (Phase 1) ──
 function fmtTime(us){ const s=us/1e6; const m=Math.floor(s/60); return m+':'+(s%60).toFixed(1).padStart(4,'0'); }
+function subSceneMode(text){
+  const m=String(text||'').match(/^\\s*\\[카드(?:\\s*:\\s*([^\\]]+))?\\]\\s*/i);
+  if(m){
+    const raw=(m[1]||'punch').trim().toLowerCase();
+    const ko={숫자:'number',통계:'number',펀치:'punch',강조:'punch',목록:'checklist',
+      체크:'checklist',비교:'compare',후기:'review',리뷰:'review',검색:'search',
+      질문:'search',단계:'steps',순서:'steps',구매:'cta'};
+    return ko[raw]||raw;
+  }
+  if(/^\\s*\\[(?:일반|자막)\\]\\s*/.test(String(text||''))) return 'normal';
+  return 'auto';
+}
+function subScenePlain(text){
+  return String(text||'').replace(/^\\s*\\[카드(?:\\s*:\\s*[^\\]]+)?\\]\\s*/i,'')
+    .replace(/^\\s*\\[(?:일반|자막)\\]\\s*/,'');
+}
+function subScenePrefix(mode){
+  if(mode==='normal') return '[일반] ';
+  if(mode && mode!=='auto') return '[카드:'+mode+'] ';
+  return '';
+}
+function setSubScene(i, mode){
+  const s=(window._subs||[])[i]; if(!s) return;
+  s.text=subScenePrefix(mode)+subScenePlain(s.text); renderSubRows();
+}
+function setSubSceneText(i, value){
+  const s=(window._subs||[])[i]; if(!s) return;
+  s.text=subScenePrefix(subSceneMode(s.text))+value;
+}
 function renderSubRows(){
   const box = $('subList'); box.innerHTML='';
   (window._subs||[]).forEach((sub, i) => {
@@ -6898,12 +7033,20 @@ function renderSubRows(){
     const repBadge = sub.repeat
       ? `<span title="앞뒤로 거의 같은 말이 또 있어요 — 반복(NG) 테이크로 보여요. [↻ 반복 정리]를 누르면 마지막 테이크만 남아요" style="padding-top:8px;color:#f0a020;font-weight:700">↻</span>`
       : '';
+    const sceneMode = subSceneMode(sub.text);
+    const safeFullText = escHtml(sub.text||'');
+    const sceneOpts = [
+      ['auto','장면 자동'],['normal','일반 자막'],['number','숫자'],['punch','펀치'],
+      ['checklist','목록'],['compare','비교'],['review','후기'],['search','검색'],
+      ['steps','단계'],['cta','CTA']
+    ].map(x=>`<option value="${x[0]}" ${sceneMode===x[0]?'selected':''}>${x[1]}</option>`).join('');
     row.innerHTML =
       `<input type="checkbox" class="keepchk" ${dropped?'':'checked'} title="이 구간을 쇼츠에 넣기" onchange="window._subs[${i}].keep=this.checked; renderSubRows(); updateKeepInfo()">`+
       repBadge+
       `<button class="ghost" title="이 줄부터 재생" onclick="seekCut(${sub.start_us})">▶</button>`+
       `<span class="hint" style="min-width:50px;padding-top:9px;cursor:pointer" title="이 지점 재생" onclick="seekCut(${sub.start_us})">${fmtTime(sub.start_us)}</span>`+
-      `<input type="text" style="flex:1;${confStyle}" ${lowConf?'title="음성 인식이 불확실한 줄이에요 — 한번 확인해 주세요"':''} value="${escHtml(sub.text||'')}" onfocus="pauseCut()" oninput="window._subs[${i}].text=this.value">`+
+      `<select style="width:88px;padding:7px 4px;font-size:11px" title="이 줄의 장면 모양: ${safeFullText}" onchange="setSubScene(${i},this.value)">${sceneOpts}</select>`+
+      `<input type="text" style="flex:1;${confStyle}" ${lowConf?'title="음성 인식이 불확실한 줄이에요 — 한번 확인해 주세요"':''} value="${escHtml(subScenePlain(sub.text))}" onfocus="pauseCut()" oninput="setSubSceneText(${i},this.value)">`+
       `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆</button>`+
       `<button class="ghost" title="이 줄을 둘로 나누기" onclick="splitSub(${i})">✂</button>`+
       `<button class="ghost" title="자막+영상 구간 통째 삭제 (브루식 — 체크박스로 복구)" onclick="dropSeg(${i})">🗑</button>`+
@@ -7417,9 +7560,12 @@ async function renderSplit(ev){
   const target=parseInt($('hlTarget').value||'30');
   if(!confirm('전체를 약 '+target+'초 단위 쇼츠 여러 개로 나눠 저장합니다. 계속할까요?')) return;
   const speed=parseFloat(($('outSpeed')||{}).value||'1');
+  const speed_mode=(($('outSpeedMode')||{}).value)||'all';
   const quality=($('outQuality')||{}).value||'standard';
   const res=await fetch('/api/edit_split',{method:'POST',body:JSON.stringify(
-    {job_id:currentJob, subtitles:subs, target_sec:target, hook:$('editHook').value, speed, quality, trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
+    {job_id:currentJob, subtitles:subs, target_sec:target, hook:$('editHook').value,
+     speed, speed_mode, quality, trim_start_us:Math.round(window._trimStart||0),
+     trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -7434,8 +7580,9 @@ async function renderEdited(){
   // 전체 선택(또는 자막 없음)이면 재컷 안 함(null), 일부만이면 그 구간만 남김
   const keep=(!subs.length || keepIdx.length===subs.length) ? null : keepIdx;
   const speed=parseFloat(($('outSpeed')||{}).value || '1');
+  const speed_mode=(($('outSpeedMode')||{}).value)||'all';
   const quality=($('outQuality')||{}).value || 'standard';
-  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', sub_style:(($('editSubStyleSel')||{}).value)||'기본', tone:(($('editToneSel')||{}).value)||'기본', sub_anim:(window._themeAnim||{}).edit||'', sub_pos:(window._themePos||{}).edit||'', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
+  const res=await fetch('/api/edit_render',{method:'POST',body:JSON.stringify({job_id:currentJob, subtitles:subs, hook:$('editHook').value, keep, speed, speed_mode, quality, hook_scale:+(($('hookSizeSel')||{}).value)||1, hook_style:(($('hookStyleSel')||{}).value)||'기본', sub_style:(($('editSubStyleSel')||{}).value)||'기본', tone:(($('editToneSel')||{}).value)||'기본', sub_anim:(window._themeAnim||{}).edit||'', sub_pos:(window._themePos||{}).edit||'', trim_start_us:Math.round(window._trimStart||0), trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
   $('subEditBox').classList.add('hidden');
@@ -8141,7 +8288,7 @@ function genTargetSec(){
   const sel = ($('genLenSel')||{}).value;
   if(sel === 'custom'){
     let m = parseFloat(($('genLenCustomMin')||{}).value) || 7;
-    m = Math.max(1, Math.min(15, m));       // 1~15분 (백엔드도 같은 상한)
+    m = Math.max(1, Math.min(30, m));       // 1~30분, 최대 1800초 (v1.10)
     return Math.round(m * 60);
   }
   return (+sel) || 60;
@@ -8191,9 +8338,9 @@ function resetEditForm(ev){
   set('bgmEditSel',''); set('bgmVolSel','-14');
   set('wmPath',''); set('wmPos','tr'); set('wmScale','0.14');
   const rf = document.querySelector('input[name=editFinish][value=review]'); if(rf) rf.checked = true;
-  set('autoMultiSel','one'); rebuildTargetPreset(false);   // 🖥 길이 후보를 쇼츠용으로 되돌림 (v1.10)
-  set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1'); set('editTempoSel','');
-  set('autoQualitySel','standard');
+  set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1');
+  set('editSpeedModeSel','all'); set('editTempoSel','');
+  set('autoMultiSel','one'); set('autoQualitySel','standard');
   chk('editColdOpen',false); chk('editHookVoice',false);  // 🪝 훅 팩 (v0.75)
   chk('editFillerCut',false); chk('editTakeClean',false);  // 🧹 말 다듬기 (v0.76)
   set('weblinkUrl',''); chk('scriptTtsChk',false); window._weblink = null;  // 🔗 링크 채우기 (v0.78)
@@ -8207,8 +8354,9 @@ function resetEditForm(ev){
   fetch('/api/settings', {method:'POST', body: JSON.stringify({settings:{ui:{edit_last:{
     layout:'shorts', auto_subtitle:true, cut_silence:true, denoise:'', orig_audio:'keep',
     bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', sub_style:'기본', tone:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
-    stt_provider:'', whisper_model:'small', speed:1, quality:'standard', transition:'none',
-    auto_edit:false, auto_multi:false, auto_mode:'one', auto_target_sec:30, photo_sec:15,
+    stt_provider:'', whisper_model:'small', speed:1, speed_mode:'all',
+    quality:'standard', transition:'none',
+    auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
     cold_open:false, hook_voice:false, filler_cut:false, take_clean:false,
     wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
 }
@@ -8372,6 +8520,9 @@ function fillSettings(s){
   $('setSubAnim').value = s.subtitle.anim || 'none';
   $('setFade').checked = !!s.subtitle.fade;
   $('setTextCards').checked = s.subtitle.text_cards !== false;   // 🅰 v1.07 (기본 켬)
+  $('setCardPack').value = s.subtitle.card_pack || 'auto';
+  $('setCardDensity').value = s.subtitle.card_density || 'auto';
+  $('setFontPack').value = s.subtitle.font_pack || 'auto';
   $('setHookBand').checked = s.subtitle.hook_band !== false;
   $('setBand').checked = !!s.subtitle.band;
   $('setHlColor').value = s.subtitle.highlight_color;
@@ -8421,13 +8572,14 @@ function collectTplParams(){
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
     transition: (($('transSel')||{}).value)||'none',
     stt_provider: $('sttSel').value||'', whisper_model: (($('whisperModelSel')||{}).value)||'small',
-    speed: +$('editSpeedSel').value||1, tempo: (($('editTempoSel')||{}).value)||'',
+    speed: +$('editSpeedSel').value||1,
+    speed_mode: (($('editSpeedModeSel')||{}).value)||'all',
+    tempo: (($('editTempoSel')||{}).value)||'',
     quality: (($('autoQualitySel')||{}).value)||'standard',
     cold_open: !!(($('editColdOpen')||{}).checked),   // ⚡ 콜드오픈 (v0.75)
     hook_voice: !!(($('editHookVoice')||{}).checked), // 🎙 후킹 보이스 (v0.75)
     filler_cut: !!(($('editFillerCut')||{}).checked), take_clean: !!(($('editTakeClean')||{}).checked),  // 🧹 (v0.76)
     auto_edit: pick('editFinish')==='auto', auto_multi: (($('autoMultiSel')||{}).value)==='multi',
-    auto_mode: (($('autoMultiSel')||{}).value)||'one',   // 🖥 v1.10
     auto_target_sec: +$('autoTargetSec').value||0, photo_sec: +(($('photoSec')||{}).value)||15,
     wm_pos: (($('wmPos')||{}).value)||'tr', wm_scale: +(($('wmScale')||{}).value)||0.14,
   };
@@ -8471,7 +8623,9 @@ async function saveSettings(){
                highlight_color: $('setHlColor').value.toUpperCase(),
                hook_band: $('setHookBand').checked, band: $('setBand').checked,
                wrap_chars: +$('setWrapChars').value, anim: $('setSubAnim').value,
-               text_cards: $('setTextCards').checked},
+               text_cards: $('setTextCards').checked,
+               card_pack: $('setCardPack').value, card_density: $('setCardDensity').value,
+               font_pack: $('setFontPack').value},
     bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,
          ai_image: $('setAiImage').checked, scene_images: $('setSceneImg').checked},
     bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
@@ -8831,9 +8985,8 @@ async function coupangPick(it, card){       // 🛒 쇼핑 카드 공용 상품 
     }
     if((d.images || []).length){
       window._shopPhotos = d.images.slice();           // 새 상품 = 사진 새로 시작
-      window._shopPrev = (d.previews || []).slice();
+      window._shopPrev = d.images.map((_, i) => (d.previews || [])[i] || '');
       renderShopPhotoPrev();
-      $('shopPhotoCnt').textContent = '📷 대표사진 1장(고화질) 자동 저장됨 — 상품 페이지를 복사해 붙여넣으면(Ctrl+V) 사진이 한꺼번에 더 들어와요';
     }
     if(d.link){ $('shopLinkInput').value = d.link; }   // 파트너스 추적 링크
     uiBanner('🛒 기본 정보를 채웠어요 (쿠팡·네이버 API는 대표사진 1장·이름·가격·분류까지만 제공) — ' +
@@ -8908,9 +9061,23 @@ async function pickShopPhotos(ev){
 // 이미지 주소는 공개 CDN이라 그대로 받아진다 — Ctrl+C → Ctrl+V 한 번에 여러 장.
 function renderShopPhotoPrev(){
   const box = $('shopPhotoPrev'); if(!box) return;
-  box.innerHTML = (window._shopPrev || []).map(function(u){
-    return '<img src="' + escHtml(u) + '" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid #2c3347">';
+  const photos = window._shopPhotos || [], previews = window._shopPrev || [];
+  box.innerHTML = photos.map(function(p, i){
+    const u = previews[i] || '';
+    const name = String(p || '').split(/[\\\\/]/).pop() || ('사진 ' + (i + 1));
+    const visual = u
+      ? '<img src="' + escHtml(u) + '" style="width:88px;height:76px;object-fit:cover;border-radius:7px 7px 0 0">'
+      : '<div style="width:88px;height:76px;display:flex;align-items:center;justify-content:center;background:#202532;color:#aeb6c8;font-size:11px;text-align:center;padding:4px;overflow:hidden">📁 ' + escHtml(name) + '</div>';
+    return '<div class="shop-photo-item" style="width:90px;border:1px solid #3a4157;border-radius:8px;overflow:hidden;background:#171a23">' +
+      '<div style="position:relative">' + visual +
+      '<b style="position:absolute;left:4px;top:4px;background:#10131bcc;border-radius:10px;padding:1px 5px;font-size:11px">' + (i + 1) + '</b></div>' +
+      '<div style="display:flex;justify-content:center;gap:2px;padding:3px">' +
+      '<button class="ghost" style="padding:1px 5px" onclick="moveShopPhoto(event,' + i + ',-1)" title="앞으로">←</button>' +
+      '<button class="ghost" style="padding:1px 5px" onclick="moveShopPhoto(event,' + i + ',1)" title="뒤로">→</button>' +
+      '<button class="ghost" style="padding:1px 5px;color:#ff8e8e" onclick="removeShopPhoto(event,' + i + ')" title="영상에서 제외">×</button></div></div>';
   }).join('');
+  if(photos.length) $('shopPhotoCnt').textContent =
+    '✅ 영상에 반영할 사진 ' + photos.length + '장 · 아래 번호 순서대로 모두 사용';
 }
 function addShopPhotos(paths, previews){
   window._shopPhotos = window._shopPhotos || [];
@@ -8918,9 +9085,22 @@ function addShopPhotos(paths, previews){
   (paths || []).forEach(function(p, i){
     if(window._shopPhotos.indexOf(p) >= 0) return;
     window._shopPhotos.push(p);
-    if((previews || [])[i]) window._shopPrev.push(previews[i]);
+    window._shopPrev.push((previews || [])[i] || '');  // 사진 배열과 항상 같은 인덱스
   });
-  $('shopPhotoCnt').textContent = '📷 사진 ' + window._shopPhotos.length + '장 준비됨';
+  renderShopPhotoPrev();
+}
+function removeShopPhoto(ev, i){
+  if(ev) ev.preventDefault();
+  window._shopPhotos = window._shopPhotos || []; window._shopPrev = window._shopPrev || [];
+  window._shopPhotos.splice(i, 1); window._shopPrev.splice(i, 1);
+  renderShopPhotoPrev();
+  if(!window._shopPhotos.length) $('shopPhotoCnt').textContent = '사진이 모두 제외됐어요';
+}
+function moveShopPhoto(ev, i, delta){
+  if(ev) ev.preventDefault();
+  const j = i + delta, ps = window._shopPhotos || [], pv = window._shopPrev || [];
+  if(j < 0 || j >= ps.length) return;
+  [ps[i], ps[j]] = [ps[j], ps[i]]; [pv[i], pv[j]] = [pv[j], pv[i]];
   renderShopPhotoPrev();
 }
 function clearShopPhotos(ev){
@@ -8932,23 +9112,33 @@ function clearShopPhotos(ev){
 }
 function extractImgUrls(html){
   const out = [], seen = {};
-  const re = /<img[^>]+?(?:src|data-src|data-original|data-lazy|data-lazy-src|data-image)=["']([^"']+)["']/gi;
-  let m;
-  while((m = re.exec(html)) !== null){
-    let u = m[1];
+  const add = function(raw){
+    let u = String(raw || '').trim().replace(/&amp;/g, '&');
     if(u.indexOf('//') === 0) u = 'https:' + u;
-    if(u.indexOf('http') !== 0) continue;          // data: 등 제외
-    if(seen[u]) continue;
+    if(u.indexOf('http') !== 0 || seen[u] || /logo|icon|sprite|blank/i.test(u)) return;
     seen[u] = 1; out.push(u);
-    if(out.length >= 12) break;
-  }
+  };
+  try{
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    [...doc.querySelectorAll('img')].forEach(img => {
+      ['data-original','data-lazy-src','data-src','data-image','data-lazy']
+        .forEach(k => add(img.getAttribute(k)));
+      const ss = img.getAttribute('data-srcset') || img.getAttribute('srcset') || '';
+      ss.split(',').map(x => x.trim().split(/\\s+/)[0]).reverse().forEach(add);
+      add(img.getAttribute('src'));
+    });
+  }catch(_e){}
+  // 클립보드 HTML이 일부 잘려 DOM 파싱이 안 된 경우의 보조 정규식.
+  const re = /(?:src|data-src|data-original|data-lazy|data-lazy-src|data-image)=["']([^"']+)["']/gi;
+  let m; while((m = re.exec(html)) !== null) add(m[1]);
+  if(out.length > 12) out.length = 12;
   return out;
 }
 async function fetchShopImages(urls){
   uiBanner('📷 붙여넣은 조각에서 사진 ' + urls.length + '장을 가져오는 중…');
   try{
     const d = await (await fetch('/api/shop_images', {method:'POST',
-      body: JSON.stringify({urls})})).json();
+      body: JSON.stringify({urls, referer:(($('shopLinkInput')||{}).value||'').trim()})})).json();
     if(d.error){ uiBanner('📷 ' + d.error); return; }
     addShopPhotos(d.images, d.previews);
     uiBanner('📷 사진 ' + (d.images || []).length + '장을 가져왔어요' +
@@ -9551,10 +9741,16 @@ function fillSectionsForm(d){
     const el = $(id);
     if(el && v != null && v !== '' && [...el.options].some(o => o.value === String(v))) el.value = String(v);
   };
+  if($('secHook')) $('secHook').value = d.hook || '';
+  setSel('secQualitySel', d.quality);
   setSel('secVoiceSel', d.narr_voice); setSel('secTempoSel', d.tempo);
   setSel('secBgmSel', d.bgm); setSel('secXfadeSel', d.transition);
   setSel('secSubStyleSel', d.sub_style); setSel('secHookStyleSel', d.hook_style);
   setSel('secSubFontSel', d.sub_font); setSel('secToneSel', d.tone);
+  window._themeAnim = window._themeAnim || {};
+  window._themePos = window._themePos || {};
+  if(d.sub_anim) window._themeAnim.sec = d.sub_anim;
+  if(d.sub_pos) window._themePos.sec = d.sub_pos;
   rows.innerHTML = '';
   (d.sections || []).forEach(function(s){
     const div = addSectionRow(s.title || '', s.narration || '');
@@ -9718,7 +9914,6 @@ async function startSections(){
     layout: pick('secLayout') || 'wide',
     hook: ($('secHook')||{}).value || '',                      // 🪝 훅 제목 (v0.96)
     quality: ($('secQualitySel')||{}).value || 'standard',     // 🖼 화질 (v0.96)
-    quality: 'standard',
     narr_voice: ($('secVoiceSel')||{}).value || '',
     tempo: ($('secTempoSel')||{}).value || '',
     bgm: ($('secBgmSel')||{}).value || '',
@@ -9761,6 +9956,16 @@ async function copyChapters(ev){
 
 // 📦 업로드용 용량 줄이기 (v0.83) — 화질 거의 그대로 파일 크기 대폭 축소
 // ── 📱 완성 영상 → 쇼츠·편집 보내기 (v0.90) — "16:9로 만들었는데 쇼츠도 바로" ──
+function editDoneVideo(ev){
+  if(ev) ev.preventDefault();
+  const job = window._lastDoneJob || {};
+  if(job.mode === 'sections' || !!job.chapters){
+    reEditSections(job.id || currentJob);
+    return;
+  }
+  sendDoneToEdit(ev, 'keep');
+}
+
 function sendDoneToEdit(ev, layout){
   if(ev) ev.preventDefault();
   const job = window._lastDoneJob || {};
@@ -9779,16 +9984,9 @@ function sendDoneToEdit(ev, layout){
     const auto = document.querySelector("input[name=editFinish][value='auto']");
     if(auto && !auto.checked){ auto.checked = true; try{ onFinishChange(); }catch(_e){} }
     if($('autoMultiSel')) $('autoMultiSel').value = 'multi';
-    try{ onAutoMultiChange(); }catch(_e){}
     if($('autoTargetSec') && !(+($('autoTargetSec').value))) $('autoTargetSec').value = 60;
     uiBanner('📱 완성 영상을 쇼츠로! — 세로(9:16) + 완전 자동(핵심만 남겨 60초 쇼츠 여러 개)로 맞춰뒀어요. 원하면 바꾸고 아래 [시작]을 누르세요');
   } else {
-    // 🖥 가로·원본 비율로 보내면 '긴 영상 1개'가 기본 — 완전 자동이라도 30초로 압축되지 않게 (v1.10)
-    if(document.querySelector("input[name=editFinish][value='auto']").checked && $('autoMultiSel')){
-      $('autoMultiSel').value = 'long';
-      try{ onAutoMultiChange(); }catch(_e){}
-      $('autoTargetPreset').value = '0'; applyTargetPreset();
-    }
     uiBanner('✂ 완성 영상을 편집 카드로 불러왔어요 — 자르기·자막·훅·BGM을 설정하고 [시작]을 누르세요');
   }
 }
@@ -10041,6 +10239,10 @@ async function poll(){
     const repBtn = $('cleanRepeatsBtn');
     if(repBtn) repBtn.style.display = repN ? '' : 'none';
     if(repBtn) repBtn.textContent = '↻ 반복 정리 (' + repN + '곳)';
+    const ep = job.edit_params || {};
+    if($('outSpeed')) $('outSpeed').value = String(ep.speed || 1);
+    if($('outSpeedMode')) $('outSpeedMode').value = ep.speed_mode || 'all';
+    if($('outQuality')) $('outQuality').value = ep.quality || 'standard';
     $('subEditBox').classList.remove('hidden');
     $('bulkBox').classList.add('hidden'); $('bulkText').value='';
     const cp=$('cutPlayer');
@@ -10071,8 +10273,16 @@ async function poll(){
       window._lastDoneJob = job;     // 📱 쇼츠로 만들기·✂ 편집 보내기용 (v0.90)
       $('doneBox').classList.remove('hidden');
       $('player').src = '/video/' + job.id + '?t=' + Date.now() + '#t=0.1';
+      const isSectionJob = job.mode === 'sections' || !!job.chapters;
+      const doneEdit = $('doneEditBtn');
+      if(doneEdit){
+        doneEdit.textContent = isSectionJob ? '✏ 오류 구간만 고치기' : '✂ 이 영상 편집';
+        doneEdit.title = isSectionJob
+          ? '완성된 영상의 기존 구간·대본·시간을 그대로 불러와 오류 난 부분만 고쳐 다시 만들어요 — 바뀐 구간만 재제작합니다'
+          : '완성된 이 영상을 편집 카드로 보내 자르고 다듬어요';
+      }
       if(job.mp4s && job.mp4s.length > 1){
-        const isSec = !!job.chapters;   // 🎞 구간 합본 작업 — 쇼츠 아님 (v0.94 라벨 정리)
+        const isSec = isSectionJob;   // 🎞 구간 합본 작업 — 쇼츠 아님 (v0.94 라벨 정리)
         $('outPaths').innerHTML = (isSec
             ? '🎬 완성 파일 ' + job.mp4s.length + '개 (1번이 최종 합본, 나머지는 구간별 파일):<br>'
             : '🎬 쇼츠 ' + job.mp4s.length + '개 완성:<br>') +

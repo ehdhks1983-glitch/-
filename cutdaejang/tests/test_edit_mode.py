@@ -372,7 +372,7 @@ def _max_volume_db(path):
     import subprocess
 
     r = subprocess.run([ff.ffmpeg_bin(), "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     m = re.search(r"max_volume: (-?[\d.]+) dB", r.stderr)
     return float(m.group(1)) if m else -99.0
 
@@ -791,7 +791,8 @@ def test_render_watermark_overlay(tmp_path):
     def yavg(x, y):
         p = subprocess.run([ff.ffmpeg_bin(), "-i", out,
                             "-vf", f"crop=80:40:{x}:{y},signalstats,metadata=print",
-                            "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+                            "-frames:v", "1", "-f", "null", "-"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace")
         m = re.search(r"YAVG=([0-9.]+)", p.stderr)
         return float(m.group(1)) if m else -1
 

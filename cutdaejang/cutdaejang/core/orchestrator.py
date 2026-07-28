@@ -110,11 +110,14 @@ def build_style(settings: dict, orientation: str = "shorts") -> Style:
     position = "center" if reels else "bottom"
     anim = "type" if reels else sub.get("anim", "none")
     sub_style = sub.get("sub_style", "기본")
+    font_pack = str(sub.get("font_pack") or "auto")
+    fp = presets.FONT_PACKS.get(font_pack, presets.FONT_PACKS["auto"])
+    packed = font_pack != "auto"
     if reels and sub_style == "기본":
         sub_style = "다색 팝"        # 인스타·틱톡 기본 자막 (사용자가 고르면 그대로)
     return Style(
-        font=sub.get("font") or "Pretendard-ExtraBold",
-        hook_font=sub.get("hook_font") or "",
+        font=fp["font"] if packed else (sub.get("font") or fp["font"]),
+        hook_font=fp["hook_font"] if packed else (sub.get("hook_font") or fp["hook_font"]),
         hook_tilt=bool(sub.get("hook_tilt", False)),
         size=sub["font_size"],
         outline=sub["outline"],
@@ -133,6 +136,9 @@ def build_style(settings: dict, orientation: str = "shorts") -> Style:
         tone=settings["bg"].get("tone", "기본"),
         text_cards=bool(sub.get("text_cards", True)),   # 🅰 텍스트 카드 (v1.07)
         card_accent=sub.get("card_accent", "#4D8DFF"),
+        card_pack=sub.get("card_pack", "auto"),
+        card_density=sub.get("card_density", "auto"),
+        font_pack=font_pack,
     )
 
 
@@ -279,6 +285,7 @@ def run_job(
             voice=opts.voice,
             status_cb=note,
             on_progress=lambda i, n: report("tts", i / n),
+            continuity=True,
         )
         result.tts_provider = used_provider
         result.fallback_note = fallback_note

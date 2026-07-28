@@ -28,7 +28,8 @@ def _mean_db(path, start, dur):
 
     r = subprocess.run([ff.ffmpeg_bin(), "-i", str(path),
                         "-af", f"atrim={start}:{start + dur},volumedetect",
-                        "-vn", "-f", "null", "-"], capture_output=True, text=True)
+                        "-vn", "-f", "null", "-"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     m = re.search(r"mean_volume:\s*(-?[\d.]+) dB", r.stderr)
     assert m, r.stderr[-400:]
     return float(m.group(1))
