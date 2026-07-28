@@ -462,6 +462,16 @@ def _nearest_scene(t_us: int, scenes: List[int], max_shift_us: int):
     return best
 
 
+def montage_piece_us(tempo: str = "", target_s: int = 0) -> int:
+    """자동 몽타주 조각 하나의 길이 — 템포 + 완성 길이에 맞춰 (v1.10).
+
+    쇼츠(30~60초)는 짧게 끊어 리듬을 만들지만, 긴 영상(2분↑)에서 같은 밀도로
+    자르면 조각이 수백 개가 되어 산만하고 렌더도 느려진다 → 조각을 2배로.
+    """
+    base = {"빠르게": 2_400_000, "아주 빠르게": 1_700_000}.get(str(tempo or ""), 3_500_000)
+    return base * 2 if int(target_s or 0) >= 120 else base
+
+
 def shift_ranges_to_silence(ranges: List[Tuple[int, int]],
                             speech_segs: List[Tuple[int, int]], dur_us: int,
                             max_shift_us: int = 1_500_000,

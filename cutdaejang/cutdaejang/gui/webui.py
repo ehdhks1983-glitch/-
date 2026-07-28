@@ -124,6 +124,7 @@ _EDIT_LAST_KEYS = (
     "bgm", "bgm_db", "hook_scale", "hook_style", "sub_style", "tone", "narr_voice", "narr_style", "narr_subs_only",
     "stt_provider", "whisper_model", "speed", "quality", "narr_fit", "transition",
     "auto_edit", "auto_multi", "auto_target_sec", "photo_sec", "wm_pos", "wm_scale",
+    "auto_mode",  # 🖥 만들기 방식 3종(쇼츠1개·긴영상·나누기) 기억 (v1.10)
     "tempo",  # ⚡ 빠른 템포 — 몽타주 컷 밀도 (v0.73)
     "cold_open", "hook_voice",  # 🪝 훅 팩 (v0.75)
     "filler_cut", "take_clean",  # 🧹 말 다듬기 팩 (v0.76)
@@ -804,10 +805,12 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 and not params.get("auto_multi")
                 and analysis.cut_us > (tgt_auto + 3) * 1_000_000):
             from ..core import video_editor as ve  # noqa: PLC0415
-            _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {tgt_auto}초를 뽑는 중…")
+            _tgt_txt = (f"{tgt_auto // 60}분 {tgt_auto % 60}초" if tgt_auto >= 60
+                        else f"{tgt_auto}초")   # 🖥 긴 영상은 분으로 읽기 쉽게 (v1.10)
+            _set_job(job_id, stage="cut", note=f"영상 전체에서 고르게 {_tgt_txt}를 뽑는 중…")
             # ⚡ 빠른 템포(v0.73) — 조각을 더 짧게 잡아 컷을 촘촘하게 (몽타주 리듬 up)
-            _piece = {"빠르게": 2_400_000, "아주 빠르게": 1_700_000}.get(
-                str(params.get("tempo") or ""), 3_500_000)
+            # 🖥 긴 영상(2분↑)은 조각을 길게 — 산만함·조각 수 폭증 방지 (v1.10)
+            _piece = ve.montage_piece_us(params.get("tempo"), tgt_auto)
             ranges = edit_mode.spread_ranges(
                 analysis.cut_us, tgt_auto * 1_000_000, piece_us=_piece)
             try:  # 🎬 장면 전환에 맞춰 조각 시작점을 스냅 — 컷이 장면 중간에서 안 끊기게 (v0.44)
@@ -834,7 +837,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
             from ..utils import ffmpeg as ff  # noqa: PLC0415
             analysis.cut_us = ff.probe_duration_us(analysis.cut_video)
             _set_job(job_id, tts_warn=(
-                f"자막(발화)이 없어 영상 전체에서 고르게 {tgt_auto}초를 골라 담았어요"))
+                f"자막(발화)이 없어 영상 전체에서 고르게 {_tgt_txt}를 골라 담았어요"))
         review_subs = analysis.subtitles
         narr_subs_only = bool(params.get("narr_subs_only"))
         if narr_file:  # 🎤 녹음 내레이션: 자막은 녹음에서 — 대본 있으면 그 글대로 (v0.58)
@@ -4392,7 +4395,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.09.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.10.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -4504,9 +4507,15 @@ _HTML = """<!doctype html>
         <span>만들기</span>
         <select id="autoMultiSel" style="width:auto;padding:6px 8px" onchange="onAutoMultiChange()">
           <option value="one" selected>쇼츠 1개 — 핵심 장면만 뽑아서</option>
+          <option value="long">긴 영상 1개 — 원본 비율 그대로 (유튜브 일반)</option>
           <option value="multi">여러 개로 나누기 — 영상 전체를 쇼츠 여러 개로</option>
         </select>
         <span class="hint" id="autoMultiHint"></span>
+      </div>
+      <div class="hint hidden" id="autoLongTip" style="margin:2px 0 4px;padding:6px 8px;border-radius:8px;background:#1b2436">
+        🖥 <b>긴 영상 모드</b> — 가로 영상이 세로로 잘리지 않게 <b>출력 형태</b>를 [원본 비율 유지]로 맞췄어요
+        (아래 「⚙️ 세부 설정」에서 확인·변경). 길이를 정하면 그 길이로 <b>핵심만 골라 압축</b>하고,
+        [원본 길이 그대로]면 자르지 않고 자막·제목·소리만 손봐요.
       </div>
       <div class="chk" style="gap:8px">
         <span id="autoLenLabel">완성 길이</span>
@@ -4516,7 +4525,7 @@ _HTML = """<!doctype html>
           <option value="0">원본 길이 그대로</option>
           <option value="custom">직접 입력…</option>
         </select>
-        <input type="number" id="autoTargetSec" value="30" min="0" max="90" style="width:64px;padding:6px" class="hidden">
+        <input type="number" id="autoTargetSec" value="30" min="0" max="1800" style="width:64px;padding:6px" class="hidden">
         <span class="hint">· 재생 속도</span>
         <select id="editSpeedSel" style="width:auto;padding:6px 8px">
           <option value="1">1배</option>
@@ -6511,6 +6520,7 @@ function applyTargetPreset(){
 function ensureShortsLayout(){
   // 📐 쇼츠 모드(길이 목표 있음)인데 '원본 비율 유지'가 기억돼 있으면 세로로 자동 전환 (v0.76.1)
   // — "쇼츠로 나눴는데 가로로 나와요" 방지. 사용자가 다시 원본 비율을 고르면 그대로 둔다.
+  if((($('autoMultiSel')||{}).value) === 'long') return;  // 🖥 긴 영상 모드는 쇼츠 강제 없음 (v1.10)
   if((($('autoTargetPreset')||{}).value) === '0') return;
   const keep = document.querySelector('input[name=editLayout][value=keep]');
   const sh = document.querySelector('input[name=editLayout][value=shorts]');
@@ -6520,14 +6530,49 @@ function ensureShortsLayout(){
     if(h){ h.textContent = '📐 쇼츠 모드라 세로(9:16)로 자동 선택했어요 — 원본 비율을 원하면 위에서 다시 고르세요'; h.classList.remove('hidden'); }
   }
 }
+// 🖥 만들기 방식에 맞춰 완성 길이 후보를 갈아끼움 (v1.10) — 긴 영상은 분 단위
+function rebuildTargetPreset(long){
+  const p = $('autoTargetPreset');
+  if(!p) return;
+  const want = long ? 'long' : 'short';
+  if(p.getAttribute('data-kind') === want) return;
+  const cur = p.value;
+  const opts = long
+    ? [['0','원본 길이 그대로 (자르지 않음)'], ['900','15분으로 압축'], ['600','10분으로 압축'],
+       ['300','5분으로 압축'], ['180','3분으로 압축'], ['custom','직접 입력…(초)']]
+    : [['30','쇼츠 30초 — 핵심만 자동 선별'], ['60','쇼츠 60초'], ['0','원본 길이 그대로'],
+       ['custom','직접 입력…']];
+  p.innerHTML = '';
+  opts.forEach(function(o){ p.add(new Option(o[1], o[0])); });
+  p.setAttribute('data-kind', want);
+  p.value = opts.some(function(o){ return o[0] === cur; }) ? cur : (long ? '0' : '30');
+}
+function ensureLongLayout(){
+  // 🖥 긴 영상 모드인데 세로(9:16)가 기억돼 있으면 원본 비율로 되돌림 (v1.10)
+  // — 가로 영상이 세로로 잘려 나가는 사고 방지.
+  const sh = document.querySelector('input[name=editLayout][value=shorts]');
+  const kp = document.querySelector('input[name=editLayout][value=keep]');
+  const h = $('layoutAutoHint');
+  if(sh && sh.checked && kp){
+    kp.checked = true;
+    if(h){ h.textContent = '🖥 긴 영상 모드라 [원본 비율 유지]로 바꿨어요 — 세로 쇼츠가 필요하면 여기서 다시 고르세요';
+           h.classList.remove('hidden'); }
+  }
+}
 function onAutoMultiChange(){
-  const multi = $('autoMultiSel').value === 'multi';
+  const mode = (($('autoMultiSel')||{}).value) || 'one';
+  const multi = mode === 'multi', long = mode === 'long';
   $('autoLenLabel').textContent = multi ? '쇼츠 1개당 길이' : '완성 길이';
   $('autoMultiHint').textContent = multi
-    ? '예) 10분 영상 ÷ 60초 = 약 10개 (edited_1.mp4, edited_2.mp4 …)' : '';
+    ? '예) 10분 영상 ÷ 60초 = 약 10개 (edited_1.mp4, edited_2.mp4 …)'
+    : (long ? '가로(16:9) 8분·10분짜리도 그대로 — 유튜브 일반 영상용 (원본 비율 유지)' : '');
+  rebuildTargetPreset(long);
   const p = $('autoTargetPreset');
-  if(multi && p.value === '0'){ p.value = '60'; applyTargetPreset(); }  // 나누기엔 길이 필수
-  ensureShortsLayout();
+  if(multi && p.value === '0') p.value = '60';   // 나누기엔 길이 필수
+  applyTargetPreset();
+  if(long) ensureLongLayout();
+  const st = $('autoLongTip');
+  if(st) st.classList.toggle('hidden', !long);
 }
 // 지난번 편집 세팅 복원 (v0.38) — 경로·주제·대본만 빼고 전부 이어받아 "영상만 바꿔 반복"
 function applyEditLast(el){
@@ -6551,16 +6596,19 @@ function applyEditLast(el){
   chk('editFillerCut', el.filler_cut); chk('editTakeClean', el.take_clean);  // 🧹 말 다듬기 (v0.76)
   set('whisperModelSel', el.whisper_model);
   window._wantStt = el.stt_provider || '';   // STT 목록은 늦게 채워짐 → loadStt에서 적용
-  const lay = document.querySelector('input[name=editLayout][value="' + (el.layout || 'shorts') + '"]');
-  if(lay) lay.checked = true;
   const fin = document.querySelector('input[name=editFinish][value="' + (el.auto_edit ? 'auto' : 'review') + '"]');
   if(fin) fin.checked = true;
-  if($('autoMultiSel')) $('autoMultiSel').value = el.auto_multi ? 'multi' : 'one';
+  if($('autoMultiSel')) $('autoMultiSel').value = el.auto_mode || (el.auto_multi ? 'multi' : 'one');
+  onAutoMultiChange();   // 🖥 길이 후보를 모드(쇼츠/긴 영상)에 맞게 먼저 갈아끼움 (v1.10)
   const t = String(el.auto_target_sec !== undefined && el.auto_target_sec !== null ? el.auto_target_sec : 30);
-  $('autoTargetPreset').value = ['30','60','0'].includes(t) ? t : 'custom';
+  const tp = $('autoTargetPreset');
+  tp.value = [].some.call(tp.options, function(o){ return o.value === t; }) ? t : 'custom';
   applyTargetPreset();
-  if($('autoTargetPreset').value === 'custom') $('autoTargetSec').value = t;
+  if(tp.value === 'custom') $('autoTargetSec').value = t;
   onFinishChange(); onAutoMultiChange(); toggleAutoSub();
+  // 📐 화면 비율은 맨 마지막에 — 지난번에 고른 비율이 자동 보정보다 우선 (v1.10)
+  const lay = document.querySelector('input[name=editLayout][value="' + (el.layout || 'shorts') + '"]');
+  if(lay) lay.checked = true;
 }
 
 const STT_KO = {whisper:'내장 Whisper (무료·오프라인)', gemini:'Gemini (내 키)', openai:'OpenAI (내 키)'};
@@ -6734,6 +6782,7 @@ async function startEdit(){
     take_clean: !!(($('editTakeClean')||{}).checked), // ↻ 반복 정리 (v0.76)
     auto_edit: pick('editFinish') === 'auto', auto_target_sec: +$('autoTargetSec').value||0,
     auto_multi: (($('autoMultiSel')||{}).value) === 'multi',
+    auto_mode: (($('autoMultiSel')||{}).value) || 'one',   // 🖥 쇼츠1개/긴영상/나누기 (v1.10)
     script: $('editScript').value,
     script_tts: !!(($('scriptTtsChk')||{}).checked),  // 🔊 붙여넣은 대본을 목소리로 (v0.78)
     stt_provider: $('sttSel').value, whisper_model: ($('whisperModelSel')||{}).value || 'small',
@@ -8142,8 +8191,9 @@ function resetEditForm(ev){
   set('bgmEditSel',''); set('bgmVolSel','-14');
   set('wmPath',''); set('wmPos','tr'); set('wmScale','0.14');
   const rf = document.querySelector('input[name=editFinish][value=review]'); if(rf) rf.checked = true;
+  set('autoMultiSel','one'); rebuildTargetPreset(false);   // 🖥 길이 후보를 쇼츠용으로 되돌림 (v1.10)
   set('autoTargetPreset','30'); set('autoTargetSec',30); set('editSpeedSel','1'); set('editTempoSel','');
-  set('autoMultiSel','one'); set('autoQualitySel','standard');
+  set('autoQualitySel','standard');
   chk('editColdOpen',false); chk('editHookVoice',false);  // 🪝 훅 팩 (v0.75)
   chk('editFillerCut',false); chk('editTakeClean',false);  // 🧹 말 다듬기 (v0.76)
   set('weblinkUrl',''); chk('scriptTtsChk',false); window._weblink = null;  // 🔗 링크 채우기 (v0.78)
@@ -8158,7 +8208,7 @@ function resetEditForm(ev){
     layout:'shorts', auto_subtitle:true, cut_silence:true, denoise:'', orig_audio:'keep',
     bgm:'', bgm_db:-14, hook_scale:1, hook_style:'기본', sub_style:'기본', tone:'기본', narr_voice:'', narr_style:'', narr_subs_only:false,
     stt_provider:'', whisper_model:'small', speed:1, quality:'standard', transition:'none',
-    auto_edit:false, auto_multi:false, auto_target_sec:30, photo_sec:15,
+    auto_edit:false, auto_multi:false, auto_mode:'one', auto_target_sec:30, photo_sec:15,
     cold_open:false, hook_voice:false, filler_cut:false, take_clean:false,
     wm_pos:'tr', wm_scale:0.14}}}})}).catch(()=>{});
 }
@@ -8377,6 +8427,7 @@ function collectTplParams(){
     hook_voice: !!(($('editHookVoice')||{}).checked), // 🎙 후킹 보이스 (v0.75)
     filler_cut: !!(($('editFillerCut')||{}).checked), take_clean: !!(($('editTakeClean')||{}).checked),  // 🧹 (v0.76)
     auto_edit: pick('editFinish')==='auto', auto_multi: (($('autoMultiSel')||{}).value)==='multi',
+    auto_mode: (($('autoMultiSel')||{}).value)||'one',   // 🖥 v1.10
     auto_target_sec: +$('autoTargetSec').value||0, photo_sec: +(($('photoSec')||{}).value)||15,
     wm_pos: (($('wmPos')||{}).value)||'tr', wm_scale: +(($('wmScale')||{}).value)||0.14,
   };
@@ -9728,9 +9779,16 @@ function sendDoneToEdit(ev, layout){
     const auto = document.querySelector("input[name=editFinish][value='auto']");
     if(auto && !auto.checked){ auto.checked = true; try{ onFinishChange(); }catch(_e){} }
     if($('autoMultiSel')) $('autoMultiSel').value = 'multi';
+    try{ onAutoMultiChange(); }catch(_e){}
     if($('autoTargetSec') && !(+($('autoTargetSec').value))) $('autoTargetSec').value = 60;
     uiBanner('📱 완성 영상을 쇼츠로! — 세로(9:16) + 완전 자동(핵심만 남겨 60초 쇼츠 여러 개)로 맞춰뒀어요. 원하면 바꾸고 아래 [시작]을 누르세요');
   } else {
+    // 🖥 가로·원본 비율로 보내면 '긴 영상 1개'가 기본 — 완전 자동이라도 30초로 압축되지 않게 (v1.10)
+    if(document.querySelector("input[name=editFinish][value='auto']").checked && $('autoMultiSel')){
+      $('autoMultiSel').value = 'long';
+      try{ onAutoMultiChange(); }catch(_e){}
+      $('autoTargetPreset').value = '0'; applyTargetPreset();
+    }
     uiBanner('✂ 완성 영상을 편집 카드로 불러왔어요 — 자르기·자막·훅·BGM을 설정하고 [시작]을 누르세요');
   }
 }
