@@ -2703,6 +2703,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/api/shop_login":   # 🔐 쇼핑 로그인 상태 (v1.12)
+            from ..tools import product_page  # noqa: PLC0415
+
+            self._send_json({"hosts": product_page.logged_in_hosts(),
+                             "profile": str(product_page.login_profile_dir())})
         elif path == "/api/state":
             self._send_json(self._state())
         elif path.startswith("/video/"):
@@ -3612,6 +3617,16 @@ class _Handler(BaseHTTPRequestHandler):
                 text += "\n분류: " + str(params["category"]).strip()
             self._send_json({"ok": True, "paste_text": text, "images": imgs,
                              "previews": previews, "link": short or url})
+        elif path == "/api/shop_login_open":   # 🌐 내 크롬 열기 — 로그인용 (v1.12)
+            from ..tools import product_page  # noqa: PLC0415
+
+            why = product_page.open_login_browser(
+                str(params.get("url") or "https://www.coupang.com/"))
+            if why:
+                self._send_json({"error": why}, 400)
+            else:
+                self._send_json({"ok": True,
+                                 "hosts": product_page.logged_in_hosts()})
         elif path == "/api/shop_images":  # 📷 복사한 페이지 조각의 사진 URL들 내려받기 (v0.91)
             # 상품 페이지는 서버가 못 열어도, 사용자가 브라우저에서 복사한 조각 속
             # 이미지 주소(공개 CDN)는 그대로 받아진다 — 붙여넣기 한 번에 여러 장.
@@ -3987,7 +4002,11 @@ class _Handler(BaseHTTPRequestHandler):
                 kit = sg.suggest_upload_kit(
                     frames, transcript, duration_s=dur_s, is_shorts=is_shorts,
                     hook=hook or title, channel=channel,
-                    stage=str(channel.get("stage") or ""))  # 📈 채널 단계 전략 (v1.02)
+                    stage=str(channel.get("stage") or ""),  # 📈 채널 단계 전략 (v1.02)
+                    # 🔁 v1.12: 최근에 만든 영상 제목을 알려줘 표현이 겹치지 않게
+                    # (비슷한 영상이면 비슷한 제목만 나오던 문제 — 회원님 리포트)
+                    recent_titles=[str(r.get("title") or "")
+                                   for r in (self._state().get("history") or [])[:10]])
             else:
                 kit = sg.suggest_upload_kit_stub(transcript, hook or title,
                                                  is_shorts=is_shorts)
@@ -4585,7 +4604,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.11.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.12.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -4773,6 +4792,9 @@ _HTML = """<!doctype html>
       </div>
       <div id="editHookCands" class="hookcands"></div>
       <textarea id="editHook" style="min-height:56px;margin-top:6px" oninput="renderHookPreview()" placeholder="② 제목 확정 — 추천을 누르면 여기 채워져요 / 직접 써도 됩니다 (줄바꿈은 Enter)"></textarea>
+      <div class="hint" style="margin-top:4px">🖼 글씨 스타일을 <b>「위아래 띠」</b>로 고르면 화면 위·아래가 색 띠로 채워져요 —
+        아래 띠에도 글을 넣으려면 <b>제목 // 아래 문구</b> 처럼 <b>//</b> 로 나눠 쓰세요
+        (예: <code>GPT 상세페이지 // AI로 시간은 줄이고, 퀄리티는 올리세요!</code>)</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px" id="hookStudio">
         <span class="hint">색: <b>드래그로 선택</b>하거나 단어에 커서 두고 →</span>
         <span id="hookColorChips"></span>
@@ -4792,6 +4814,7 @@ _HTML = """<!doctype html>
           <option value="네온">네온 (민트 글로우)</option>
           <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
           <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
+          <option value="위아래 띠">🖼 위아래 띠 (썸네일형 — 위·아래 색 띠 + 초대형 제목)</option>
         </select>
         <span style="margin-left:6px">글씨체</span>
         <select id="editHookFontSel" class="fontsel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
@@ -4915,7 +4938,7 @@ _HTML = """<!doctype html>
           <option value="-9">크게</option>
         </select>
         <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'bgmEditSel','bgmVolSel')">▶ 미리듣기</button>
-        <span class="hint">영상 길이만큼 반복+페이드. <b>windows\\6_무료음원_받기.bat</b>로 유명 무료 BGM 14곡 자동 채우기</span>
+        <span class="hint">영상 길이만큼 반복+페이드. <b>windows\\6_무료음원_받기.bat</b>로 분위기별 무료 BGM 50곡+ 자동 채우기</span>
       </div>
       <div class="chk" style="gap:8px">
         <span>🔇 잡음 제거</span>
@@ -5334,6 +5357,7 @@ _HTML = """<!doctype html>
           <option value="네온">네온 (민트 글로우)</option>
           <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
           <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
+          <option value="위아래 띠">🖼 위아래 띠 (썸네일형 — 위·아래 색 띠 + 초대형 제목)</option>
         </select>
       </div>
       <div class="chk" style="gap:8px;flex-wrap:wrap;margin-top:6px">
@@ -5735,6 +5759,18 @@ _HTML = """<!doctype html>
       <button class="ghost" style="border-color:#4266d5;white-space:nowrap" onclick="makeShopScript(event)" title="링크에서 사진·설명을 자동 수집하고 대본까지 만들어요">🔗 사진·대본 자동 수집</button>
     </div>
     <div class="hint" style="margin-top:4px">수집이 막히면 상품 페이지의 사진·설명 부분을 복사해 아래 결과 칸에 붙여넣으면 됩니다.</div>
+    <div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:#1b2436">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="ghost" style="white-space:nowrap" onclick="openShopLogin(event)"
+                title="컷대장 전용 크롬 창을 엽니다. 거기서 쿠팡·네이버에 한 번만 로그인해 두세요">🌐 내 크롬 열기 (로그인)</button>
+        <span class="hint" id="shopLoginState">로그인 상태 확인 중…</span>
+        <button class="ghost" style="padding:2px 8px" onclick="refreshShopLogin(event)">↻ 다시 확인</button>
+      </div>
+      <div class="hint" style="margin-top:5px">🔐 <b>사진이 0장으로 나오면 여기부터 하세요.</b>
+        쿠팡·네이버는 <b>로그인한 브라우저</b>에게만 사진이 든 전체 페이지를 보여줍니다.
+        위 버튼으로 열린 창에서 <b>한 번만 로그인</b>해 두면, 이후 수집이 그 상태로 페이지를 읽어요.
+        (로그인 정보는 이 PC의 컷대장 전용 폴더에만 남고 어디로도 전송되지 않습니다)</div>
+    </div>
     <details class="home-more" id="shopSearchTools">
       <summary>다른 방법: 상품 검색으로 고르기 <span class="hint">— 파트너스·쇼핑커넥트 API를 쓰는 분만</span></summary>
     <details class="opt">
@@ -8998,7 +9034,10 @@ function applyTheme(prefix){
 }
 
 // ── 🛍 쇼핑 링크 감지 (v0.86) — 상품 페이지는 봇 차단 → 붙여넣기 안내 ──
-const SHOP_HOST_RE = /coupang\\.com|coupa\\.ng|smartstore\\.naver\\.com|shopping\\.naver\\.com|brand\\.naver\\.com|11st\\.co\\.kr|gmarket\\.co\\.kr|auction\\.co\\.kr/i;
+// v1.12: naver.me·link.coupang.com 같은 '짧은 주소'가 빠져 있어, 그 링크를 넣으면
+// 화면이 상품 링크로 인정하지 않고 붙여넣기 흐름으로 새어 나갔다 (사진 0장의 한 축).
+// 백엔드 fetch_web.SHORTENER_HOSTS와 같은 목록을 여기서도 본다.
+const SHOP_HOST_RE = /coupang\\.com|coupa\\.ng|smartstore\\.naver\\.com|shopping\\.naver\\.com|brand\\.naver\\.com|11st\\.co\\.kr|gmarket\\.co\\.kr|auction\\.co\\.kr|naver\\.me|me2\\.do/i;
 
 // ── 🛒 쿠팡 파트너스 API (v0.88) — 상품 검색으로 붙여넣기 자동 채우기 ──
 async function saveCoupangKeys(ev){
@@ -9283,6 +9322,12 @@ async function makeShopScript(ev){
   }
   const btn = ev.target; btn.disabled = true; const old = btn.textContent;
   btn.textContent = linkOnly ? '링크에서 자동 수집 중…' : 'AI가 대본으로 정리하는 중…';
+  // 🧹 v1.12: 링크로 새로 수집할 땐 옛 상품 글·사진을 비운다 — 지난번 상품 정보가
+  // 그대로 남아 "상품 정보도 제대로 안 들어온다"로 보이던 혼동을 없앤다.
+  if(linkOnly){
+    const pt = $('shopPasteText'); if(pt) pt.value = '';
+    if(typeof clearShopPhotos === 'function'){ try{ clearShopPhotos(); }catch(_e){} }
+  }
   try{
     const key = ensureGeminiKey();
     const d = await (await fetch('/api/fetch_url', {method:'POST',
@@ -9328,7 +9373,34 @@ async function makeShopScript(ev){
   finally { btn.disabled = false; btn.textContent = old; }
 }
 
+// ── 🔐 쇼핑 로그인 (v1.12) — 쿠팡·네이버는 로그인한 브라우저에만 사진을 다 준다 ──
+async function refreshShopLogin(ev){
+  if(ev) ev.preventDefault();
+  const el = $('shopLoginState'); if(!el) return;
+  try{
+    const d = await (await fetch('/api/shop_login')).json();
+    const hosts = d.hosts || [];
+    el.innerHTML = hosts.length
+      ? '✅ <b>' + hosts.join(' · ') + '</b> 로그인됨'
+      : '⚠ 아직 로그인 안 됨 — 사진이 0장이면 왼쪽 버튼으로 로그인해 주세요';
+  }catch(_e){ el.textContent = '로그인 상태를 확인하지 못했어요'; }
+}
+async function openShopLogin(ev){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true; const old = btn.textContent;
+  btn.textContent = '크롬 여는 중…';
+  try{
+    const d = await (await fetch('/api/shop_login_open', {method:'POST',
+      body: JSON.stringify({url: 'https://www.coupang.com/'})})).json();
+    if(d.error){ alert(d.error); return; }
+    uiBanner('🌐 크롬 창을 열었어요 — 그 창에서 쿠팡(또는 네이버)에 로그인한 뒤, ' +
+             '이 화면으로 돌아와 [↻ 다시 확인]을 눌러주세요');
+  }catch(e){ alert('크롬을 열지 못했어요: ' + e); }
+  finally{ btn.disabled = false; btn.textContent = old; refreshShopLogin(); }
+}
+
 function initShopCard(){
+  refreshShopLogin();
   const nv = $('narrVoiceSel'), sv = $('shopVoiceSel');
   if(nv && sv && nv.options.length && sv.options.length !== nv.options.length){
     const cur = sv.value;

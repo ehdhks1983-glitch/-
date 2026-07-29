@@ -156,7 +156,74 @@ HOOK_STYLES = {
     # ⬛ 블랙 박스 — 검은 띠 위 흰 제목 + 노랑 강조 (참고 릴스 스샷1)
     "블랙 박스": {"primary": "#FFFFFF", "band": True, "band_color": "&H00121212",
                "highlight": "#FFD400"},
+    # 🖼 위아래 띠(썸네일형) — v1.12. 화면 위·아래를 색 띠로 채우고 초대형 제목을
+    # 얹는 '썸네일 프레임' 구성. 기존 스타일은 그대로 두고 고를 때만 적용된다.
+    # 가로 영상을 세로 쇼츠에 넣으면 어차피 위아래가 블러로 비어 있어, 그 자리를
+    # 디자인으로 쓰는 셈이라 영상이 더 작아지지 않는다.
+    "위아래 띠": {"frame": True, "primary": "#FFFFFF", "band": False,
+               "outline": 6, "outline_color": "#0A0A0A", "shadow": 0,
+               "highlight": "#3DF5C0", "frame_bg": "&H00141110",
+               "frame_accent": "#3DF5C0"},
 }
+
+FRAME_SPLIT = "//"   # 훅 "큰 제목 // 아래 띠 문구" — 위아래 띠 스타일에서만 의미
+
+
+def frame_band_lines(hook: str, spec, style, hs: dict, sc, wide: bool) -> list:
+    """🖼 위아래 띠(썸네일형) 이벤트 — 위/아래 색 띠 + 초대형 제목 + 아래 문구.
+
+    ``제목 // 아래 문구``로 나눠 쓰고, 아래 문구가 없으면 띠만 깔아 프레임을 만든다.
+    제목 안의 ``|``(강조)·색 마크업은 기존 훅과 똑같이 동작한다.
+    영상 자체는 건드리지 않는 순수 오버레이라 길이·싱크에 영향이 없다.
+    """
+    w, h = spec.canvas.w, spec.canvas.h
+    top_txt, _, bot_txt = hook.partition(FRAME_SPLIT)
+    top_txt, bot_txt = top_txt.strip(), bot_txt.strip()
+    if not top_txt:
+        return []
+    band_h = round(h * (0.15 if wide else 0.20))       # 위 띠 높이
+    bot_h = round(h * (0.13 if wide else 0.17))        # 아래 띠 높이
+    bg = hs.get("frame_bg", "&H00141110")
+    start, end = us_to_ass(0), us_to_ass(spec.duration_us)
+
+    def rect(y0: int, y1: int) -> str:
+        # layer 3 = 영상 위·글자 아래. \p1 드로잉으로 꽉 찬 사각형을 깐다.
+        return (f"Dialogue: 3,{start},{end},Title,,0,0,0,,"
+                + "{\\an7\\pos(0," + str(y0) + ")\\p1\\bord0\\shad0\\1c" + bg
+                + "\\1a&H10&}" + f"m 0 0 l {w} 0 {w} {y1 - y0} 0 {y1 - y0}")
+
+    lines = [rect(0, band_h), rect(h - bot_h, h)]
+    # 초대형 제목 — 띠 높이에 맞춰 2줄까지, 기존 훅 문법(강조·마크업) 그대로
+    body = hook_dialogue_text(_wrap_two_lines(top_txt, 11 if wide else 9),
+                              style, primary=hs.get("primary", "#FFFFFF"),
+                              highlight=hs.get("highlight", ""))
+    big = round(h * (0.062 if wide else 0.072))
+    lines.append(
+        f"Dialogue: 4,{start},{end},Title,,0,0,0,,"
+        + "{\\an5\\pos(" + str(w // 2) + "," + str(band_h // 2) + ")"
+        + "\\fs" + str(big) + "\\b1\\bord" + str(sc(hs.get("outline", 6)))
+        + "\\shad0}" + body)
+    if bot_txt:
+        small = round(h * (0.030 if wide else 0.034))
+        lines.append(
+            f"Dialogue: 4,{start},{end},Title,,0,0,0,,"
+            + "{\\an5\\pos(" + str(w // 2) + "," + str(h - bot_h // 2) + ")"
+            + "\\fs" + str(small) + "\\b1\\bord" + str(sc(3)) + "\\shad0\\1c"
+            + _inline_color(hs.get("frame_accent", "#3DF5C0")) + "}"
+            + escape_ass_text(bot_txt))
+    return lines
+
+
+def _wrap_two_lines(text: str, per_line: int) -> str:
+    """초대형 제목을 최대 2줄로 — 가운데에서 가장 가까운 띄어쓰기 기준."""
+    t = " ".join(str(text or "").split())
+    if len(t) <= per_line or " " not in t:
+        return t
+    mid, best = len(t) // 2, -1
+    for i, ch in enumerate(t):
+        if ch == " " and (best < 0 or abs(i - mid) < abs(best - mid)):
+            best = i
+    return t[:best] + "\\N" + t[best + 1:] if best > 0 else t
 
 
 def hook_dialogue_text(hook: str, style, primary: str = "#FFFFFF",
@@ -426,8 +493,12 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         title_ml=sc(90),   # 제목 좌우 여백
     )
     lines = []
+    # 🖼 위아래 띠(썸네일형) — v1.12. 고른 사람만 이 경로를 타고, 나머지 스타일은
+    # 아래 기존 오버레이 그대로다 (회원님 요청: "기존 것은 유지하고 하나 추가").
+    if spec.hook.strip() and hs.get("frame"):
+        lines += frame_band_lines(spec.hook.strip(), spec, style, hs, sc, wide)
     # 상단 제목(훅) — 영상 내내 고정 표시
-    if spec.hook.strip():
+    elif spec.hook.strip():
         hook_body = hook_dialogue_text(
             spec.hook.strip(), style, primary=hook_primary,
             highlight=hs.get("highlight", ""),

@@ -181,21 +181,117 @@ def _browser_candidates() -> List[str]:
     return [c for c in cands if Path(c).is_file()]
 
 
+def login_profile_dir() -> Path:
+    """🔐 컷대장 전용 브라우저 프로필 — 회원님이 여기에 한 번 로그인해 둔다 (v1.12).
+
+    쿠팡·네이버 상품 페이지는 **로그인한 브라우저**에게만 사진이 든 전체 페이지를
+    준다. 지금까지는 매번 빈 임시 프로필로 헤드리스를 띄워 로그인이 하나도 없었고,
+    그래서 "블로그(제휴) 프로그램에서는 사진이 잘 들어오는데 컷대장만 0장"이었다.
+    (그 프로그램은 '크롬 열기'로 회원님 브라우저를 띄우고 거기서 로그인하게 한다.)
+
+    ⚠ 이건 봇 차단 우회가 아니다 — 회원님 본인의 브라우저·본인의 로그인을 쓴다.
+    자동 로그인·캡차 우회 같은 것은 하지 않는다.
+    """
+    import os  # noqa: PLC0415
+
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return Path(base) / "cutdaejang" / "browser_profile"
+
+
+def logged_in_hosts() -> List[str]:
+    """로그인 프로필에 쿠키가 남아 있는 쇼핑몰 목록 (화면 표시용).
+
+    쿠키 값은 읽지 않는다 — 어느 사이트에 로그인돼 있는지 **호스트 이름만** 본다.
+    """
+    import shutil  # noqa: PLC0415
+    import sqlite3  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    prof = login_profile_dir()
+    db = next((p for p in (prof / "Default" / "Network" / "Cookies",
+                           prof / "Default" / "Cookies") if p.is_file()), None)
+    if not db:
+        return []
+    tmp = Path(tempfile.mkdtemp()) / "c.db"        # 브라우저가 켜져 있으면 잠겨 있음
+    try:
+        shutil.copy2(db, tmp)
+        with sqlite3.connect(f"file:{tmp}?mode=ro", uri=True) as con:
+            hosts = {str(r[0]).lstrip(".").lower()
+                     for r in con.execute("SELECT DISTINCT host_key FROM cookies")}
+    except Exception:  # noqa: BLE001 — 못 읽으면 '모름'으로
+        return []
+    finally:
+        shutil.rmtree(tmp.parent, ignore_errors=True)
+    known = {"coupang.com": "쿠팡", "naver.com": "네이버",
+             "11st.co.kr": "11번가", "gmarket.co.kr": "지마켓", "auction.co.kr": "옥션"}
+    return sorted({ko for h in hosts for dom, ko in known.items()
+                   if h == dom or h.endswith("." + dom)})
+
+
+def open_login_browser(url: str = "https://www.coupang.com/") -> str:
+    """🌐 [내 크롬 열기] — 전용 프로필로 브라우저를 **눈에 보이게** 띄운다 (v1.12).
+
+    회원님이 그 창에서 쿠팡·네이버에 로그인하면 세션이 이 프로필에 남고, 이후
+    사진 수집이 같은 로그인 상태로 페이지를 읽는다. 실패하면 사유 문자열 반환.
+    """
+    import subprocess  # noqa: PLC0415
+
+    exes = _browser_candidates()
+    if not exes:
+        return "PC에서 크롬·엣지를 찾지 못했어요 — 크롬을 설치한 뒤 다시 눌러주세요"
+    prof = login_profile_dir()
+    prof.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.Popen(
+            [exes[0], f"--user-data-dir={prof}", "--no-first-run",
+             "--no-default-browser-check", "--new-window", url],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:  # noqa: BLE001
+        return f"브라우저를 열지 못했어요: {str(e)[:120]}"
+    return ""
+
+
+def _collect_profile() -> str:
+    """수집용 프로필 경로 — 로그인 프로필이 있으면 **복제해서** 쓴다 (v1.12).
+
+    같은 프로필로 두 개를 동시에 띄울 수 없어(크로미움 제약), 로그인 창을 켜 둔
+    채로도 수집이 되도록 쿠키·설정만 임시 폴더로 복사한다. 로그인해 둔 적이
+    없으면 예전처럼 빈 임시 프로필(cutdaejang_headless)을 쓴다.
+    """
+    import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    src = login_profile_dir()
+    if not (src / "Default").is_dir():
+        return os.path.join(tempfile.gettempdir(), "cutdaejang_headless")
+    dst = Path(tempfile.gettempdir()) / "cutdaejang_session"
+    try:
+        shutil.rmtree(dst, ignore_errors=True)
+        (dst / "Default" / "Network").mkdir(parents=True, exist_ok=True)
+        for rel in ("Local State", "Default/Preferences", "Default/Cookies",
+                    "Default/Network/Cookies", "Default/Login Data"):
+            s = src / rel
+            if s.is_file():
+                shutil.copy2(s, dst / rel)
+    except Exception:  # noqa: BLE001 — 복제 실패면 빈 프로필로 (기존 동작)
+        return os.path.join(tempfile.gettempdir(), "cutdaejang_headless")
+    return str(dst)
+
+
 def _browser_args(exe: str, url: str) -> List[str]:
-    """헤드리스 실행 인자 — 반드시 전용 임시 프로필을 쓴다 (v0.97 핵심 수정).
+    """헤드리스 실행 인자 — 전용 프로필을 쓴다 (v0.97 핵심 수정 → v1.12 로그인).
 
     크로미움은 같은 프로필의 브라우저가 이미 떠 있으면 새 프로세스가 기존 창에
     신호만 보내고 즉시 종료한다 → 사용자가 엣지/크롬을 켜 둔 채면 --dump-dom이
-    빈손으로 끝났다 (사용자 리포트 "사진이 안 들어와"의 주범). 전용
-    --user-data-dir로 항상 독립 헤드리스 인스턴스를 띄운다.
-    """
-    import os  # noqa: PLC0415
-    import tempfile  # noqa: PLC0415
+    빈손으로 끝났다. 전용 --user-data-dir로 항상 독립 인스턴스를 띄운다.
 
-    profile = os.path.join(tempfile.gettempdir(), "cutdaejang_headless")
+    v1.12: [내 크롬 열기]로 로그인해 둔 프로필이 있으면 그 **복제본**을 쓴다 —
+    로그인 상태 그대로 페이지를 읽어야 쿠팡·네이버가 사진을 다 내려준다.
+    """
     return [exe, "--headless=new", "--disable-gpu", "--disable-extensions",
             "--no-first-run", "--no-default-browser-check", "--mute-audio",
-            f"--user-data-dir={profile}", "--window-size=1280,2400",
+            f"--user-data-dir={_collect_profile()}", "--window-size=1280,2400",
             "--virtual-time-budget=12000", "--timeout=30000", "--dump-dom", url]
 
 

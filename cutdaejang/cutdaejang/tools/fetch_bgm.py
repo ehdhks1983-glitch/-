@@ -35,6 +35,47 @@ TRACKS = [
     ("미스터리", "Cipher"),                 # 정보·추리·긴장
     ("미스터리", "Investigations"),         # 수사·의문
     ("정보형", "Deliberate Thought"),       # 설명·지식 전달
+    # ── v1.12 확장: 분위기를 세분화해 고르기 쉽게 (전부 같은 CC BY 라이브러리) ──
+    ("코믹", "Pixel Peeker Polka - faster"),  # 빠른 폴카 — 몰아치는 편집
+    ("코믹", "Scheming Weasel faster"),       # 장난·음모 (예능 자막 단골)
+    ("코믹", "Rock the Fireplace"),           # 통통 튀는 코믹 록
+    ("예능", "Bumbly March"),                 # 어영부영·귀여운 실패
+    ("예능", "Comic Plodding"),               # 느긋한 코믹
+    ("예능", "Marty Gots a Plan"),            # 리듬감 있는 진행
+    ("브이로그", "Cheery Monday"),            # 월요일 아침 같은 산뜻함
+    ("브이로그", "Sunday Plans"),             # 주말 브이로그
+    ("브이로그", "Blippy Trance"),            # 담백한 반복 — 작업 영상
+    ("브이로그", "Odyssey"),                  # 여행·이동
+    ("신나는", "Airport Lounge"),             # 라운지 그루브
+    ("신나는", "Bounce"),                     # 튀는 리듬
+    ("신나는", "Funkorama"),                  # 펑키한 소개
+    ("신나는", "Groove Grove"),               # 밝은 그루브
+    ("잔잔", "Peaceful Desolation"),          # 고요·여백
+    ("잔잔", "Piano Sonata No 15 in D major"),   # 피아노 잔잔
+    ("잔잔", "Almost in F - Tranquillity"),   # 차분한 배경
+    ("잔잔", "Waterford"),                    # 물결처럼 잔잔
+    ("감동", "Touching Moment"),              # 뭉클한 마무리
+    ("감동", "Heartwarming"),                 # 따뜻한 회상
+    ("감동", "Reverie (small theme)"),        # 서정적 회고
+    ("긴장", "Anxiety"),                      # 불안·경고
+    ("긴장", "Long Note Two"),                # 서서히 조여드는 긴장
+    ("긴장", "Redletter"),                    # 사건·긴박
+    ("미스터리", "Mysterioso March"),         # 수상한 행진
+    ("미스터리", "Enter the Party"),          # 은근한 의문
+    ("시네마틱", "Ossuary 6 - Air"),          # 어둡고 웅장
+    ("시네마틱", "Ethereal Relaxation"),      # 넓고 서늘한 공간감
+    ("시네마틱", "Impact Prelude"),           # 오프닝 임팩트
+    ("뉴스·리뷰", "News Theme"),              # 뉴스·브리핑
+    ("뉴스·리뷰", "The Descent"),             # 진지한 설명
+    ("뉴스·리뷰", "Inspired"),                # 리뷰·소개 표준
+    ("로파이", "Lobby Time"),                 # 로파이 힙합 느낌
+    ("로파이", "Bass Walker"),                # 걷는 듯한 베이스
+    ("로파이", "Backbay Lounge"),             # 재즈 라운지
+    ("트렌디", "Hackbeat"),                   # 테크·디지털
+    ("트렌디", "Electrodoodle"),              # 밝은 일렉
+    ("트렌디", "Itty Bitty 8 Bit"),           # 레트로 게임풍
+    ("정보형", "Wholesome"),                  # 담백한 정보 전달
+    ("정보형", "Study and Relax"),            # 공부·집중
 ]
 
 CREDIT_FILE = "음원_크레딧(설명란에_붙여넣기).txt"
@@ -109,6 +150,11 @@ def main(bgm_dir=None, fetch_fn=fetch) -> tuple:
         (out / CREDIT_FILE).write_text(credit_text(ok), encoding="utf-8")
     print()
     print(f"완료: {len(ok)}곡 준비 / 실패 {len(fail)}곡")
+    if fail:
+        # 원저작자 사이트에서 곡 이름이 바뀌거나 잠깐 막히면 그 곡만 실패한다.
+        # 나머지는 이미 다 받았으니 그대로 쓰면 되고, 재실행하면 실패분만 다시 시도한다.
+        print(f"  못 받은 곡: {', '.join(fail[:8])}{' 외' if len(fail) > 8 else ''}")
+        print("  → 인터넷 상태 문제일 수 있어요. 다시 실행하면 이 곡들만 재시도합니다.")
     if ok:
         print(f"크레딧 문구: resources/bgm/{CREDIT_FILE}  ← 영상 설명란에 붙여넣기!")
         print("컷대장 화면을 새로고침(F5)하면 BGM 목록에 나타납니다.")

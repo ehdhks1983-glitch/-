@@ -995,8 +995,20 @@ UPLOAD_KIT_PROMPT = """너는 한국 숏폼 알고리즘·검색(SEO) 전문가�
 - 영상에 없는 내용으로 낚지 않는다 — 낚시는 초반 이탈을 낳아 알고리즘 점수를 깎는다.
 
 [유튜브 — 노출 = ① 추천 피드에서 안 넘기고 보게 ② 검색·연관 동영상 유입]
-- titles: 정확히 4개, 각 40~60자. ① 틈새 검색어로 시작하는 검색형 ② 구체적 숫자·결과 제시형
-  ③ 내용 기반 궁금증형 ④ 타깃 호명형("○○ 하는 분만"). 핵심 검색어는 앞 20자 안에(모바일 잘림).
+- titles: 정확히 8개, 각 40~60자. 아래 8가지 공식을 **하나씩 정확히 한 번만** 써서
+  서로 완전히 다른 8개를 만든다 (같은 공식 두 번 금지 — 비슷한 제목이 나오면 실패다):
+  ① 검색형 — 틈새 검색어로 시작 ("○○ 안될 때 …")
+  ② 숫자·결과형 — 구체적 수치나 결과 ("3일 만에 …", "12,900원으로 …")
+  ③ 궁금증형 — 영상 안 내용으로만 만든 질문 ("왜 …일까?")
+  ④ 타깃 호명형 — 누구를 위한 것인지 ("○○ 하는 분만 보세요")
+  ⑤ 역설·반전형 — 통념을 뒤집는 사실 ("사실 …는 필요 없었습니다")
+  ⑥ 경고·실수형 — 손해를 막는 각도 ("이거 모르고 사면 …")
+  ⑦ 비교형 — 둘을 맞붙임 ("○○ vs △△, 실제로 써보니")
+  ⑧ 후기·경험형 — 직접 해본 사람의 말 ("한 달 써보고 남긴 솔직 후기")
+  핵심 검색어는 앞 20자 안에(모바일 잘림).
+- title_kinds: titles와 같은 순서로 각 제목이 어떤 공식인지 정확히 8개
+  ("검색","숫자","궁금증","타깃","역설","경고","비교","후기" 중 하나씩).
+- ⚠ 8개 제목의 **첫 두 어절이 서로 겹치면 안 된다**. 문장 구조도 서로 달라야 한다.{recent}
 - title_tags: 제목 뒤에 붙일 짧은 해시태그 2~3개(각 8자 이내 단어, ＃ 없이) —
   제목과 합쳐 100자를 넘지 않게.
 - description: 첫 125자 안에 핵심 검색어 2개가 자연스럽게 든 요약(검색 미리보기 노출 구간),
@@ -1014,9 +1026,12 @@ UPLOAD_KIT_PROMPT = """너는 한국 숏폼 알고리즘·검색(SEO) 전문가�
   tiktok.caption: 150자 이내, 밝고 가벼운 해요체(존댓말) — 반말 금지 (예: "~해요", "~예요", "~해보세요").
   검색어가 든 문장을 캡션 앞부분에 자연스럽게, 이모지 1~2개, 행동 유도 1개.
   tiktok.hashtags: 3~5개(넓은 태그 1~2 + 틈새 태그 2~3, ＃ 없이. fyp·viral 같은 무의미 태그 금지)
+  tiktok.title: 화면 위에 얹을 짧은 훅 한 줄 20자 이내 — 유튜브 제목을 그대로 쓰지 말 것.
+  틱톡은 첫 1초 화면 글자로 이탈이 갈리므로 **더 짧고 구어체**로 (예: "이거 모르면 손해")
 [인스타그램 릴스 — 캡션 텍스트가 인스타 검색에 인덱싱된다]
   instagram.caption: 친근한 해요체. 첫 줄은 125자 안에 끝나는 훅(검색어 포함), 빈 줄 하나,
   본문 2~3줄 + 행동 유도. instagram.hashtags: 3~5개(＃ 없이 — 과다 태그는 역효과)
+  instagram.title: 릴스 커버에 얹을 한 줄 18자 이내 — 감성·공감 각도로 (유튜브 제목 재사용 금지)
 [네이버 클립 — 네이버 검색·클립 탭 노출, 태그가 검색 연결의 핵심]
   naver_clip.title: 검색형 제목 30자 이내 — 네이버에 검색할 법한 명사구를 맨 앞에.
   naver_clip.tags: 10~12개(＃ 없이) — 네이버 검색어 스타일 명사구, 대중 3~4 + 틈새 6~8,
@@ -1029,11 +1044,11 @@ UPLOAD_KIT_PROMPT = """너는 한국 숏폼 알고리즘·검색(SEO) 전문가�
   내 경험을 나누듯 자연스러운 첫 문장으로 시작하고, 마지막은 부드러운 반말 질문으로 답글 유도 (예: "너희는 어떻게 해?"). 이모지 0~1개. 본문에 해시태그 금지(토픽으로 대신).
   threads.topic: 토픽 태그 딱 1개(스레드는 태그를 1개만 지원)
 JSON만 출력:
-{{"titles": ["..."], "title_tags": ["..."], "description": "...", "tags": ["..."],
+{{"titles": ["..."], "title_kinds": ["..."], "title_tags": ["..."], "description": "...", "tags": ["..."],
   "keywords": ["..."], "niche_keywords": ["..."], "pinned_comment": "...",
   "hashtags": ["..."], "category": "...", "category_reason": "한 문장",
-  "tiktok": {{"caption": "...", "hashtags": ["..."]}},
-  "instagram": {{"caption": "...", "hashtags": ["..."]}},
+  "tiktok": {{"caption": "...", "hashtags": ["..."], "title": "..."}},
+  "instagram": {{"caption": "...", "hashtags": ["..."], "title": "..."}},
   "naver_clip": {{"title": "...", "tags": ["..."], "category1": "...", "category2": "..."}},
   "threads": {{"post": "...", "topic": "..."}}}}"""
 
@@ -1051,7 +1066,8 @@ KIT_STAGE_NOTES = {
 
 def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: int = 0,
                        is_shorts: bool = True, hook: str = "", channel: Optional[dict] = None,
-                       stage: str = "", model: str = "gemini-2.5-flash", api_key=None) -> dict:
+                       stage: str = "", recent_titles: Optional[list] = None,
+                       model: str = "gemini-2.5-flash", api_key=None) -> dict:
     """장면 캡처+대본으로 유튜브 업로드 문구(제목·설명·태그·키워드·카테고리) 생성."""
     import os  # noqa: PLC0415
 
@@ -1065,7 +1081,13 @@ def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: in
               f"타깃 시청자: {channel.get('audience') or '-'}")
     st = KIT_STAGE_NOTES.get(str(stage or "").strip(), "")
     tr = f"[영상 속 대사]\n{transcript.strip()[:3500]}" if transcript.strip() else ""
+    # 🔁 v1.12: 최근에 쓴 제목을 알려주고 "이것들과 겹치지 말 것"을 지시 —
+    #    비슷한 영상이면 비슷한 제목만 나오던 문제(회원님 리포트)의 직접 대응.
+    rt = [str(x).strip() for x in (recent_titles or []) if str(x).strip()][:10]
+    recent = ("\n- ⚠ 이 채널이 최근에 쓴 제목들이다. **이것들과 표현·구조가 겹치면 안 된다**:\n  "
+              + "\n  ".join(f"· {x[:60]}" for x in rt)) if rt else ""
     prompt = UPLOAD_KIT_PROMPT.format(
+        recent=recent,
         with_tr="와 대사" if tr else "", channel=ch,
         stage=("\n" + st if st else ""), dur=duration_s or "?",
         shape=("세로 쇼츠" if is_shorts
@@ -1108,7 +1130,10 @@ def normalize_kit(out: dict) -> dict:
     nc = out.get("naver_clip") or {}
     th = out.get("threads") or {}
     return {
-        "titles": [str(x)[:60] for x in out.get("titles", [])][:5],
+        # 🎯 v1.12: 4개→8개, 서로 다른 공식으로 강제 배분 (제목이 다 비슷하던 문제)
+        "titles": [str(x)[:60] for x in out.get("titles", [])][:8],
+        "title_kinds": [str(x).strip()[:6]
+                        for x in out.get("title_kinds", []) if str(x).strip()][:8],
         "title_tags": _norm_words(out.get("title_tags"), 3, each=12),  # 제목 옆 2~3개
         "description": str(out.get("description", ""))[:1200],
         "tags": [str(x).strip()[:30] for x in out.get("tags", []) if str(x).strip()][:20],
@@ -1120,10 +1145,13 @@ def normalize_kit(out: dict) -> dict:
         "hashtags": _norm_words(out.get("hashtags"), 3),
         "category": cat,
         "category_reason": str(out.get("category_reason", ""))[:200],
+        # 플랫폼마다 알고리즘이 달라 제목도 따로 뽑는다 (v1.12)
         "tiktok": {"caption": str(tk.get("caption", ""))[:300],
-                   "hashtags": _norm_words(tk.get("hashtags"), 5)},
+                   "hashtags": _norm_words(tk.get("hashtags"), 5),
+                   "title": str(tk.get("title", "")).strip()[:40]},
         "instagram": {"caption": str(ig.get("caption", ""))[:1000],
-                      "hashtags": _norm_words(ig.get("hashtags"), 5)},
+                      "hashtags": _norm_words(ig.get("hashtags"), 5),
+                      "title": str(ig.get("title", "")).strip()[:40]},
         "naver_clip": {"title": str(nc.get("title", ""))[:40],
                        "tags": _norm_words(nc.get("tags"), 12),
                        # 📂 1차/2차 카테고리 추천 (v0.87) — 업로드 화면에서 고르는 용

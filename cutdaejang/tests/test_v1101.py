@@ -50,7 +50,7 @@ def test_sections_use_one_timeline_for_final_voice_and_subtitles():
 
 
 def test_done_edit_button_reopens_section_project():
-    assert __version__ == "1.11.1"
+    assert __version__ == "1.12.0"
     html = webui._HTML
 
     for token in (
