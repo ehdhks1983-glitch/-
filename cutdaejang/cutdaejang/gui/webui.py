@@ -2039,7 +2039,9 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
 
         settings = config.load_settings()
         secs = [s for s in (params.get("sections") or [])
-                if str(s.get("narration") or "").strip()]
+                if str(s.get("narration") or "").strip()
+                or str(s.get("video_path") or "").strip()
+                or (s.get("start_us") is not None and s.get("end_us") is not None)]
         if not secs:
             _set_job(job_id, status="failed", errors=["구간이 없습니다 — 구간을 추가해 주세요"])
             return
@@ -2141,6 +2143,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         fps_meta, reused = {}, 0
         n = len(secs)
         outs, out_titles, errors, notes = [], [], [], []
+        silent_secs: list = []      # 🔇 내레이션 없이 클립 그대로 들어간 구간 (v1.16)
         if auto_hook:
             notes.append(f"🪝 훅 제목을 AI가 지었어요: “{auto_hook}” — 다음엔 직접 넣거나 '없음'으로 끌 수 있어요")
         # 🎙 목소리는 구간 경계를 무시하고 전체 대본 순서로 묶어 합성한다. 여러 문장을
@@ -2233,13 +2236,16 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 subs, clips2, _ = edit_mode.retime_narration(
                     clips, subs0, 0, job_dir, fit="freeze",
                     lead_us=narr_lead_us, gap_us=narr_gap_us)  # 순차 배치 (실측 길이)
-                narr_end = (subs[-1].end_us + narr_tail_us) if subs else 1_000_000
+                # 🔇 v1.16: 내레이션이 없으면(0) 클립을 자르지 않고 **그대로** 쓴다 —
+                # 인트로·브릿지 구간. 예전 폴백(1초)은 클립을 1초로 압축해 버렸다.
+                narr_end = (subs[-1].end_us + narr_tail_us) if subs else 0
                 dur = ff.probe_duration_us(video)
                 # ⏩ 구간별 배속 (v0.82) — ""=자동(몽타주) | "fit"=배속으로 길이 맞춤 | "1.5"/"2"/"3"
                 sp = str(sec.get("speed") or "").strip()
                 if sp:
                     if sp == "fit":
-                        factor = max(1.0, min(8.0, dur / max(1, narr_end)))
+                        factor = (max(1.0, min(8.0, dur / max(1, narr_end)))
+                                  if narr_end else 1.0)
                     else:
                         try:
                             factor = max(0.5, min(8.0, float(sp)))
@@ -2251,6 +2257,12 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                         video = video_editor.speed_video(
                             video, factor, str(job_dir / f"sec_{i}_spd.mp4"))
                         dur = ff.probe_duration_us(video)
+                if not narr_end:                     # 🔇 무나레이션 → 클립 길이 그대로
+                    narr_end = dur
+                    silent_secs.append(i)
+                    _set_job(job_id, stage="cut", frac=base,
+                             note=f"🎞 구간 {i}/{n} — 내레이션 없이 클립 그대로 "
+                                  f"({dur / 1e6:.0f}초)")
                 cut = video
                 if dur > narr_end + 1_000_000:      # 📹 핵심 조각 몽타주로 압축
                     _set_job(job_id, stage="cut", frac=base,
@@ -2416,6 +2428,10 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         msg = f"🎞 구간 {len(outs)}개 · 총 {int(total_s // 60)}분 {int(total_s % 60)}초"
         if reused:
             msg += f" · ♻ 안 바뀐 {reused}구간은 이전 결과 재사용"
+        if silent_secs:                      # 🔇 v1.16 — 어떻게 들어갔는지 분명히
+            notes.append("🔇 구간 " + "·".join(map(str, silent_secs))
+                         + "번은 내레이션 없이 클립 화면만 그대로 들어갔어요 "
+                           "(원본 소리는 안 들어가요 — BGM·화면 자막은 적용)")
         _record_simple_history(   # 📜 완료 표시보다 먼저 기록 (v0.98 — 완료 직후
             # 히스토리를 읽으면 아직 안 보이던 찰나의 레이스 제거)
             workdir, job_id,
@@ -3503,8 +3519,13 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json({"ok": True, "sections": secs, "via": via})
         elif path == "/api/section_edit":  # 🎞 구간 대본 영상 (v0.80)
+            # 🔇 v1.16: 내레이션 없이 클립(또는 시간 범위)만 있는 구간도 인정 —
+            # 인트로·브릿지가 조용히 빠지던 문제 (회원님 리포트 21번)
             secs = [s for s in (params.get("sections") or [])
-                    if str((s or {}).get("narration") or "").strip()]
+                    if str((s or {}).get("narration") or "").strip()
+                    or str((s or {}).get("video_path") or "").strip()
+                    or ((s or {}).get("start_us") is not None
+                        and (s or {}).get("end_us") is not None)]
             if not secs:
                 self._send_json({"error": "구간이 없습니다 — [➕ 구간 추가]로 구간을 만들어 주세요"}, 400)
                 return
@@ -4683,7 +4704,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.15.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.16.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -9962,11 +9983,35 @@ function addSectionRow(title, narration){
   const zb = document.createElement('button');           // ⤢ 크게 보기 (v1.13)
   zb.className = 'ghost'; zb.textContent = '⤢'; zb.title = '크게 보기 — 넓은 화면에서 대본을 읽고 고쳐요';
   zb.style.cssText = 'padding:4px 10px';
+  // ⬆⬇ 구간 순서 이동 (v1.16) — 행(칸 전부)을 통째로 옮겨서 제목·클립·배속·
+  // 시간·화면 메모·나레이션·화면 자막이 절대 흩어지지 않아요. 손으로 칸을
+  // 하나씩 옮겨 담다 순서가 꼬이던 문제(회원님 리포트 21번)의 해결책.
+  const up = document.createElement('button');
+  up.className = 'ghost sec-up'; up.textContent = '⬆'; up.title = '이 구간을 위로 (내용 전부 함께 이동)';
+  up.style.cssText = 'padding:4px 9px';
+  up.onclick = function(ev){
+    ev.preventDefault();
+    const prev = div.previousElementSibling;
+    if(prev) rows.insertBefore(div, prev);
+    renumberSections();
+    fetch('/api/sec_draft', {method:'POST', body: JSON.stringify({draft: collectSecDraft()})}).catch(function(){});
+  };
+  const dn = document.createElement('button');
+  dn.className = 'ghost sec-down'; dn.textContent = '⬇'; dn.title = '이 구간을 아래로 (내용 전부 함께 이동)';
+  dn.style.cssText = 'padding:4px 9px';
+  dn.onclick = function(ev){
+    ev.preventDefault();
+    const nx = div.nextElementSibling;
+    if(nx) rows.insertBefore(nx, div);
+    renumberSections();
+    fetch('/api/sec_draft', {method:'POST', body: JSON.stringify({draft: collectSecDraft()})}).catch(function(){});
+  };
   const del = document.createElement('button');
   del.className = 'ghost'; del.textContent = '✕'; del.title = '이 구간 삭제';
   del.style.cssText = 'padding:4px 10px';
   del.onclick = function(ev){ ev.preventDefault(); div.remove(); renumberSections(); };
-  head.appendChild(num); head.appendChild(ti); head.appendChild(tm); head.appendChild(zb); head.appendChild(del);
+  head.appendChild(num); head.appendChild(ti); head.appendChild(tm);
+  head.appendChild(up); head.appendChild(dn); head.appendChild(zb); head.appendChild(del);
   const vrow = document.createElement('div');
   vrow.className = 'sec-cliprow';
   vrow.style.cssText = 'display:flex;gap:8px;margin-top:6px;flex-wrap:wrap';
@@ -10364,10 +10409,14 @@ async function startSections(){
         start_us: s != null ? Math.round(s * 1e6) : null,
         end_us: e != null ? Math.round(e * 1e6) : null,
       };
-    }).filter(s => s.narration.trim());
+    // 🔇 v1.16: 내레이션이 없어도 클립(또는 풀영상 범위)이 있으면 구간으로 인정 —
+    // 인트로·브릿지 영상을 앞뒤에 넣을 수 있다. 예전엔 여기서 조용히 버려져
+    // "앞에 넣은 영상이 사라진" 채 완성됐다 (회원님 리포트 21번).
+    }).filter(s => s.narration.trim() || s.video_path ||
+                   (s.start_us != null && s.end_us != null));
   };
   let sections = collect();
-  if(!sections.length){ alert('구간이 없어요 — [➕ 구간 추가]로 구간을 만들고 내레이션을 넣어주세요'); return; }
+  if(!sections.length){ alert('구간이 없어요 — [➕ 구간 추가]로 구간을 만들고 내레이션(또는 클립)을 넣어주세요'); return; }
   if(full){
     const missing = sections.some(s => s.start_us == null || s.end_us == null || s.end_us <= s.start_us);
     if(missing){                     // 시간이 빈 구간이 있으면 자동 제안으로 채우고 진행
