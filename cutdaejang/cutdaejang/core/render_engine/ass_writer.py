@@ -522,18 +522,27 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
     # 🅰 의미 기반 텍스트 카드 장면 (v1.11) — 숫자·펀치·목록·비교·후기·
     # 검색·단계·CTA 8종. 오버레이 방식이라 길이·내레이션·자막 싱크는 그대로다.
     from ..text_cards import (  # noqa: PLC0415
-        accent_spans, is_marked, pick_card_plan, strip_mark)
+        accent_spans, classify_card, is_marked, marked_kind, pick_card_plan,
+        strip_mark)
 
     card_plan = {}
+    _card_texts = [s.text for s in spec.subtitles] if spec.subtitles else []
     if getattr(style, "text_cards", True) and spec.subtitles:
         card_plan = {
             c.index: c.kind for c in pick_card_plan(
-                [s.text for s in spec.subtitles],
+                _card_texts,
                 duration_us=spec.duration_us,
                 density=getattr(style, "card_density", "auto"),
                 content_pack=getattr(style, "card_pack", "auto"),
             )
         }
+    # ✋ 사용자가 직접 [카드] 표시한 문장(구간 '화면 자막' 등)은 카드 연출을
+    # 꺼 두거나 자동 배치 한도가 꽉 차도 반드시 카드로 나온다 (v1.13) —
+    # 안 그러면 무낭독 자막이 하단 일반 자막으로 떨어져 내레이션 자막과 겹친다.
+    for _mi, _mt in enumerate(_card_texts):
+        if is_marked(_mt) and _mi not in card_plan:
+            card_plan[_mi] = (marked_kind(_mt)
+                              or classify_card(_mt, getattr(style, "card_pack", "auto")))
 
     def _card_lines(sub, kind: str) -> list:
         txt = re.sub(r"\[[/가-힣A-Za-z]*\]", "", strip_mark(sub.text)).strip()

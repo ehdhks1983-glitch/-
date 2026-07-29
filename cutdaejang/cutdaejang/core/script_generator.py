@@ -311,6 +311,82 @@ def _clean_speak_line(raw: str) -> str:
     return t.strip()
 
 
+# 🎬 촬영 대본 표기 (v1.13) — 회원님들이 실제로 쓰는 촬영 대본 형식을 그대로 인식:
+#   ① 오프닝 — 0:00 ~ 0:15          ← 소제목 + 시간 범위 → 구간 제목·범위
+#   [화면] 프로그램 실행 직후 …       ← 찍을 것 메모 → 읽지도, 화면에 넣지도 않음
+#   나레이션 안녕하세요. …            ← 읽을 말 → TTS + 하단 자막
+#   [자막] 키워드 입력 → 자동 발행     ← 화면에 크게 박을 한 줄 → 카드로 번인(무낭독)
+_SHOOT_HDR = re.compile(
+    r"^\s*(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮]|\d{1,2}(?:-\d{1,2})?[.)])\s*(.+)$")
+_SHOOT_TIME = re.compile(r"\(?\s*(\d{1,2}:\d{2})\s*[~∼\-—–]\s*(\d{1,2}:\d{2})\s*\)?")
+_SHOOT_MARK = re.compile(r"^\s*\[(화면|자막|나레이션|내레이션)\]\s*(.*)$")
+_SHOOT_NARR = re.compile(r"^\s*(?:나레이션|내레이션)\s*[:：]?\s+(.*)$")
+_MODE_KEY = {"screen": "screen", "caption": "caption", "narr": "narration"}
+
+
+def split_shooting_script(text: str) -> list:
+    """[화면]/나레이션/[자막] 표기가 있는 촬영 대본 → 구간 목록 (v1.13).
+
+    표기가 하나도 없으면 빈 목록을 돌려 기존(AI·문단) 나누기가 그대로 맡는다.
+    반환 항목: {title, start, end, screen, narration, caption} — start/end는
+    "m:ss" 문자열(없으면 빈칸), caption은 한 줄로 합친다.
+    """
+    if not re.search(r"^\s*\[(?:화면|자막)\]", text or "", re.M):
+        return []
+    secs: list = []
+    cur = None
+    mode = "narr"
+
+    def push():
+        nonlocal cur
+        if cur and (cur["narration"].strip() or cur["caption"].strip()
+                    or cur["screen"].strip() or cur["title"]):
+            cur["narration"] = cur["narration"].strip()
+            cur["screen"] = cur["screen"].strip()
+            cur["caption"] = " ".join(cur["caption"].split())  # 자막은 한 줄
+            secs.append(cur)
+        cur = None
+
+    def fresh(title="", start="", end=""):
+        return {"title": title, "start": start, "end": end,
+                "screen": "", "narration": "", "caption": ""}
+
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        h = _SHOOT_HDR.match(line)
+        if h and not _SHOOT_MARK.match(line):
+            push()
+            title = h.group(1).strip()
+            start = end = ""
+            tm = _SHOOT_TIME.search(title)
+            if tm:
+                start, end = tm.group(1), tm.group(2)
+                title = _SHOOT_TIME.sub("", title)
+            cur = fresh(title.strip(" -—–·()"), start, end)
+            mode = "narr"
+            continue
+        if cur is None:                      # 소제목 없이 바로 시작하는 대본
+            cur = fresh()
+        mk = _SHOOT_MARK.match(line)
+        if mk:
+            kind, rest = mk.group(1), mk.group(2)
+            mode = {"화면": "screen", "자막": "caption"}.get(kind, "narr")
+            if rest.strip():
+                cur[_MODE_KEY[mode]] += rest.strip() + "\n"
+            continue
+        nm = _SHOOT_NARR.match(line)
+        if nm:                               # "나레이션 안녕하세요…" 한 줄 형식
+            mode = "narr"
+            if nm.group(1).strip():
+                cur["narration"] += nm.group(1).strip() + "\n"
+            continue
+        cur[_MODE_KEY[mode]] += line.strip() + "\n"
+    push()
+    return secs
+
+
 def split_script_sections(text: str) -> list:
     """구간 대본(마크다운 + [말] 블록) → [{"title","narration"}] (v0.80, 무키 휴리스틱).
 

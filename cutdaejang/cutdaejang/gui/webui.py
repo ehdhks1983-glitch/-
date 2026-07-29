@@ -2321,13 +2321,23 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
         # v1.10.1: "영상을 다 합치고 → 그다음에 내레이션+자막".
         # 구간 파일은 화면만 담고, 실제 TTS 클립 배치표(abs_subs)를 음성과 자막이
         # 함께 사용한다. 부분 재편집·TTS 폴백으로 길이가 바뀌어도 둘이 어긋나지 않는다.
-        all_clips, abs_subs, off = [], [], 0.0
+        all_clips, abs_subs, cap_subs, off = [], [], [], 0.0
         for k, p in enumerate([q for q in plan if "bed" in q]):
             clips_b, subs_b = p["bed"]
             shift = int(off * 1e6)
             abs_subs += [dataclasses.replace(s, start_us=s.start_us + shift,
                                              end_us=s.end_us + shift)
                          for s in subs_b]
+            # 💬 화면 자막 (v1.13) — 촬영 대본의 [자막] 줄. 읽지 않고(무낭독)
+            # 구간 머리에 텍스트 카드로 크게 박는다. 내레이션 베드(all_clips ↔
+            # abs_subs 짝)에는 절대 넣지 않는다 — 클립이 없는 자막이라서.
+            _cap = str((p["sec"].get("caption") or "")).strip()
+            if _cap:
+                from ..core import text_cards as _tc  # noqa: PLC0415
+                _cdur = max(2.0, min(5.0, durs[k] - 0.5))
+                cap_subs += edit_mode.dicts_to_subtitles([{
+                    "text": _tc.CARD_MARK + _cap,
+                    "start_us": shift, "end_us": shift + int(_cdur * 1e6)}])
             all_clips += list(clips_b)
             off += durs[k] - (fade if k < len(outs) - 1 else 0.0)
         if all_clips:
@@ -2345,8 +2355,10 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
                 bed_wav = edit_mode.build_narration_wav(
                     all_clips, abs_subs, total_us, job_dir / "narration_bed.wav")
                 synced = str(job_dir / "sections_synced.mp4")
+                # 자막 렌더에는 화면 자막(카드)을 합류 — 베드(위)는 abs_subs만 썼다
+                final_subs = sorted(abs_subs + cap_subs, key=lambda s: s.start_us)
                 synced_result = edit_mode.render_from_analysis(
-                    final, abs_subs, synced, style=style, layout="keep",
+                    final, final_subs, synced, style=style, layout="keep",
                     hook=str(params.get("hook") or ""), quality=quality,
                     narration_wav=str(bed_wav), orig_audio="mute",
                     progress_cb=lambda f: _set_job(
@@ -2666,6 +2678,51 @@ class _Handler(BaseHTTPRequestHandler):
 
     _MAX_BODY = 16 * 1024 * 1024  # 요청 본문 상한 16MB (v0.70 — 과대 요청 방어)
 
+    def _handle_upload(self) -> None:
+        """📥 탐색기에서 끌어넣은 파일 저장 (v1.13).
+
+        브라우저는 보안상 끌어온 파일의 PC 경로를 알려주지 않는다 — 경로가 함께
+        실려 오면(JS가 먼저 시도) 이 경로는 타지 않고, 안 실려 올 때만 파일을
+        작업 폴더(uploads)로 복사해 그 경로를 쓴다. 본문은 JSON이 아니라 원본
+        바이트라 _read_json 전에 처리하며, 1MB씩 흘려 받아 메모리를 안 잡는다.
+        """
+        import re as _re  # noqa: PLC0415
+        import uuid  # noqa: PLC0415
+        from urllib.parse import parse_qs, urlsplit  # noqa: PLC0415
+
+        q = parse_qs(urlsplit(self.path).query)
+        name = os.path.basename((q.get("name") or ["파일"])[0]).strip() or "파일"
+        name = _re.sub(r'[\\/:*?"<>|]', "_", name)[:120]
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            self._send_json({"error": "빈 파일이에요 — 다시 끌어넣어 주세요"}, 400)
+            return
+        if length > 8 * 1024 ** 3:
+            self._send_json({"error": "8GB가 넘는 파일은 끌어넣기 대신 [선택] 버튼으로 골라주세요"}, 400)
+            return
+        dest_dir = Path(self.server.workdir) / "uploads"  # type: ignore[attr-defined]
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        stem, ext = os.path.splitext(name)
+        dest = dest_dir / f"{stem}_{uuid.uuid4().hex[:6]}{ext}"
+        remain = length
+        try:
+            with open(dest, "wb") as f:
+                while remain > 0:
+                    chunk = self.rfile.read(min(1024 * 1024, remain))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remain -= len(chunk)
+        except OSError as e:
+            dest.unlink(missing_ok=True)
+            self._send_json({"error": f"저장 실패: {e} — 디스크 공간을 확인해 주세요"}, 500)
+            return
+        if remain:
+            dest.unlink(missing_ok=True)
+            self._send_json({"error": "업로드가 중간에 끊겼어요 — 다시 끌어넣어 주세요"}, 400)
+            return
+        self._send_json({"ok": True, "path": str(dest), "name": name})
+
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         if length > self._MAX_BODY:
@@ -2822,6 +2879,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _do_post_inner(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path == "/api/upload_file":   # 📥 드래그 파일 저장 (v1.13) — JSON 아닌 원본 바이트
+            self._handle_upload()
+            return
         try:
             params = self._read_json()
         except json.JSONDecodeError:
@@ -3412,8 +3472,11 @@ class _Handler(BaseHTTPRequestHandler):
             if not text:
                 self._send_json({"error": "대본을 먼저 붙여넣어 주세요"}, 400)
                 return
-            secs = []
-            if os.environ.get("GEMINI_API_KEY"):
+            # 🎬 v1.13: [화면]/나레이션/[자막] 표기가 있는 촬영 대본은 규칙으로 정확히
+            # 나눈다 (AI 불필요·무비용) — 표기 없는 자유 대본만 AI/문단 나누기로.
+            secs = sg.split_shooting_script(text)
+            via = "markers" if secs else ""
+            if not secs and os.environ.get("GEMINI_API_KEY"):
                 try:
                     secs = sg.split_script_sections_ai(text)
                 except Exception as e:  # noqa: BLE001 — AI 실패 → 휴리스틱
@@ -3423,7 +3486,7 @@ class _Handler(BaseHTTPRequestHandler):
             if not secs:
                 self._send_json({"error": "대본에서 구간을 찾지 못했어요 — 문단(빈 줄)로 나눠 붙여넣어 보세요"}, 400)
                 return
-            self._send_json({"ok": True, "sections": secs})
+            self._send_json({"ok": True, "sections": secs, "via": via})
         elif path == "/api/section_edit":  # 🎞 구간 대본 영상 (v0.80)
             secs = [s for s in (params.get("sections") or [])
                     if str((s or {}).get("narration") or "").strip()]
@@ -4604,7 +4667,7 @@ _HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.12.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.13.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5646,7 +5709,9 @@ _HTML = """<!doctype html>
       완성 영상 1개를 만들어요. 구간 길이는 대본의 시간표가 아니라 <b>말을 실제로 읽은 길이</b>를 따라요 (말 안 잘림).</div>
     <details class="opt" id="secScriptBox">
       <summary>📝 대본 통째로 붙여넣기 <span class="hint">— 구간과 내레이션을 자동으로 나눠 아래에 채워드려요</span></summary>
-      <textarea id="secScriptText" style="min-height:140px" placeholder="촬영 대본을 통째로 붙여넣으세요.&#10;[말] 표시가 있는 대본이면 그대로 인식하고, 일반 글이면 문단 단위로 나눠요."></textarea>
+      <textarea id="secScriptText" style="min-height:140px" placeholder="촬영 대본을 통째로 붙여넣으세요.&#10;① 소제목 — 0:00 ~ 0:15 / [화면] 찍을 것 메모 / 나레이션 읽을 말 / [자막] 화면에 박을 한 줄&#10;— 이런 표기가 있으면 제자리에 자동으로 나눠 담고, 일반 글이면 문단 단위로 나눠요."></textarea>
+      <div class="hint" style="margin-top:4px">🎬 <b>[화면]</b> 줄은 읽지도 화면에 넣지도 않는 <b>나만 보는 메모</b>,
+        <b>[자막]</b> 줄은 <b>읽지 않고 화면에 크게</b> 박혀요. <b>나레이션</b>만 목소리로 읽어요.</div>
       <button class="ghost" style="margin-top:6px" id="secSplitBtn" onclick="splitSections(event)">✂️ 구간 자동 나누기</button>
     </details>
     <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>영상 넣는 방식</div>
@@ -6392,6 +6457,17 @@ _HTML = """<!doctype html>
   </details>
 </div>
 
+<!-- ⤢ 구간 대본 크게 보기 (v1.13) — 여기서 고치면 원래 칸에 바로 반영 -->
+<div id="secZoom" class="hidden" style="position:fixed;inset:0;background:rgba(8,10,16,.84);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px">
+  <div style="width:min(880px,94vw);background:#171a23;border:1px solid #2c3347;border-radius:12px;padding:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <b id="secZoomTitle">대본 크게 보기</b>
+      <button class="ghost" onclick="secZoomClose(event)">✕ 닫기</button>
+    </div>
+    <textarea id="secZoomTa" style="width:100%;min-height:52vh;margin-top:10px;font-size:16px;line-height:1.65"></textarea>
+    <div class="hint" style="margin-top:6px">여기서 고치면 아래 구간 칸에 <b>실시간으로 반영</b>돼요 (한 줄 = 자막 한 줄). 다 고쳤으면 [✕ 닫기]</div>
+  </div>
+</div>
 <script>
 let currentJob = null, timer = null;
 const $ = id => document.getElementById(id);
@@ -8530,19 +8606,76 @@ async function copyLogs(ev){
 // ── 📝 작업 임시 저장 (v1.07) — "하다가 멈춰도" 카드별 핵심 입력 자동 저장·복원 ──
 const DRAFT_FIELDS = {
   gen:     ['topic', 'genScript', 'genHook'],
-  edit:    ['editVideo', 'photoPath', 'editScript', 'narrTopic', 'narrFile'],
+  edit:    ['editVideo', 'photoPath', 'photoSec', 'editScript', 'narrTopic', 'narrFile'],
   weblink: ['weblinkUrl'],
   shop:    ['shopPasteText', 'shopLinkInput', 'shopScript', 'shopHook']
 };
 const _draftTimers = {};
+function _fmtClock(ms){
+  const d = new Date(ms); const p = n => String(n).padStart(2, '0');
+  return p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function _setStamp(card, txt){ const el = $('draftStamp_' + card); if(el) el.textContent = txt; }
+function _collectDraft(card){
+  const data = {};
+  (DRAFT_FIELDS[card] || []).forEach(id => { const el = $(id); if(el) data[id] = el.value || ''; });
+  data._ts = Date.now();               // ⏱ 마지막 저장 시각 (v1.13 — 화면에 표시)
+  return data;
+}
 function draftSave(card){
   clearTimeout(_draftTimers[card]);
   _draftTimers[card] = setTimeout(async () => {
-    const data = {};
-    (DRAFT_FIELDS[card] || []).forEach(id => { const el = $(id); if(el) data[id] = el.value || ''; });
-    try{ await fetch('/api/draft', {method:'POST', body: JSON.stringify({card, data})}); }
+    const data = _collectDraft(card);
+    try{
+      await fetch('/api/draft', {method:'POST', body: JSON.stringify({card, data})});
+      _setStamp(card, '자동 저장됨 · ' + _fmtClock(data._ts));
+    }
     catch(e){ /* 저장 실패는 다음 입력 때 재시도 */ }
   }, 900);
+}
+// 💾 모든 카드 공통 임시 저장 바 (v1.13) — 지금까지는 구간 카드에만 버튼이 있었고
+// 나머지는 조용한 자동 저장뿐이라 "저장이 되는 건지" 알 수 없었다.
+async function draftSaveNow(ev, card){
+  ev.preventDefault();
+  const data = _collectDraft(card);
+  try{
+    const d = await (await fetch('/api/draft', {method:'POST',
+      body: JSON.stringify({card, data})})).json();
+    if(d.error){ alert(d.error); return; }
+    _setStamp(card, '✓ 저장했어요 · ' + _fmtClock(data._ts));
+  }catch(e){ alert('임시 저장 오류: ' + e); }
+}
+async function draftClearNow(ev, card){
+  ev.preventDefault();
+  try{
+    await fetch('/api/draft', {method:'POST', body: JSON.stringify({card, data: {}})});
+    if(window._settings && window._settings.ui && window._settings.ui.drafts)
+      window._settings.ui.drafts[card] = {};
+    _setStamp(card, '임시 저장을 비웠어요 (지금 화면 입력은 그대로예요)');
+  }catch(e){ alert('지우기 오류: ' + e); }
+}
+function injectDraftBars(){
+  if(window._draftBars) return; window._draftBars = true;
+  [['gen', 'genCard'], ['edit', 'editCard'], ['weblink', 'weblinkCard'], ['shop', 'shopCard']]
+    .forEach(function(pair){
+      const card = pair[0], host = $(pair[1]);
+      if(!host) return;
+      const bar = document.createElement('div');
+      bar.className = 'chk'; bar.style.cssText = 'gap:8px;margin-top:12px;flex-wrap:wrap';
+      const mk = function(txt, fn, title){
+        const b = document.createElement('button');
+        b.className = 'ghost'; b.textContent = txt; if(title) b.title = title;
+        b.onclick = fn; return b;
+      };
+      bar.appendChild(mk('💾 임시 저장', function(ev){ draftSaveNow(ev, card); },
+                         '지금 쓰던 내용을 저장해 둬요 — 껐다 켜도 이어서 작성'));
+      bar.appendChild(mk('🗑 지우기', function(ev){ draftClearNow(ev, card); },
+                         '저장해 둔 임시 내용만 지워요 (지금 화면 입력은 그대로)'));
+      const sp = document.createElement('span');
+      sp.className = 'hint'; sp.id = 'draftStamp_' + card;
+      bar.appendChild(sp);
+      host.appendChild(bar);
+    });
 }
 function bindDrafts(){
   Object.keys(DRAFT_FIELDS).forEach(card => {
@@ -8565,6 +8698,86 @@ function restoreDrafts(s){
     });
   });
   if(n) uiBanner('📝 이어서 작성하던 내용 ' + n + '칸을 불러왔어요 — 멈춘 곳부터 계속하세요');
+  injectDraftBars();                     // 💾 저장 바가 먼저 있어야 시각을 표시 (v1.13)
+  Object.keys(DRAFT_FIELDS).forEach(card => {
+    const ts = (drafts[card] || {})._ts;
+    if(ts) _setStamp(card, '지난 저장: ' + _fmtClock(ts));
+  });
+}
+
+// ── 📥 파일 끌어다 놓기 (v1.13) — 탐색기에서 입력칸으로 바로 ──
+// 브라우저는 보안상 끌어온 파일의 PC 경로를 알려주지 않는다 → ① 끌어온 데이터에
+// 경로(file://)가 실려 오면 복사 없이 즉시 사용 ② 없으면 로컬 서버로 복사해 사용.
+function _dropPaths(dt){
+  const raw = (dt.getData('text/uri-list') || dt.getData('text/plain') || '');
+  const out = [];
+  raw.split('\\n').forEach(function(u){
+    u = u.trim();
+    if(!u || u.charAt(0) === '#') return;
+    if(u.toLowerCase().indexOf('file://') !== 0) return;
+    let p = decodeURIComponent(u.slice(7));
+    while(p.charAt(0) === '/') p = p.slice(1);
+    if(/^[A-Za-z]:/.test(p)) p = p.split('/').join('\\\\');   // C:/a/b → C:\\a\\b
+    else p = '/' + p;                                          // 리눅스·맥 절대경로
+    out.push(p);
+  });
+  return out;
+}
+async function _uploadDropped(file){
+  const r = await fetch('/api/upload_file?name=' + encodeURIComponent(file.name),
+                        {method: 'POST', body: file});
+  const d = await r.json();
+  if(d.error) throw new Error(d.error);
+  return d.path;
+}
+function enableDrop(el, opts){
+  if(!el || el._dropBound) return; el._dropBound = true;
+  opts = opts || {};
+  const hot = function(on){
+    el.style.outline = on ? '2px dashed #4266d5' : '';
+    el.style.outlineOffset = on ? '2px' : '';
+  };
+  ['dragover', 'dragenter'].forEach(t => el.addEventListener(t, function(e){ e.preventDefault(); hot(true); }));
+  ['dragleave', 'dragend'].forEach(t => el.addEventListener(t, function(){ hot(false); }));
+  el.addEventListener('drop', async function(e){
+    e.preventDefault(); hot(false);
+    const dt = e.dataTransfer; if(!dt) return;
+    const done = function(){ el.dispatchEvent(new Event('input')); if(opts.after){ try{ opts.after(); }catch(_e){} } };
+    const paths = _dropPaths(dt);
+    if(paths.length){ el.value = opts.multi ? paths.join(';') : paths[0]; done(); return; }
+    const files = [...(dt.files || [])];
+    if(!files.length) return;
+    if(files.reduce(function(a, f){ return a + f.size; }, 0) > 200 * 1024 * 1024)
+      uiBanner('📥 큰 파일이라 작업 폴더로 복사 중… 수백 MB는 시간이 걸려요 (멈춘 게 아니에요)');
+    const old = el.value; el.value = '📥 파일 담는 중…';
+    try{
+      const got = [];
+      for(const f of (opts.multi ? files : files.slice(0, 1))) got.push(await _uploadDropped(f));
+      el.value = opts.multi ? got.join(';') : got[0];
+      done();
+      uiBanner('✅ 끌어넣은 파일을 담았어요' + (got.length > 1 ? ' (' + got.length + '개)' : ''));
+    }catch(err){
+      el.value = old;
+      alert('끌어넣기 실패: ' + (err && err.message || err) + ' — 옆의 선택 버튼으로 골라주세요');
+    }
+  });
+}
+function bindDrops(){
+  enableDrop($('editVideo'));                       // ✂ 편집 영상
+  enableDrop($('photoPath'), {multi: true});        // 🖼 사진 여러 장 (세미콜론)
+  enableDrop($('narrFile'));                        // 🎤 녹음 파일
+  enableDrop($('secFullPath'), {after: function(){ try{ loadFullVideo(); }catch(_e){} }});  // 🎥 풀영상
+  [...document.querySelectorAll('#secRows .sec-video')].forEach(function(v){ enableDrop(v); });
+  const z = $('secZoomTa');                         // ⤢ 크게 보기 ↔ 원래 칸 실시간 동기화
+  if(z && !z._mirrorBound){
+    z._mirrorBound = true;
+    z.addEventListener('input', function(){
+      if(window._zoomT){
+        window._zoomT.value = z.value;
+        window._zoomT.dispatchEvent(new Event('input'));
+      }
+    });
+  }
 }
 // ── 👵 쉬운 3버튼 (v1.08) — 숫자 입력과 양방향 연동 ──
 function initEzChips(){
@@ -8639,7 +8852,7 @@ function injectQuickDeco(){
   });
 }
 function fillSettings(s){
-  restoreDrafts(s); bindDrafts();
+  restoreDrafts(s); bindDrafts(); bindDrops();   // 📥 끌어넣기 (v1.13)
   initEzChips(); injectQuickDeco();
   setTimeout(() => { markEzChips(); markQuickDeco(); }, 0);
   $('setFontSize').value = s.subtitle.font_size;
@@ -9708,11 +9921,14 @@ function addSectionRow(title, narration){
   ti.style.cssText = 'flex:1;min-width:140px'; ti.value = title || '';
   const tm = document.createElement('span');           // ⏱ 예상 시간 (v0.82)
   tm.className = 'sec-time hint'; tm.style.cssText = 'white-space:nowrap;color:#7fd18a';
+  const zb = document.createElement('button');           // ⤢ 크게 보기 (v1.13)
+  zb.className = 'ghost'; zb.textContent = '⤢'; zb.title = '크게 보기 — 넓은 화면에서 대본을 읽고 고쳐요';
+  zb.style.cssText = 'padding:4px 10px';
   const del = document.createElement('button');
   del.className = 'ghost'; del.textContent = '✕'; del.title = '이 구간 삭제';
   del.style.cssText = 'padding:4px 10px';
   del.onclick = function(ev){ ev.preventDefault(); div.remove(); renumberSections(); };
-  head.appendChild(num); head.appendChild(ti); head.appendChild(tm); head.appendChild(del);
+  head.appendChild(num); head.appendChild(ti); head.appendChild(tm); head.appendChild(zb); head.appendChild(del);
   const vrow = document.createElement('div');
   vrow.className = 'sec-cliprow';
   vrow.style.cssText = 'display:flex;gap:8px;margin-top:6px;flex-wrap:wrap';
@@ -9764,16 +9980,57 @@ function addSectionRow(title, narration){
   // 자동 배속(핵심 몽타주) 셀렉트는 두 모드 공용 — 범위 줄에도 같이 보임
   rrow.appendChild(rl); rrow.appendChild(si); rrow.appendChild(dash); rrow.appendChild(ei);
   rrow.appendChild(bs); rrow.appendChild(be); rrow.appendChild(bp);
+  // 🎬 화면 메모 (v1.13) — 촬영 참고용. 낭독도, 화면 표시도 안 된다
+  const sn = document.createElement('textarea');
+  sn.className = 'sec-screen';
+  sn.placeholder = '🎬 화면 메모 (선택) — 이 구간에서 뭘 찍을지 나만 보는 메모. 영상·소리에 안 들어가요';
+  sn.style.cssText = 'min-height:44px;margin-top:8px;font-size:13px;color:#9aa3b5;border-style:dashed';
+  sn.oninput = function(){ autoGrow(sn); };
+  // 🎙 나레이션 — 크게, 내용에 맞춰 자동으로 늘어남 (v1.13: 대본 보며 작업하기 편하게)
   const na = document.createElement('textarea');
   na.className = 'sec-narr';
-  na.placeholder = '이 구간에서 읽을 내레이션 — 한 줄 = 자막 한 줄. 이 길이만큼 구간이 만들어져요';
-  na.style.cssText = 'min-height:64px;margin-top:6px'; na.value = narration || '';
-  na.oninput = updateSectionTimes;
-  div.appendChild(head); div.appendChild(vrow); div.appendChild(rrow); div.appendChild(na);
+  na.placeholder = '🎙 이 구간에서 읽을 내레이션 — 한 줄 = 자막 한 줄. 이 길이만큼 구간이 만들어져요';
+  na.style.cssText = 'min-height:112px;margin-top:6px;font-size:15px;line-height:1.55';
+  na.value = narration || '';
+  na.oninput = function(){ updateSectionTimes(); autoGrow(na); };
+  zb.onclick = function(ev){
+    ev.preventDefault();
+    secZoomOpen(na, '구간 ' + (num.textContent || '').replace('.', '') + ' 나레이션 크게 보기');
+  };
+  // 💬 화면 자막 (v1.13) — 구간 시작에 화면 가운데 카드로 크게. 읽지는 않는다
+  const cp = document.createElement('input');
+  cp.type = 'text'; cp.className = 'sec-cap';
+  cp.placeholder = '💬 화면 자막 (선택) — 구간 시작에 화면 가운데 크게 박히는 한 줄 (읽지는 않아요)';
+  cp.style.cssText = 'margin-top:6px';
+  div.appendChild(head); div.appendChild(vrow); div.appendChild(rrow);
+  div.appendChild(sn); div.appendChild(na); div.appendChild(cp);
+  enableDrop(vi);                                        // 📥 클립 끌어넣기 (v1.13)
   rows.appendChild(div);
   renumberSections();
   applySecMode();
+  autoGrow(na);
   return div;
+}
+
+// 📏 내용에 맞춰 입력칸 높이 자동 (v1.13) — 긴 대본도 스크롤 없이 한눈에
+function autoGrow(el){
+  if(!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight + 2, 560) + 'px';
+}
+
+// ⤢ 구간 대본 크게 보기 (v1.13) — 넓은 창에서 읽고 고치면 원래 칸에 바로 반영
+function secZoomOpen(ta, label){
+  window._zoomT = ta;
+  const t = $('secZoomTitle'); if(t) t.textContent = label || '대본 크게 보기';
+  $('secZoomTa').value = ta.value;
+  $('secZoom').classList.remove('hidden');
+  $('secZoomTa').focus();
+}
+function secZoomClose(ev){
+  if(ev) ev.preventDefault();
+  $('secZoom').classList.add('hidden');
+  window._zoomT = null;
 }
 
 // 🎥 영상 넣는 방식 전환 (v0.84) — 풀영상 하나 vs 구간마다 클립
@@ -9856,6 +10113,8 @@ function collectSecDraft(){
     sections: [...(($('secRows')||{}).children || [])].map(d => ({
       title: (d.querySelector('.sec-title')||{}).value || '',
       narration: (d.querySelector('.sec-narr')||{}).value || '',
+      screen: (d.querySelector('.sec-screen')||{}).value || '',   // 🎬 화면 메모 (v1.13)
+      caption: (d.querySelector('.sec-cap')||{}).value || '',     // 💬 화면 자막 (v1.13)
       video_path: ((d.querySelector('.sec-video')||{}).value || '').trim(),
       speed: (d.querySelector('.sec-speed')||{}).value || '',
       start: ((d.querySelector('.sec-start')||{}).value || '').trim(),
@@ -9922,9 +10181,12 @@ function fillSectionsForm(d){
     if(!div) return;
     const set = function(cls, v){ const el = div.querySelector(cls); if(el && v != null && v !== '') el.value = v; };
     set('.sec-video', s.video_path);
+    set('.sec-screen', s.screen);   // 🎬 v1.13
+    set('.sec-cap', s.caption);     // 💬 v1.13
     set('.sec-speed', s.speed);
     set('.sec-start', s.start_us != null ? fmtMMSS(s.start_us / 1e6) : (s.start || ''));
     set('.sec-end', s.end_us != null ? fmtMMSS(s.end_us / 1e6) : (s.end || ''));
+    autoGrow(div.querySelector('.sec-narr')); autoGrow(div.querySelector('.sec-screen'));
   });
   if(!(d.sections || []).length) addSectionRow();
   applySecMode(); updateSectionTimes();
@@ -10030,8 +10292,18 @@ async function splitSections(ev){
       body: JSON.stringify({script_text: text, gemini_key: key, save_key: true})})).json();
     if(d.error){ alert(d.error); return; }
     const rows = $('secRows'); rows.innerHTML = '';
-    (d.sections || []).forEach(s => addSectionRow(s.title || '', s.narration || ''));
-    alert('✂️ 구간 ' + (d.sections || []).length + '개로 나눴어요 — 이제 구간마다 [🎬 클립 선택]으로 영상을 넣어주세요');
+    (d.sections || []).forEach(s => {
+      const div = addSectionRow(s.title || '', s.narration || '');
+      if(!div) return;
+      const set = (cls, v) => { const el = div.querySelector(cls); if(el && v) el.value = v; };
+      set('.sec-screen', s.screen); set('.sec-cap', s.caption);   // 🎬💬 촬영 대본 표기 (v1.13)
+      set('.sec-start', s.start); set('.sec-end', s.end);
+      autoGrow(div.querySelector('.sec-narr')); autoGrow(div.querySelector('.sec-screen'));
+    });
+    updateSectionTimes();
+    alert(d.via === 'markers'
+      ? '🎬 촬영 대본을 알아봤어요! 구간 ' + (d.sections || []).length + '개로 나누고 [화면] 메모·[자막]을 제자리에 담았어요. [화면] 메모는 읽지도 화면에 넣지도 않고, [자막]은 읽지 않고 화면에 크게 박아요'
+      : '✂️ 구간 ' + (d.sections || []).length + '개로 나눴어요 — 이제 구간마다 [🎬 클립 선택]으로 영상을 넣어주세요');
   } catch(e){ alert('구간 나누기 오류: ' + e); }
   finally { btn.disabled = false; btn.textContent = old; }
 }
@@ -10048,6 +10320,8 @@ async function startSections(){
         title: (d.querySelector('.sec-title')||{}).value || '',
         video_path: ((d.querySelector('.sec-video')||{}).value || '').trim(),
         narration: (d.querySelector('.sec-narr')||{}).value || '',
+        screen: (d.querySelector('.sec-screen')||{}).value || '',   // 🎬 메모 — 렌더에 안 들어감 (v1.13)
+        caption: ((d.querySelector('.sec-cap')||{}).value || '').trim(),  // 💬 무낭독 카드 (v1.13)
         speed: (d.querySelector('.sec-speed')||{}).value || '',  // ⏩ 구간별 배속 (v0.82)
         start_us: s != null ? Math.round(s * 1e6) : null,
         end_us: e != null ? Math.round(e * 1e6) : null,
