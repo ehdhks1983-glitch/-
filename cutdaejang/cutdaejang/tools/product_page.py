@@ -198,34 +198,147 @@ def login_profile_dir() -> Path:
     return Path(base) / "cutdaejang" / "browser_profile"
 
 
+_DB_COPY_SUFFIXES = ("", "-journal", "-wal")   # sqlite 본체 + 저널/WAL (-shm은 재생성됨)
+
+_SHOP_HOSTS_KO = {"coupang.com": "쿠팡", "naver.com": "네이버",
+                  "11st.co.kr": "11번가", "gmarket.co.kr": "지마켓",
+                  "auction.co.kr": "옥션"}
+
+
+def _cookie_dbs(prof: Path) -> List[Path]:
+    """프로필 안의 쿠키 DB 후보 전부 — 하위 폴더 이름을 가정하지 않는다 (v1.13.1).
+
+    v1.12는 Default/ 만 봤는데, 브라우저·버전에 따라 다른 프로필 폴더에 만들
+    수 있어 그 PC에서는 로그인해 두고도 "아직 로그인 안 됨"으로 나왔다.
+    """
+    subs = [prof / "Default"]
+    try:
+        subs += sorted(p for p in prof.iterdir()
+                       if p.is_dir() and p.name != "Default")
+    except OSError:
+        pass
+    subs.append(prof)
+    out: List[Path] = []
+    for sub in subs:
+        for db in (sub / "Network" / "Cookies", sub / "Cookies"):
+            if db.is_file() and db not in out:
+                out.append(db)
+    return out
+
+
+def _copy_db_family(src: Path, dst: Path) -> None:
+    """sqlite DB를 -journal·-wal 동반 파일까지 함께 복사 (v1.13.1).
+
+    크로미움은 최신 기록(방금 한 로그인)을 저널/WAL에 먼저 남긴다 — 본체만
+    복사하면 로그인 직후엔 쿠키가 안 보여 "아직 로그인 안 됨"으로 잘못 나오고,
+    수집용 복제 프로필도 로그인 없는 상태로 페이지를 읽었다 (회원님 4차 리포트).
+    """
+    import shutil  # noqa: PLC0415
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    for suf in _DB_COPY_SUFFIXES:
+        s = Path(str(src) + suf)
+        if not s.is_file():
+            continue
+        try:
+            shutil.copy2(s, Path(str(dst) + suf))
+        except OSError:
+            if not suf:                      # 본체 실패만 치명적 — 동반 파일은 선택
+                raise
+
+
+def _read_cookie_hosts(db: Path) -> Tuple[set, int, str]:
+    """쿠키 DB 하나에서 (호스트 집합, 쿠키 개수, 오류) — 값은 절대 읽지 않는다."""
+    import shutil  # noqa: PLC0415
+    import sqlite3  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    tmpdir = Path(tempfile.mkdtemp())
+    try:
+        tmp = tmpdir / "c.db"
+        _copy_db_family(db, tmp)             # 브라우저가 켜져 있으면 원본은 잠김
+        # 복사본이므로 읽기전용을 고집하지 않는다 — WAL 회수(체크포인트)에 쓰기가 필요
+        con = sqlite3.connect(str(tmp))
+        try:
+            rows = [str(r[0]) for r in con.execute("SELECT host_key FROM cookies")]
+        finally:
+            con.close()                      # 윈도우는 열려 있으면 임시 폴더가 안 지워짐
+        return {h.lstrip(".").lower() for h in rows}, len(rows), ""
+    except Exception as e:  # noqa: BLE001 — 못 읽으면 '모름' + 사유를 화면으로
+        return set(), 0, str(e)[:80]
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def login_debug() -> dict:
+    """🩺 로그인 감지 상태를 숫자로 — 화면에 그대로 보여 다음 리포트가 곧 진단이 되게.
+
+    {hosts: [쇼핑몰 한글명], profile: 프로필 폴더 있음?, db: 쿠키 DB 상대경로,
+     cookies: 쿠키 개수 합, browser: 로그인 창을 연 브라우저 이름, error: 읽기 오류}
+    """
+    prof = login_profile_dir()
+    dbs = _cookie_dbs(prof) if prof.is_dir() else []
+    all_hosts: set = set()
+    total, err, first, with_rows = 0, "", "", ""
+    for db in dbs:
+        hosts, n, e = _read_cookie_hosts(db)
+        all_hosts |= hosts
+        total += n
+        err = err or e
+        first = first or str(db.relative_to(prof))
+        if n and not with_rows:
+            with_rows = str(db.relative_to(prof))
+    db_rel = with_rows or first
+    known_ko = sorted({ko for h in all_hosts for dom, ko in _SHOP_HOSTS_KO.items()
+                       if h == dom or h.endswith("." + dom)})
+    return {"hosts": known_ko, "profile": prof.is_dir(), "db": db_rel,
+            "cookies": total, "browser": login_browser_name(), "error": err}
+
+
 def logged_in_hosts() -> List[str]:
     """로그인 프로필에 쿠키가 남아 있는 쇼핑몰 목록 (화면 표시용).
 
     쿠키 값은 읽지 않는다 — 어느 사이트에 로그인돼 있는지 **호스트 이름만** 본다.
     """
-    import shutil  # noqa: PLC0415
-    import sqlite3  # noqa: PLC0415
-    import tempfile  # noqa: PLC0415
+    return login_debug()["hosts"]
 
-    prof = login_profile_dir()
-    db = next((p for p in (prof / "Default" / "Network" / "Cookies",
-                           prof / "Default" / "Cookies") if p.is_file()), None)
-    if not db:
-        return []
-    tmp = Path(tempfile.mkdtemp()) / "c.db"        # 브라우저가 켜져 있으면 잠겨 있음
+
+def _engine_file() -> Path:
+    return login_profile_dir() / "engine.txt"
+
+
+def login_browser_name() -> str:
+    """로그인 창으로 실제 연 브라우저 이름('크롬'/'엣지') — 화면 안내용 (v1.13.1).
+
+    버튼 이름은 '내 크롬 열기'지만 PC에 따라 엣지가 열릴 수 있다 — 안내 문구가
+    실제 열린 창과 다르면 회원님이 엉뚱한 창에서 로그인하게 된다.
+    """
     try:
-        shutil.copy2(db, tmp)
-        with sqlite3.connect(f"file:{tmp}?mode=ro", uri=True) as con:
-            hosts = {str(r[0]).lstrip(".").lower()
-                     for r in con.execute("SELECT DISTINCT host_key FROM cookies")}
-    except Exception:  # noqa: BLE001 — 못 읽으면 '모름'으로
-        return []
-    finally:
-        shutil.rmtree(tmp.parent, ignore_errors=True)
-    known = {"coupang.com": "쿠팡", "naver.com": "네이버",
-             "11st.co.kr": "11번가", "gmarket.co.kr": "지마켓", "auction.co.kr": "옥션"}
-    return sorted({ko for h in hosts for dom, ko in known.items()
-                   if h == dom or h.endswith("." + dom)})
+        exe = _engine_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    name = Path(exe).name.lower()
+    if "edge" in name:
+        return "엣지"
+    if "chrom" in name:
+        return "크롬"
+    return Path(exe).stem or ""
+
+
+def _ordered_candidates() -> List[str]:
+    """브라우저 후보 — 로그인 창에 썼던 브라우저를 항상 맨 앞으로 (v1.13.1).
+
+    쿠키 값은 브라우저마다 다른 키로 암호화된다. 로그인은 크롬, 수집은 엣지처럼
+    엔진이 갈리면 쿠키를 못 풀어 **로그인해 두고도 로그아웃 페이지**를 읽는다.
+    """
+    cands = _browser_candidates()
+    try:
+        used = _engine_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return cands
+    if used and Path(used).is_file():
+        return [used] + [c for c in cands if c != used]
+    return cands
 
 
 def open_login_browser(url: str = "https://www.coupang.com/") -> str:
@@ -236,18 +349,22 @@ def open_login_browser(url: str = "https://www.coupang.com/") -> str:
     """
     import subprocess  # noqa: PLC0415
 
-    exes = _browser_candidates()
+    exes = _ordered_candidates()
     if not exes:
         return "PC에서 크롬·엣지를 찾지 못했어요 — 크롬을 설치한 뒤 다시 눌러주세요"
     prof = login_profile_dir()
     prof.mkdir(parents=True, exist_ok=True)
     try:
         subprocess.Popen(
-            [exes[0], f"--user-data-dir={prof}", "--no-first-run",
-             "--no-default-browser-check", "--new-window", url],
+            [exes[0], f"--user-data-dir={prof}", "--profile-directory=Default",
+             "--no-first-run", "--no-default-browser-check", "--new-window", url],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:  # noqa: BLE001
         return f"브라우저를 열지 못했어요: {str(e)[:120]}"
+    try:                                     # 수집도 같은 엔진을 쓰도록 기억
+        _engine_file().write_text(exes[0], encoding="utf-8")
+    except OSError:
+        pass
     return ""
 
 
@@ -257,23 +374,36 @@ def _collect_profile() -> str:
     같은 프로필로 두 개를 동시에 띄울 수 없어(크로미움 제약), 로그인 창을 켜 둔
     채로도 수집이 되도록 쿠키·설정만 임시 폴더로 복사한다. 로그인해 둔 적이
     없으면 예전처럼 빈 임시 프로필(cutdaejang_headless)을 쓴다.
+
+    v1.13.1: 쿠키 DB를 어느 프로필 폴더에서 찾았든 복제본에서는 Default/ 아래에
+    둔다(헤드리스는 Default를 연다) + 저널·WAL 동반 복사로 방금 로그인도 실린다.
     """
     import os  # noqa: PLC0415
     import shutil  # noqa: PLC0415
     import tempfile  # noqa: PLC0415
 
     src = login_profile_dir()
-    if not (src / "Default").is_dir():
+    dbs = _cookie_dbs(src) if src.is_dir() else []
+    if not dbs:
         return os.path.join(tempfile.gettempdir(), "cutdaejang_headless")
     dst = Path(tempfile.gettempdir()) / "cutdaejang_session"
     try:
         shutil.rmtree(dst, ignore_errors=True)
-        (dst / "Default" / "Network").mkdir(parents=True, exist_ok=True)
-        for rel in ("Local State", "Default/Preferences", "Default/Cookies",
-                    "Default/Network/Cookies", "Default/Login Data"):
-            s = src / rel
-            if s.is_file():
-                shutil.copy2(s, dst / rel)
+        for db in dbs:                       # Network/구형 두 위치 모두 지원
+            rel = ("Default/Network/Cookies" if db.parent.name == "Network"
+                   else "Default/Cookies")
+            if not (dst / rel).exists():
+                _copy_db_family(db, dst / rel)
+        sub = dbs[0].parent.parent if dbs[0].parent.name == "Network" else dbs[0].parent
+        s = src / "Local State"              # 쿠키 암호 키 — 없으면 값을 못 푼다
+        if s.is_file():
+            shutil.copy2(s, dst / "Local State")
+        for name in ("Preferences", "Secure Preferences"):
+            p = sub / name
+            if p.is_file():
+                shutil.copy2(p, dst / "Default" / name)
+        if (sub / "Login Data").is_file():
+            _copy_db_family(sub / "Login Data", dst / "Default" / "Login Data")
     except Exception:  # noqa: BLE001 — 복제 실패면 빈 프로필로 (기존 동작)
         return os.path.join(tempfile.gettempdir(), "cutdaejang_headless")
     return str(dst)
@@ -291,7 +421,8 @@ def _browser_args(exe: str, url: str) -> List[str]:
     """
     return [exe, "--headless=new", "--disable-gpu", "--disable-extensions",
             "--no-first-run", "--no-default-browser-check", "--mute-audio",
-            f"--user-data-dir={_collect_profile()}", "--window-size=1280,2400",
+            f"--user-data-dir={_collect_profile()}", "--profile-directory=Default",
+            "--window-size=1280,2400",
             "--virtual-time-budget=12000", "--timeout=30000", "--dump-dom", url]
 
 
@@ -304,7 +435,8 @@ def _browser_dump(url: str, timeout: float = 50.0) -> str:
     # timeout은 브라우저 '각각'이 아니라 전체 후보에 대한 총 예산이다. 엣지와
     # 크롬이 모두 설치된 PC에서 각각 50초씩 기다려 UI가 수 분 멈추는 일을 막는다.
     deadline = time.monotonic() + max(1.0, float(timeout))
-    for exe in _browser_candidates():
+    # 로그인 창을 연 브라우저를 맨 앞으로 — 엔진이 갈리면 쿠키를 못 푼다 (v1.13.1)
+    for exe in _ordered_candidates():
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break

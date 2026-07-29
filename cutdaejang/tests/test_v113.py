@@ -23,7 +23,7 @@ from cutdaejang.spec import Background, Canvas, Style, Subtitle, TimelineSpec
 
 
 def test_version():
-    assert __version__ == "1.13.0"
+    assert __version__ == "1.13.1"
 
 
 # ── ⑨ 촬영 대본 표기 파서 ─────────────────────────────────────
