@@ -68,9 +68,16 @@ def test_write_ass_cards_off_and_marker_stripped(tmp_path):
     out = tmp_path / "off.ass"
     write_ass(spec, out)
     text = out.read_text(encoding="utf-8")
-    assert "Dialogue: 6," not in text                     # 꺼짐 — 카드 없음
+    # v1.13: 사용자가 직접 [카드] 표시한 문장(구간 '화면 자막' 등)은 카드 연출을
+    # 꺼 둬도 반드시 카드로 — 안 그러면 무낭독 자막이 하단 일반 자막에 떨어져
+    # 내레이션 자막과 겹친다. 자동 배치는 여전히 전면 중지(표시 문장 1장뿐).
     assert "[카드]" not in text                            # 표식은 화면에 안 나옴
-    assert "95% 만 기억하세요" in text                     # 일반 자막으로 표시
+    assert text.count("Dialogue: 6,") == 1                 # 카드 = 수동 표시 1장만
+    card_lines = [l for l in text.splitlines() if ",Card," in l]
+    assert any("기억하세요" in l for l in card_lines)      # 표시 문장 → 카드 유지
+    default_lines = [l for l in text.splitlines() if ",Default," in l]
+    assert not any("기억하세요" in l for l in default_lines)  # 하단 자막 중복 금지
+    assert ",Default,,0,0,0,,첫 문장" in text              # 나머지는 일반 자막 그대로
 
 
 def test_tts_never_reads_card_marker():

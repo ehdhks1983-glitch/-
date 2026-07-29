@@ -152,6 +152,9 @@ def test_narration_last_wiring():
     assert "sections_synced" in body and "narration_bed" in body
     # 재사용 지문은 예전 자막이 구워진 구간을 새 구조에서 재사용하지 않는다.
     assert "bed3-final-sync" in body
-    # 동일 abs_subs를 음성 베드 배치와 최종 자막 렌더 양쪽에 사용한다.
+    # 동일 abs_subs 타임라인이 음성 베드와 최종 자막 양쪽의 기준. v1.13부터
+    # 렌더 쪽에만 무낭독 화면 자막(cap_subs)이 합류한다 — 베드에 섞으면
+    # 클립↔자막 짝이 어긋나므로 베드는 여전히 abs_subs만 쓴다.
     assert "build_narration_wav(\n                    all_clips, abs_subs" in body
-    assert "final, abs_subs, synced" in body
+    assert "final_subs = sorted(abs_subs + cap_subs" in body
+    assert "final, final_subs, synced" in body

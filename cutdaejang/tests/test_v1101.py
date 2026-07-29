@@ -45,8 +45,11 @@ def test_sections_use_one_timeline_for_final_voice_and_subtitles():
     assert "bed3-final-sync" in body
     assert "cut, [], str(job_dir" in body
     assert "all_clips, abs_subs" in body
-    assert "final, abs_subs, synced" in body
-    assert body.index("concat_videos(") < body.index("final, abs_subs, synced")
+    # v1.13: 최종 자막 = abs_subs(내레이션) + cap_subs(무낭독 화면 자막 카드).
+    # 음성 베드는 여전히 abs_subs만 — 한 타임라인이 음성·자막 공통 기준이다.
+    assert "final_subs = sorted(abs_subs + cap_subs" in body
+    assert "final, final_subs, synced" in body
+    assert body.index("concat_videos(") < body.index("final, final_subs, synced")
 
 
 def test_done_edit_button_reopens_section_project():

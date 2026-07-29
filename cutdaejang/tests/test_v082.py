@@ -25,8 +25,8 @@ def test_v082_ui_present_and_wired():
         "job.chapters",
     ):
         assert tok in html, tok
-    # 내레이션 입력마다 실시간 갱신 + 행 추가/삭제 시 갱신
-    assert "na.oninput = updateSectionTimes" in html
+    # 내레이션 입력마다 실시간 갱신(+v1.13 칸 자동 늘어남) + 행 추가/삭제 시 갱신
+    assert "na.oninput = function(){ updateSectionTimes(); autoGrow(na); }" in html
     assert html.count("updateSectionTimes()") >= 1
 
 
