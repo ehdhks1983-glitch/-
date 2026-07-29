@@ -1026,7 +1026,8 @@ def test_fetch_bgm_endpoint_and_ui(server, monkeypatch, tmp_path):
     # v1.12: 곡 수를 늘렸으므로 숫자를 박지 않고 "N곡 준비 완료" 형식만 확인
     import re as _re
     assert _re.search(r"\d+곡 준비 완료", st["bgm_fetch"]["msg"]), st["bgm_fetch"]
-    assert len(st["bgm_files"]) == 14  # 새 폴더 목록이 state에 반영
+    # 곡 수는 늘어날 수 있으므로 '전 곡이 목록에 반영됐는가'로 확인 (v1.12: 14 → 54)
+    assert len(st["bgm_files"]) == len(fb.TRACKS)  # 새 폴더 목록이 state에 반영
     assert (tmp_path / "bgm" / fb.CREDIT_FILE).exists()  # 크레딧 파일 생성
 
 
