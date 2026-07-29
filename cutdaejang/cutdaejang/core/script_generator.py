@@ -159,14 +159,33 @@ def _chunk_by_words(text: str, limit: int) -> List[str]:
     return [c for c in fixed if c]
 
 
+def _split_by_punct(text: str) -> List[str]:
+    """문장부호(. ! ? … 등) 기준 문장 나누기 — narration_units와 같은 규칙 (v1.14)."""
+    pieces: List[str] = []
+    start = 0
+    for m in _NARRATION_PUNCT_RE.finditer(text):
+        piece = text[start:m.end()].strip()
+        if piece:
+            pieces.append(piece)
+        start = m.end()
+    tail = text[start:].strip()
+    if tail:
+        pieces.append(tail)
+    return pieces
+
+
 def split_long_sentences(script: Script, limit: int = 32) -> Script:
-    """limit(자막 2줄 분량)를 넘는 문장을 단어 경계로 쪼갠 새 Script를 돌려준다.
+    """limit(자막 2줄 분량)를 넘는 문장을 쪼갠 새 Script를 돌려준다.
 
     AI가 "N자 이내" 규칙을 어겨도 자막이 3줄 이상으로 화면을 덮지 않게 하는
     안전장치 (v0.77). 문장=클립 1:1 구조라 조각마다 TTS가 따로 합성돼 싱크는
     자연히 맞는다. 강조어는 그 단어가 든 첫 조각에만, 장면 묘사는 첫 조각에만
     남긴다(빈칸은 fill_scene_gaps가 이웃으로 채움). 재훅 번호도 새 위치로 재매핑.
     색 마크업([노랑]…[/])이 든 문장은 쌍이 깨질 수 있어 분할하지 않는다.
+
+    v1.14: **문장부호에서 먼저** 나누고, 그래도 긴 문장만 단어 경계로 자른다.
+    줄바꿈 없이 문단째 붙여넣은 대본이 "1문장" 취급돼 단어 자리에서 뚝뚝 끊기고
+    (자막 마디·TTS 운율 붕괴·카드 과다·장면 1장) — 회원님 영상 리포트 18번.
     """
     if limit <= 0 or not script.sentences:
         return script
@@ -189,7 +208,10 @@ def split_long_sentences(script: Script, limit: int = 32) -> Script:
             continue
         changed = True
         placed_hl = False
-        for j, c in enumerate(_chunk_by_words(text, limit)):
+        chunks = []
+        for s in _split_by_punct(text):        # ① 진짜 문장 경계 우선
+            chunks += _chunk_by_words(s, limit) if len(s) > limit else [s]
+        for j, c in enumerate(chunks):
             sents.append(c)
             if hl and not placed_hl and hl in c:
                 hls.append(hl)

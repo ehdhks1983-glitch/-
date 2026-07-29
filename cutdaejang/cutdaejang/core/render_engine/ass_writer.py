@@ -193,10 +193,18 @@ def frame_band_lines(hook: str, spec, style, hs: dict, sc, wide: bool) -> list:
                 + "\\1a&H10&}" + f"m 0 0 l {w} 0 {w} {y1 - y0} 0 {y1 - y0}")
 
     lines = [rect(0, band_h), rect(h - bot_h, h)]
-    # 초대형 제목 — 띠 높이에 맞춰 2줄까지, 기존 훅 문법(강조·마크업) 그대로
-    body = hook_dialogue_text(_wrap_two_lines(top_txt, 11 if wide else 9),
-                              style, primary=hs.get("primary", "#FFFFFF"),
-                              highlight=hs.get("highlight", ""))
+    # 초대형 제목 — 띠 높이에 맞춰 2줄까지, 기존 훅 문법(강조·마크업) 그대로.
+    # ⚠ 나눔을 먼저 확정하고 **조각별로** 이스케이프해야 한다 — \N을 넣은 문자열을
+    # 통째로 hook_dialogue_text에 주면 이스케이프가 개행 코드를 무력화해 화면에
+    # "\N" 글자가 그대로 보였다 (회원님 영상 리포트 20번, v1.14 수정).
+    # 사용자가 제목에 줄바꿈을 넣었으면 그 위치를 그대로 존중한다.
+    pieces = [p.strip() for p in top_txt.splitlines() if p.strip()]
+    if len(pieces) <= 1:
+        pieces = _wrap_two_lines(top_txt, 11 if wide else 9).split("\\N")
+    body = "\\N".join(
+        hook_dialogue_text(p, style, primary=hs.get("primary", "#FFFFFF"),
+                           highlight=hs.get("highlight", ""))
+        for p in pieces)
     big = round(h * (0.062 if wide else 0.072))
     lines.append(
         f"Dialogue: 4,{start},{end},Title,,0,0,0,,"

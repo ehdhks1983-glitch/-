@@ -351,6 +351,14 @@ def run_job(
                           and len(spec.audio) > 1
                           and (scene_images
                                or (image_provider is not None and scene_mode == "auto")))
+        if (not use_scene_mode and scene_mode == "manual" and not scene_images
+                and bg_cfg.get("scene_images", True)
+                and not opts.user_background and len(spec.audio) > 1):
+            # 🖼 「내가 직접」 + 검토 없는 자동 실행 = 그림을 넣을 기회가 없다 —
+            # 조용히 단일 배경으로 강등되던 자리 (회원님 리포트 19번, v1.14 안내)
+            note("🖼 장면 그림이 「내가 직접」이라 배경을 한 장으로 만들었어요 — "
+                 "문장마다 그림을 넣으려면 실행 방식을 「검토 (대본 확인 후)」로 "
+                 "시작하거나, 꾸미기에서 그림 방식을 「자동」으로 바꿔주세요")
         if use_scene_mode:
             style = bg_cfg.get("image_style", "일러스트")
             prompts = [sp or s for sp, s in zip(script.scene_prompts, script.sentences)]

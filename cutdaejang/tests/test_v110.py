@@ -23,7 +23,7 @@ def test_cut_boundaries_snap_out_of_speech():
 
 
 def test_long_video_ui_and_narration_chunking(monkeypatch, tmp_path):
-    assert __version__ == "1.13.1"
+    assert __version__ == "1.14.0"
     html = webui._HTML
     first_row = html.split('<div class="home-cards">', 1)[1].split("</div>", 1)[0]
     assert "긴 영상 (가로 16:9)" in first_row
