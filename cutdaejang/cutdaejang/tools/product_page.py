@@ -25,7 +25,11 @@ from typing import Callable, List, Optional, Tuple
 # 호스트 목록은 fetch_web 한 곳에서만 관리한다 (v1.12). fetch_web은 표준
 # 라이브러리만 import하므로 순환 import가 생기지 않는다(product_page → fetch_web
 # 단방향). 아래 함수들 안의 지연 import(UA 공유 등)는 그대로 둔다.
+from . import cdp
 from .fetch_web import SHOP_HOSTS, SHORTENER_HOSTS
+
+_CDP_HOST = "127.0.0.1"
+_LAST_DUMP_VIA = ""      # 마지막 DOM 수집이 어느 길로 됐나 ("로그인 창"/"브라우저")
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -292,7 +296,9 @@ def login_debug() -> dict:
     known_ko = sorted({ko for h in all_hosts for dom, ko in _SHOP_HOSTS_KO.items()
                        if h == dom or h.endswith("." + dom)})
     return {"hosts": known_ko, "profile": prof.is_dir(), "db": db_rel,
-            "cookies": total, "browser": login_browser_name(), "error": err}
+            "cookies": total, "browser": login_browser_name(), "error": err,
+            # 🔌 v1.15: 창이 열려 있으면 **그 창으로** 수집한다 (가장 확실한 길)
+            "window": bool(login_window_port())}
 
 
 def logged_in_hosts() -> List[str]:
@@ -354,9 +360,14 @@ def open_login_browser(url: str = "https://www.coupang.com/") -> str:
         return "PC에서 크롬·엣지를 찾지 못했어요 — 크롬을 설치한 뒤 다시 눌러주세요"
     prof = login_profile_dir()
     prof.mkdir(parents=True, exist_ok=True)
+    # 🔌 v1.15: 이 창을 **수집에도 그대로 쓰기 위해** 원격 제어 포트를 연다.
+    # 포트 번호는 크롬이 프로필의 DevToolsActivePort 파일에 적어 준다(0 = 빈 포트
+    # 자동). 127.0.0.1에만 열리고, 이 PC 밖에서는 접근할 수 없다.
+    (prof / cdp.DEVTOOLS_PORT_FILE).unlink(missing_ok=True)   # 옛 포트 오인 방지
     try:
         subprocess.Popen(
             [exes[0], f"--user-data-dir={prof}", "--profile-directory=Default",
+             "--remote-debugging-port=0", f"--remote-allow-origins=http://{_CDP_HOST}",
              "--no-first-run", "--no-default-browser-check", "--new-window", url],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:  # noqa: BLE001
@@ -365,7 +376,17 @@ def open_login_browser(url: str = "https://www.coupang.com/") -> str:
         _engine_file().write_text(exes[0], encoding="utf-8")
     except OSError:
         pass
+    for _ in range(20):                      # 포트 파일이 적힐 때까지 잠깐 (최대 5초)
+        if cdp.read_debug_port(prof):
+            break
+        time.sleep(0.25)
     return ""
+
+
+def login_window_port() -> int:
+    """열려 있는 로그인 창의 원격 제어 포트 — 창이 꺼져 있으면 0 (v1.15)."""
+    port = cdp.read_debug_port(login_profile_dir())
+    return port if cdp.is_alive(port) else 0
 
 
 def _collect_profile() -> str:
@@ -427,14 +448,30 @@ def _browser_args(exe: str, url: str) -> List[str]:
 
 
 def _browser_dump(url: str, timeout: float = 50.0) -> str:
-    """설치된 엣지/크롬 헤드리스로 렌더된 DOM 받기.
+    """렌더된 DOM 받기 — ① 열려 있는 **로그인 창** ② 없으면 헤드리스.
 
-    UA를 바꾸지 않는다(HeadlessChrome으로 자신을 알림) — 사이트가 헤드리스를
-    차단하기로 했다면 그 결정을 존중하고 빈 문자열을 돌려준다.
+    v1.15 ①: 회원님이 [🌐 내 크롬 열기]로 띄워 **로그인해 둔 그 창**에 새 탭을
+    열어 페이지를 그리고 DOM만 가져온다(끝나면 탭 자동 정리). 쿠키·세션이 그
+    창의 것이라 로그인 상태 그대로 보인다 — 회원님이 알려준 블로그 툴의 순서
+    (크롬 실행 → 로그인 → 크롤링)와 같은 방식.
+    프로필 복사(v1.12~v1.13.1)로는 안 되던 이유: 최신 크롬은 쿠키를 앱에 묶어
+    암호화해 **복사본을 다른 크롬 프로세스가 풀지 못한다.**
+
+    ②: 로그인 창이 없으면 예전처럼 헤드리스로. UA를 바꾸지 않는다
+    (HeadlessChrome으로 자신을 알림) — 차단되면 그 결정을 존중하고 빈 문자열.
     """
+    global _LAST_DUMP_VIA
+    _LAST_DUMP_VIA = ""
+    deadline = time.monotonic() + max(1.0, float(timeout))
+    port = login_window_port()
+    if port:
+        html, _final = cdp.fetch_dom(
+            port, url, timeout=max(5.0, min(40.0, deadline - time.monotonic())))
+        if len(html) > 3000 and "<html" in html.lower():
+            _LAST_DUMP_VIA = "로그인 창"
+            return html
     # timeout은 브라우저 '각각'이 아니라 전체 후보에 대한 총 예산이다. 엣지와
     # 크롬이 모두 설치된 PC에서 각각 50초씩 기다려 UI가 수 분 멈추는 일을 막는다.
-    deadline = time.monotonic() + max(1.0, float(timeout))
     # 로그인 창을 연 브라우저를 맨 앞으로 — 엔진이 갈리면 쿠키를 못 푼다 (v1.13.1)
     for exe in _ordered_candidates():
         remaining = deadline - time.monotonic()
@@ -445,6 +482,7 @@ def _browser_dump(url: str, timeout: float = 50.0) -> str:
                                capture_output=True, timeout=max(1.0, remaining))
             out = (r.stdout or b"").decode("utf-8", errors="replace")
             if len(out) > 3000 and "<html" in out.lower():
+                _LAST_DUMP_VIA = "브라우저"
                 return out
         except Exception:  # noqa: BLE001 — 다음 브라우저 후보로
             continue
@@ -626,16 +664,22 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
     # v0.97은 0장일 때만 재시도해 1장이면 그대로 끝났다 (사용자 리포트
     # "아직도 한 장만 들어오네"). 두 경로에서 모은 사진은 합집합으로 합친다.
     if not (parsed and _usable(parsed)) or len(parsed.get("images") or []) < 3:
-        say("사진을 더 실으려고 PC의 엣지/크롬으로 페이지 읽는 중… (최대 30초)")
+        _win = login_window_port()
+        say("사진을 더 실으려고 " + ("**로그인해 둔 내 크롬 창**으로" if _win
+                                    else "PC의 엣지/크롬으로")
+            + " 페이지 읽는 중… (최대 30초)")
+        globals()["_LAST_DUMP_VIA"] = ""
         dumped = _browser_dump(final)
+        _dump_via = _LAST_DUMP_VIA or ("로그인 창" if _win else "브라우저")
         if dumped:
             p2 = parse_product(dumped, final)
-            stages.append(f"브라우저 {len(p2.get('images') or [])}장")
+            stages.append(f"{_dump_via.replace(' ', '')} "
+                          f"{len(p2.get('images') or [])}장")
             merged = list(dict.fromkeys(
                 (p2.get("images") or []) + (parsed.get("images") or [])))[:12]
             if _usable(p2):
                 p2["images"] = merged
-                parsed, via = p2, "브라우저"
+                parsed, via = p2, _dump_via
             elif parsed and _usable(parsed) and merged:
                 parsed["images"] = merged
         else:
