@@ -2790,6 +2790,30 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/api/update_check":   # 🔄 새 버전 확인 (v1.18 배포 1단계)
+            from .. import __version__ as cur  # noqa: PLC0415
+
+            src_url = config.update_channel_url()
+            if not src_url:
+                self._send_json({"ok": False,
+                                 "reason": "배포 주소가 설정되지 않았어요 (update_url.txt)"})
+                return
+            try:
+                import urllib.request as _ur  # noqa: PLC0415
+
+                req = _ur.Request(src_url,
+                                  headers={"User-Agent": f"cutdaejang/{cur}"})
+                with _ur.urlopen(req, timeout=8) as r:
+                    info = json.loads(r.read().decode("utf-8"))
+            except Exception as e:  # noqa: BLE001 — 오프라인·주소 오류는 조용히 알림만
+                self._send_json({"ok": False, "reason": f"확인 실패: {str(e)[:120]}"})
+                return
+            latest = str(info.get("version") or "").strip()
+            self._send_json({
+                "ok": True, "current": cur, "latest": latest,
+                "newer": bool(latest) and _ver_tuple(latest) > _ver_tuple(cur),
+                "url": str(info.get("url") or "").strip(),
+                "note": str(info.get("note") or "").strip()[:300]})
         elif path == "/api/shop_login":   # 🔐 쇼핑 로그인 상태 (v1.12 → v1.13.1 진단)
             from ..tools import product_page  # noqa: PLC0415
 
@@ -4481,6 +4505,40 @@ def _attach_ui_log() -> None:
         lg.setLevel(logging.INFO)
 
 
+def _ver_tuple(v: str) -> tuple:
+    """"1.18.0" → (1, 18, 0) — 새 버전 비교용. 숫자 아닌 글자는 무시 (v1.18)."""
+    import re as _re  # noqa: PLC0415
+
+    nums = _re.findall(r"\d+", str(v or ""))[:3]
+    return tuple(int(n) for n in nums) if nums else (0,)
+
+
+def _open_ui_window(url: str) -> None:
+    """🪟 전용 창(주소창 없는 앱 창)으로 UI 열기 — 실패하면 기본 브라우저 (v1.18).
+
+    엣지/크롬의 --app 창은 주소창·탭 없이 컷대장 창 하나만 떠서 회원 눈에는
+    윈도우 프로그램처럼 보인다. 추가 설치물 0개(윈도우는 엣지 기본 내장).
+    창을 닫아도 서버(검은 콘솔)는 살아 있어 진행 중 작업은 계속된다.
+    """
+    import subprocess  # noqa: PLC0415
+
+    try:
+        from ..tools.product_page import _browser_candidates  # noqa: PLC0415
+
+        for exe in _browser_candidates():
+            try:
+                subprocess.Popen(
+                    [exe, f"--app={url}", "--no-first-run",
+                     "--no-default-browser-check"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+            except Exception:  # noqa: BLE001 — 다음 후보로
+                continue
+    except Exception:  # noqa: BLE001 — 후보 탐색 자체가 실패해도 폴백
+        pass
+    webbrowser.open(url)                     # 크롬·엣지가 없으면 지금처럼
+
+
 def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
     Path(workdir).mkdir(parents=True, exist_ok=True)
     _attach_ui_log()
@@ -4524,7 +4582,7 @@ def serve(workdir: str = "jobs", port: int = 7860, open_browser: bool = True) ->
     # CP949에 없는 특수 대시 문자는 사용하지 않는다.
     print(f"컷대장 UI: {url}   (끝내려면 Ctrl+C - 이 창을 닫으면 UI도 꺼집니다)")
     if open_browser:
-        threading.Timer(0.7, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.7, lambda: _open_ui_window(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -4718,7 +4776,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.17.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.18.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -4777,6 +4835,11 @@ body.easy #easyBar { display: block; }
       <button class="ghost" onclick="openVoice(event)">🎤 내 목소리 등록</button>
       <span class="hint">녹음 파일 하나로 <b>나만의 AI 목소리</b>를 만들어 내레이션에 쓸 수 있어요</span>
       <b class="hint" id="homeVoiceState" style="color:#5dd39e"></b>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <button class="ghost" style="padding:4px 10px" onclick="checkUpdate(event)"
+              title="배포 주소가 설정된 경우, 새 버전이 나왔는지 확인해요">🔄 새 버전 확인</button>
+      <span class="hint" id="updateState"></span>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
       <button class="ghost" onclick="openRip(event)">🎙→📃 대본 따오기</button>
@@ -8426,6 +8489,31 @@ function applyEasy(on){
                  : '필수 입력만 남기고 단순하게 보여요 — 숨은 옵션은 저장된 설정 그대로 적용됩니다';
   }
 }
+// ── 🔄 새 버전 확인 (v1.18 배포 1단계) ──
+async function checkUpdate(ev){
+  if(ev) ev.preventDefault();
+  const el = $('updateState');
+  if(el && ev) el.textContent = '확인 중…';
+  try{
+    const d = await (await fetch('/api/update_check')).json();
+    if(!d.ok){ if(el && ev) el.textContent = d.reason || '확인 실패'; return; }
+    if(d.newer){
+      if(el) el.innerHTML = '🎁 새 버전 <b>v' + d.latest + '</b>이 나왔어요! ' +
+        (d.url ? '<a href="' + d.url + '" target="_blank">여기서 받은 뒤</a> ' : '카페에서 받은 뒤 ') +
+        '[업데이트.bat]를 실행하면 설정 그대로 새 버전이 돼요' +
+        (d.note ? ' — ' + d.note : '');
+    } else if(el && ev){ el.textContent = '✅ 최신 버전이에요 (v' + d.current + ')'; }
+  }catch(e){ if(el && ev) el.textContent = '확인 실패: ' + e; }
+}
+function autoCheckUpdate(){
+  try{                                     // 하루 1번만 조용히 (실패해도 무시)
+    const today = new Date().toDateString();
+    if(localStorage.getItem('upd_last') === today) return;
+    localStorage.setItem('upd_last', today);
+    checkUpdate();
+  }catch(e){}
+}
+
 async function toggleEasy(ev){
   if(ev) ev.preventDefault();
   const on = !document.body.classList.contains('easy');
@@ -8964,6 +9052,7 @@ function injectQuickDeco(){
 function fillSettings(s){
   restoreDrafts(s); bindDrafts(); bindDrops();   // 📥 끌어넣기 (v1.13)
   applyEasy(!!(((s || {}).ui || {}).easy_mode)); // 🔰 쉬운 모드 기억 (v1.17)
+  autoCheckUpdate();                             // 🔄 하루 1회 새 버전 확인 (v1.18)
   initEzChips(); injectQuickDeco();
   setTimeout(() => { markEzChips(); markQuickDeco(); }, 0);
   $('setFontSize').value = s.subtitle.font_size;

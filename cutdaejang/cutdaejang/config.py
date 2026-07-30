@@ -131,6 +131,25 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def update_channel_url() -> str:
+    """🔄 배포 채널 주소 — update_url.txt의 첫 유효 줄 (v1.18).
+
+    사장님이 배포 zip을 만들기 전에 이 파일에 version.json 주소를 한 줄 넣어 두면,
+    회원 프로그램이 하루 한 번 새 버전을 확인해 화면에 알려준다.
+    #으로 시작하는 줄과 빈 줄은 무시. 파일이 없거나 비어 있으면 확인 기능 꺼짐.
+    """
+    try:
+        txt = (Path(__file__).resolve().parent / "update_url.txt").read_text(
+            encoding="utf-8")
+    except OSError:
+        return ""
+    for line in txt.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return stripped
+    return ""
+
+
 def resources_dir() -> Path:
     """resources/ 루트 — 배포 방식과 무관하게 찾는다 (v0.70).
 

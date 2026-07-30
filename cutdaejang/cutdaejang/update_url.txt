@@ -1,0 +1,12 @@
+# 🔄 컷대장 새 버전 확인 주소 (사장님 전용 — 회원은 건드릴 필요 없음)
+#
+# 아래에 version.json 파일의 "직접 다운로드" 주소를 한 줄 넣으면,
+# 회원 프로그램이 하루 한 번 새 버전을 확인해 첫 화면에 알려줍니다.
+# 예) https://raw.githubusercontent.com/내계정/cutdaejang-release/main/version.json
+# 예) 구글 드라이브 직링크 (uc?export=download&id=...)
+#
+# version.json 내용 예시:
+#   {"version": "1.19.0", "url": "https://다운로드주소/컷대장_v1.19.0.zip",
+#    "note": "쇼핑 수집 안정화"}
+#
+# 이 파일이 비어 있으면(주소 줄이 없으면) 확인 기능은 조용히 꺼져 있습니다.
