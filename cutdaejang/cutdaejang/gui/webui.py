@@ -3553,6 +3553,9 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/quick_set":   # 🎛 카드 꾸미기 ↔ ⚙설정 연동 저장 (v1.08)
             patch = params.get("patch") or {}
             safe: dict = {}
+            ui_p = patch.get("ui") or {}
+            if isinstance(ui_p.get("easy_mode"), bool):   # 🔰 쉬운 모드 기억 (v1.17)
+                safe.setdefault("ui", {})["easy_mode"] = ui_p["easy_mode"]
             sub = patch.get("subtitle") or {}
             if isinstance(sub.get("font_size"), (int, float)):
                 safe.setdefault("subtitle", {})["font_size"] = int(
@@ -4699,12 +4702,23 @@ _HTML = """<!doctype html>
   .tonecard .sw { width:76px; height:44px; border-radius:6px;
     background:linear-gradient(135deg,#4a6fd4 0%,#c76a93 55%,#e8b45a 100%); }
   .tonecard span { display:block; font-size:11px; color:#aeb6c8; margin-top:4px; }
+/* 🔰 쉬운 모드 (v1.17) — 기능은 그대로, 보이는 것만 최소로. 숨겨진 입력도
+   값은 살아 있어 만들기 페이로드는 자세히 모드와 100% 동일하다. */
+body.easy #editCard details:not(.easy-keep),
+body.easy #formCard details:not(.easy-keep),
+body.easy #weblinkCard details:not(.easy-keep),
+body.easy #sectionCard details:not(.easy-keep),
+body.easy #shopCard details:not(.easy-keep),
+body.easy #settingsCard details:not(.easy-keep) { display: none; }
+body.easy .easy-hide { display: none !important; }
+#easyBar { display: none; }
+body.easy #easyBar { display: block; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.16.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.17.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -4714,11 +4728,15 @@ _HTML = """<!doctype html>
         <option value="4">동시 4개 (고사양)</option>
       </select>
     </div>
+    <button class="ghost" id="easyBtn" onclick="toggleEasy(event)"
+            title="필수 입력만 남기고 단순하게 보여요 — 숨은 옵션은 저장된 설정 그대로 적용됩니다">🔰 쉬운 모드</button>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
     <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
+  <div class="banner" id="easyBar">🔰 <b>쉬운 모드</b> — 꼭 넣을 것만 보여요. 숨은 옵션은
+    <b>저장된 설정 그대로</b> 적용됩니다 · 전부 보려면 위의 [🛠 자세히]를 누르세요</div>
 
   <div class="card" id="homeCard">
     <div style="font-size:17px;font-weight:800">무엇을 만들까요?</div>
@@ -5744,7 +5762,7 @@ _HTML = """<!doctype html>
     <div class="hint">촬영 대본의 구간(장면)마다 화면녹화 클립을 넣으면: 클립을 <b>내레이션 길이에 맞게
       핵심 장면만 남기고 압축</b>하고, 내레이션을 AI 목소리로 읽고, 자막을 넣어 <b>순서대로 이어붙인</b>
       완성 영상 1개를 만들어요. 구간 길이는 대본의 시간표가 아니라 <b>말을 실제로 읽은 길이</b>를 따라요 (말 안 잘림).</div>
-    <details class="opt" id="secScriptBox">
+    <details class="opt easy-keep" id="secScriptBox">
       <summary>📝 대본 통째로 붙여넣기 <span class="hint">— 구간과 내레이션을 자동으로 나눠 아래에 채워드려요</span></summary>
       <textarea id="secScriptText" style="min-height:140px" placeholder="촬영 대본을 통째로 붙여넣으세요.&#10;① 소제목 — 0:00 ~ 0:15 / [화면] 찍을 것 메모 / 나레이션 읽을 말 / [자막] 화면에 박을 한 줄&#10;— 이런 표기가 있으면 제자리에 자동으로 나눠 담고, 일반 글이면 문단 단위로 나눠요."></textarea>
       <div class="hint" style="margin-top:4px">🎬 <b>[화면]</b> 줄은 읽지도 화면에 넣지도 않는 <b>나만 보는 메모</b>,
@@ -6423,7 +6441,7 @@ _HTML = """<!doctype html>
         AI 장면 이미지 N장 ✨ / AI 이미지 ✨ / 기본 그라데이션(사유)로 알려줍니다.</div>
     </details>
 
-    <details class="opt">
+    <details class="opt easy-keep">
       <summary>🔊 소리·목소리 <span class="hint">— BGM 볼륨 · 덕킹 · 문장 간격 · TTS 한도</span></summary>
       <div class="row" style="margin-top:4px">
         <div><label>BGM 볼륨(dB)</label><input type="number" id="setBgmVol" min="-40" max="0"></div>
@@ -8369,12 +8387,63 @@ async function openDiagFolder(ev){
   if(data.error) alert('폴더 열기 실패: ' + data.error + String.fromCharCode(10) + '경로: ' + (data.path || ''));
 }
 
-function toggleSettings(){ $('settingsCard').classList.toggle('hidden'); }
+function toggleSettings(){
+  const c = $('settingsCard');
+  c.classList.toggle('hidden');
+  // ⚙ 설정 카드는 페이지 맨 아래에 있어, 이동해 주지 않으면 "눌러도 아무 일도
+  // 없는 것처럼" 보였다 (회원님 리포트 22번) — 열리면 바로 데려간다
+  if(!c.classList.contains('hidden')) c.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+// ── 🔰 쉬운 모드 (v1.17) — 기능은 그대로, 보이는 것만 최소로 ──
+// 숨긴 입력도 값은 살아 있어 만들기 페이로드는 자세히 모드와 100% 동일하다.
+const EASY_HIDE_IDS = ['tplSel', 'autoMultiSel', 'autoTargetPreset', 'autoTargetSec',
+  'editSpeedSel', 'editSpeedModeSel', 'editTempoSel', 'autoQualitySel',
+  'narrSubsOnly', 'narrFitSel',
+  'batchChk', 'genProductSel', 'genLenSel', 'genLenCustomMin',
+  'provWin', 'provMine', 'provEleven', 'provSovits',
+  'voiceSel', 'styleSel', 'elevenVoiceSel',
+  'wlHook', 'wlVoiceSel', 'wlBgmSel', 'wlOrientSel', 'wlQualitySel',
+  'secVoiceSel', 'secHook',
+  'shopHook', 'shopVoiceSel', 'shopBgmSel', 'shopOrientSel', 'shopQualitySel'];
+let _easyMarked = false;
+function _markEasyRows(){
+  if(_easyMarked) return;
+  _easyMarked = true;
+  EASY_HIDE_IDS.forEach(function(id){
+    const el = $(id); if(!el) return;
+    const row = el.closest('.chk') || el.closest('.row') || el.parentElement;
+    (row || el).classList.add('easy-hide');
+  });
+}
+function applyEasy(on){
+  _markEasyRows();
+  document.body.classList.toggle('easy', !!on);
+  const b = $('easyBtn');
+  if(b){
+    b.textContent = on ? '🛠 자세히' : '🔰 쉬운 모드';
+    b.title = on ? '숨겨둔 옵션을 모두 다시 보여줘요'
+                 : '필수 입력만 남기고 단순하게 보여요 — 숨은 옵션은 저장된 설정 그대로 적용됩니다';
+  }
+}
+async function toggleEasy(ev){
+  if(ev) ev.preventDefault();
+  const on = !document.body.classList.contains('easy');
+  applyEasy(on);
+  try{
+    await fetch('/api/quick_set', {method:'POST',
+      body: JSON.stringify({patch: {ui: {easy_mode: on}}})});
+  }catch(e){ /* 저장 실패해도 화면은 이미 바뀜 — 다음 토글 때 재시도 */ }
+}
 
 // ── 📇 내 제품 프로필 (v0.64) ──
 function toggleProductCard(){
-  $('productCard').classList.toggle('hidden');
-  if(!$('productCard').classList.contains('hidden')) loadProducts();
+  const c = $('productCard');
+  c.classList.toggle('hidden');
+  if(!c.classList.contains('hidden')){
+    loadProducts();
+    c.scrollIntoView({behavior:'smooth', block:'start'});   // 🔰 v1.17 — 열면 바로 이동
+  }
 }
 async function loadProducts(keep){
   const d = await (await fetch('/api/products', {method:'POST', body: JSON.stringify({action:'list'})})).json();
@@ -8473,8 +8542,11 @@ async function extractAudio(ev, kind){
 
 // ── 🔑 API 연동 화면 (v0.63) ──
 function toggleApiCard(){
-  $('apiCard').classList.toggle('hidden');
+  const c = $('apiCard');
+  c.classList.toggle('hidden');
   refreshApiStates();
+  if(!c.classList.contains('hidden'))
+    c.scrollIntoView({behavior:'smooth', block:'start'});   // 🔰 v1.17 — 열면 바로 이동
 }
 function refreshApiStates(){
   const g = $('apiGeminiState'), e = $('apiElevenState');
@@ -8891,6 +8963,7 @@ function injectQuickDeco(){
 }
 function fillSettings(s){
   restoreDrafts(s); bindDrafts(); bindDrops();   // 📥 끌어넣기 (v1.13)
+  applyEasy(!!(((s || {}).ui || {}).easy_mode)); // 🔰 쉬운 모드 기억 (v1.17)
   initEzChips(); injectQuickDeco();
   setTimeout(() => { markEzChips(); markQuickDeco(); }, 0);
   $('setFontSize').value = s.subtitle.font_size;
