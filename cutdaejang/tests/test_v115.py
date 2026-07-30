@@ -121,8 +121,16 @@ def login_window(tmp_path, monkeypatch, shop_site):
             list(a) + ["--no-sandbox", "--headless=new", "--disable-gpu"], **k))
     assert pp.open_login_browser(shop_site + "/item") == ""
     monkeypatch.setattr(subprocess, "Popen", real_popen)   # 수집은 원래 코드 그대로
-    port = pp.login_window_port()
-    assert port, "로그인 창이 원격 제어 포트를 열지 못했어요"
+    # 크롬이 DevToolsActivePort 파일을 쓰기까지는 부하에 따라 수 초 걸린다 —
+    # 전체 스위트 직후처럼 CPU가 바쁠 때 즉시 읽으면 헛손질 (1회 일시 실패 사례)
+    import time
+    port = 0
+    for _ in range(120):
+        port = pp.login_window_port()
+        if port:
+            break
+        time.sleep(0.25)
+    assert port, "로그인 창이 원격 제어 포트를 열지 못했어요 (30초 대기)"
     yield port
     try:
         cdp._http_json(port, "/json/close", timeout=2.0)
