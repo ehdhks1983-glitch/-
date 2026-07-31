@@ -4720,6 +4720,7 @@ EXT_LINKS = {
     "elevenlabs": "https://elevenlabs.io",
     "elevenlabs_apikeys": "https://elevenlabs.io/app/settings/api-keys",
     "elevenlabs_voicelib": "https://elevenlabs.io/app/voice-library",
+    "fal": "https://fal.ai",   # ✨ AI 영상 클립 — 선불 크레딧 (v1.19)
     "cc_by_40": "http://creativecommons.org/licenses/by/4.0/",
 }
 
@@ -6515,7 +6516,7 @@ body.easy #easyBar { display: block; }
       <div style="display:flex;align-items:center;gap:8px;font-weight:700">✨ fal.ai (AI 영상 클립)
         <span class="hint" id="apiFalState" style="font-weight:400"></span></div>
       <div class="hint" style="margin-top:4px">쓰이는 곳: 구간 만들기의 [✨ AI 클립] — 시댄스·클링 같은 영상 생성 모델
-        — <a href="https://fal.ai" target="_blank" style="color:#7a9bff">fal.ai (선불 크레딧 — 충전한 만큼만 쓰여요)</a></div>
+        — <a href="{{LINK:fal}}" target="_blank" style="color:#7a9bff">fal.ai (선불 크레딧 — 충전한 만큼만 쓰여요)</a></div>
       <div style="display:flex;gap:6px;margin-top:8px">
         <input type="password" id="apiFalKey" placeholder="fal.ai API 키 (사이트 Keys 메뉴에서 발급)" style="flex:1">
         <button class="ghost" style="white-space:nowrap" onclick="saveApiKey(event,'fal')">저장</button>
