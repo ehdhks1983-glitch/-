@@ -9,20 +9,27 @@ echo ==========================================
 echo.
 
 rem ---------- 1) Python ----------
-python --version >nul 2>nul
-if errorlevel 1 (
-    echo [!] Python이 설치되어 있지 않습니다. 자동 설치를 시도합니다...
-    winget install -e --id Python.Python.3.11 --accept-source-agreements --accept-package-agreements
-    echo.
-    echo [i] Python 설치가 끝났으면 이 창을 닫고 1_설치.bat 을 "다시" 실행하세요.
-    echo     자동 설치가 안 됐다면 https://www.python.org/downloads/ 에서 설치하되,
-    echo     설치 화면에서 "Add python.exe to PATH"를 꼭 체크하세요.
-    pause
-    exit /b 1
-)
-for /f "delims=" %%V in ('python --version') do echo [OK] %%V
+rem "설치포함 풀버전" zip에는 windows\python\ 에 파이썬이 통째로 들어 있어
+rem 설치할 것이 없습니다. 없을 때만 예전처럼 자동 설치를 시도합니다.
+call "windows\find_python.bat"
+if defined PY goto :py_ok
+echo [!] Python이 설치되어 있지 않습니다. 자동 설치를 시도합니다...
+winget install -e --id Python.Python.3.11 --accept-source-agreements --accept-package-agreements
+call "windows\find_python.bat"
+if defined PY goto :py_ok
+echo.
+echo [!] Python을 준비하지 못했습니다. 두 가지 방법이 있어요:
+echo     방법 1^) "컷대장 설치포함 풀버전" zip을 받아서 쓰면 이 단계가 아예 없습니다. (추천)
+echo     방법 2^) https://www.python.org/downloads/ 에서 직접 설치하되,
+echo             설치 화면에서 "Add python.exe to PATH"를 꼭 체크하세요.
+pause
+exit /b 1
+:py_ok
+echo [OK] Python 준비됨:
+"%PY%" --version
 
 rem ---------- 2) FFmpeg - libass 포함 빌드 ----------
+rem 설치포함 풀버전에는 windows\ffmpeg\bin\ 에 이미 들어 있어 바로 통과합니다.
 if exist "windows\ffmpeg\bin\ffmpeg.exe" (
     echo [OK] FFmpeg 이미 준비됨
 ) else (
@@ -38,6 +45,7 @@ if exist "windows\ffmpeg\bin\ffmpeg.exe" (
     )
     if not exist "%TEMP%\cutdaejang_ffmpeg.zip" (
         echo [!] 다운로드 실패 — 인터넷 연결을 확인하세요.
+        echo     "설치포함 풀버전" zip에는 FFmpeg가 들어 있어 이 단계가 없습니다. (추천)
         echo     수동 방법: https://www.gyan.dev/ffmpeg/builds/ 에서 release-full zip을 받아
         echo     압축을 풀고 내용물을 cutdaejang\windows\ffmpeg\ 폴더에 넣으세요.
         pause
@@ -59,7 +67,7 @@ rem ---------- 4) 최종 진단 ----------
 set "CUTDAEJANG_FFMPEG=%CD%\windows\ffmpeg\bin\ffmpeg.exe"
 set "CUTDAEJANG_FFPROBE=%CD%\windows\ffmpeg\bin\ffprobe.exe"
 echo.
-python -m cutdaejang doctor
+"%PY%" -m cutdaejang doctor
 echo.
 echo 위에 "진단 결과: 정상" 이 보이면 성공입니다. 이어서 2_UI실행.bat 을 실행하세요.
 if /i not "%~1"=="auto" pause
