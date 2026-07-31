@@ -15,6 +15,15 @@ from typing import Optional
 DEFAULTS: dict = {
     # 📇 내 제품 프로필 (v0.64) — [{name, desc, points, target, tone, link, avoid}]
     "products": [],
+    # ✨ AI 영상 클립 생성 (v1.19 — 24·25번) — 제공자·모델·요금표·월 한도
+    "ai": {
+        "video_provider": "veo",          # veo(기존 Gemini 키) | fal(시댄스·클링)
+        "veo_model": "veo-3.1-fast-generate-001",
+        "fal_model": "fal-ai/bytedance/seedance/v1/lite/text-to-video",
+        "won_per_s": {"veo": 210, "fal": 60},   # 1초당 예상 원화 (설정에서 수정)
+        "monthly_limit_won": 10000,       # 월 사용 한도 (0 = 한도 없음)
+        "spent_won": {},                  # {"2026-07": 1260} — 월별 누적 사용액
+    },
     "tts": {
         "rpm_limit": 8,               # 분당 호출 한도 (무료 등급 10의 80%)
         "max_retries": 5,
@@ -274,7 +283,9 @@ _KEY_ENVS = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
              "coupang_secret": "COUPANG_SECRET_KEY",
              # 🟢 네이버 검색(쇼핑) API (v0.89 — 쇼핑커넥트 상품 검색)
              "naver_client_id": "NAVER_CLIENT_ID",
-             "naver_client_secret": "NAVER_CLIENT_SECRET"}
+             "naver_client_secret": "NAVER_CLIENT_SECRET",
+             # ✨ fal.ai (v1.19 — AI 영상 클립: 시댄스·클링, 선불 크레딧)
+             "fal": "FAL_API_KEY"}
 
 
 def api_keys_path() -> Path:

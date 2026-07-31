@@ -380,6 +380,7 @@ def _apply_keys(params: dict) -> None:
         ("gemini_key", "GEMINI_API_KEY", "gemini"),
         ("openai_key", "OPENAI_API_KEY", "openai"),
         ("elevenlabs_key", "ELEVENLABS_API_KEY", "elevenlabs"),
+        ("fal_key", "FAL_API_KEY", "fal"),        # ✨ AI 영상 클립 (v1.19)
     ):
         value = (params.get(field) or "").strip()
         if value:
@@ -522,7 +523,8 @@ def _record_history(workdir: str, result, opts: JobOptions) -> None:
         pass  # 히스토리 기록 실패는 UI 동작에 영향 없음
 
 
-_PARAM_SECRET_KEYS = ("gemini_key", "openai_key", "eleven_key", "elevenlabs_key", "save_key")
+_PARAM_SECRET_KEYS = ("gemini_key", "openai_key", "eleven_key", "elevenlabs_key",
+                       "fal_key", "save_key")
 
 
 def _record_simple_history(workdir: str, job_id: str, *, title: str, mode: str,
@@ -2618,6 +2620,49 @@ def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
                  errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
+def _run_gen_clip(job_id: str, params: dict, workdir: str) -> None:
+    """✨ AI 영상 클립 1개 생성 (v1.19, 목록 24·25).
+
+    완료되면 예상액을 월 누적(spent_won)에 더한다 — 캐시 재사용은 과금이
+    없으므로 더하지 않는다. 숫자는 어디까지나 **예상치**라 화면에도 그렇게
+    표기한다 (실제 청구는 구글/fal.ai 계정 기준).
+    """
+    from ..core import video_gen  # noqa: PLC0415
+
+    try:
+        provider = str(params.get("provider") or "veo")
+        ai = config.load_settings().get("ai") or {}
+        if provider == "fal":
+            key = os.environ.get("FAL_API_KEY") or ""
+            model = str(ai.get("fal_model") or "")
+        else:
+            key = os.environ.get("GEMINI_API_KEY") or ""
+            model = str(ai.get("veo_model") or "")
+        path, cached = video_gen.generate_clip(
+            str(params.get("prompt") or ""), provider, key, workdir,
+            model=model, duration_s=int(params.get("duration_s") or 5),
+            aspect=str(params.get("aspect") or "16:9"),
+            progress_cb=lambda m: _set_job(job_id, note=m))
+        est = int(params.get("est_won") or 0)
+        if cached:
+            note = "♻ 저장해 둔 클립 재사용 — 같은 내용이라 과금 없음"
+        elif est:
+            note = f"✨ 완성 — 약 {est:,}원 (예상치 · 실제 청구는 제공자 계정 기준)"
+            month = time.strftime("%Y-%m")
+            spent = dict(ai.get("spent_won") or {})
+            spent[month] = int(spent.get(month) or 0) + est
+            config.save_settings({"ai": {"spent_won": spent}})
+        else:
+            note = "✨ 완성 — 단가표가 비어 있어 사용액은 기록하지 않았어요 (⚙설정)"
+        _set_job(job_id, status="ok", frac=1.0, clip=path, note=note)
+    except Exception as e:  # noqa: BLE001 — 한국어 메시지를 화면에 그대로
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error(
+            "AI 클립 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed", errors=[str(e)])
+
+
 def _run_generate(job_id: str, params: dict, workdir: str) -> None:
     """대본 생성 → 자동 모드면 즉시 파이프라인, 검토 모드면 대기 (기획안 §1.3)."""
     try:
@@ -2790,6 +2835,19 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/api/ai_cost":   # ✨ AI 클립 비용 정보 (v1.19, 목록 25)
+            s = config.load_settings()
+            ai = s.get("ai") or {}
+            month = time.strftime("%Y-%m")
+            self._send_json({
+                "ok": True, "month": month,
+                "provider": str(ai.get("video_provider") or "veo"),
+                "won_per_s": ai.get("won_per_s") or {},
+                "monthly_limit_won": int(ai.get("monthly_limit_won") or 0),
+                "spent_won": int((ai.get("spent_won") or {}).get(month) or 0),
+                "has_gemini": bool(os.environ.get("GEMINI_API_KEY")),
+                "has_fal": bool(os.environ.get("FAL_API_KEY")),
+            })
         elif path == "/api/update_check":   # 🔄 새 버전 확인 (v1.18 배포 1단계)
             from .. import __version__ as cur  # noqa: PLC0415
 
@@ -3743,6 +3801,54 @@ class _Handler(BaseHTTPRequestHandler):
                 text += "\n분류: " + str(params["category"]).strip()
             self._send_json({"ok": True, "paste_text": text, "images": imgs,
                              "previews": previews, "link": short or url})
+        elif path == "/api/gen_clip":   # ✨ AI 영상 클립 생성 (v1.19, 목록 24·25)
+            _apply_keys(params)
+            prompt = str(params.get("prompt") or "").strip()
+            if not prompt:
+                self._send_json({"error": "어떤 장면인지 프롬프트를 적어주세요 — "
+                                 "예) 밤의 도시 위를 나는 드론 샷"}, 400)
+                return
+            s = config.load_settings()
+            ai = s.get("ai") or {}
+            provider = str(params.get("provider")
+                           or ai.get("video_provider") or "veo")
+            try:
+                dur = max(2, min(12, int(params.get("duration_s") or 5)))
+            except (TypeError, ValueError):
+                dur = 5
+            try:
+                per_s = float((ai.get("won_per_s") or {}).get(provider) or 0)
+            except (TypeError, ValueError):
+                per_s = 0.0
+            est = int(dur * per_s)          # 예상치 — 실제 청구는 제공자 계정 기준
+            month = time.strftime("%Y-%m")
+            spent = int((ai.get("spent_won") or {}).get(month) or 0)
+            limit = int(ai.get("monthly_limit_won") or 0)
+            if limit and est and spent + est > limit:
+                self._send_json({"error": (
+                    f"이번 달 AI 클립 예상 사용액이 한도를 넘어요 — 지금까지 약 "
+                    f"{spent:,}원 + 이번 {est:,}원 > 한도 {limit:,}원. "
+                    "⚙설정 「✨ AI 클립 생성」에서 한도를 올리거나 다음 달에 "
+                    "만들어 주세요 (예상치 기준)")}, 400)
+                return
+            if provider == "fal" and not os.environ.get("FAL_API_KEY"):
+                self._send_json({"error": "fal.ai API 키가 필요해요 — 🔑 API 연동에서 "
+                                 "저장해 주세요 (선불 크레딧이라 충전한 만큼만 쓰여요)"},
+                                400)
+                return
+            if provider != "fal" and not os.environ.get("GEMINI_API_KEY"):
+                self._send_json({"error": "제미나이(Gemini) API 키가 필요해요 — "
+                                 "🔑 API 연동에서 저장해 주세요 "
+                                 "(무료 발급: aistudio.google.com/apikey)"}, 400)
+                return
+            job_id = orchestrator.new_job_id("AI클립")
+            _set_job(job_id, status="running", stage="ai_clip", frac=0.0,
+                     title="✨ AI 클립 생성", params={})
+            _queue_job(job_id, _run_gen_clip, job_id, {
+                "prompt": prompt, "provider": provider, "duration_s": dur,
+                "est_won": est, "aspect": str(params.get("aspect") or "16:9"),
+            }, workdir)
+            self._send_json({"job_id": job_id, "est_won": est})
         elif path == "/api/shop_login_open":   # 🌐 내 크롬 열기 — 로그인용 (v1.12)
             from ..tools import product_page  # noqa: PLC0415
 
@@ -3905,7 +4011,8 @@ class _Handler(BaseHTTPRequestHandler):
                 _apply_keys({**params, "save_key": True})
                 out = {"ok": True,
                        "gemini": bool(os.environ.get("GEMINI_API_KEY")),
-                       "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY"))}
+                       "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
+                       "fal": bool(os.environ.get("FAL_API_KEY"))}
                 if (params.get("elevenlabs_key") or "").strip():
                     # 저장 즉시 실제 목록 조회로 키 검증 — 결과를 그대로 알림 (v0.64.1)
                     type(self.server)._eleven_cache = None
@@ -4394,6 +4501,7 @@ class _Handler(BaseHTTPRequestHandler):
                                 and os.environ.get("COUPANG_SECRET_KEY")),  # 🛒 v0.88
                 "naver": bool(os.environ.get("NAVER_CLIENT_ID")
                               and os.environ.get("NAVER_CLIENT_SECRET")),   # 🟢 v0.89
+                "fal": bool(os.environ.get("FAL_API_KEY")),                 # ✨ v1.19
             },
             "platform": sys.platform,
             "env": _env_check(),
@@ -4776,7 +4884,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.18.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.19.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -4840,6 +4948,7 @@ body.easy #easyBar { display: block; }
       <button class="ghost" style="padding:4px 10px" onclick="checkUpdate(event)"
               title="배포 주소가 설정된 경우, 새 버전이 나왔는지 확인해요">🔄 새 버전 확인</button>
       <span class="hint" id="updateState"></span>
+      <span class="hint" id="aiSpendLine" style="color:#ffd166"></span>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
       <button class="ghost" onclick="openRip(event)">🎙→📃 대본 따오기</button>
@@ -6403,6 +6512,17 @@ body.easy #easyBar { display: block; }
       </div>
     </div>
     <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
+      <div style="display:flex;align-items:center;gap:8px;font-weight:700">✨ fal.ai (AI 영상 클립)
+        <span class="hint" id="apiFalState" style="font-weight:400"></span></div>
+      <div class="hint" style="margin-top:4px">쓰이는 곳: 구간 만들기의 [✨ AI 클립] — 시댄스·클링 같은 영상 생성 모델
+        — <a href="https://fal.ai" target="_blank" style="color:#7a9bff">fal.ai (선불 크레딧 — 충전한 만큼만 쓰여요)</a></div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <input type="password" id="apiFalKey" placeholder="fal.ai API 키 (사이트 Keys 메뉴에서 발급)" style="flex:1">
+        <button class="ghost" style="white-space:nowrap" onclick="saveApiKey(event,'fal')">저장</button>
+      </div>
+      <div class="hint" style="margin-top:4px">이 키가 없어도 <b>Veo(제미나이 키 그대로)</b>로 만들 수 있어요 — 시댄스·클링을 쓰고 싶을 때만 넣으세요.</div>
+    </div>
+    <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
       <div style="font-weight:700">🎤 GPT-SoVITS (무료 내 목소리 · 내 PC)</div>
       <div class="hint" style="margin-top:4px">키가 아니라 내 PC 프로그램 연결이에요 — 등록은
         <button class="ghost" style="padding:3px 10px" onclick="openVoice(event)">🎤 내 목소리 등록</button> 화면에서</div>
@@ -6532,6 +6652,26 @@ body.easy #easyBar { display: block; }
     </details>
 
     <details class="opt">
+      <summary>✨ AI 클립 생성 <span class="hint">— [✨ AI 클립]의 제공자 · 1초당 요금표 · 월 사용 한도</span></summary>
+      <div class="row" style="margin-top:4px">
+        <div><label>기본 제공자</label>
+          <select id="setAiProv">
+            <option value="veo">Veo (구글 — 제미나이 키 그대로)</option>
+            <option value="fal">fal.ai (시댄스·클링 — 선불 크레딧)</option>
+          </select></div>
+        <div><label>Veo 모델</label><input type="text" id="setVeoModel" placeholder="veo-3.1-fast-generate-001"></div>
+        <div><label>fal.ai 모델 주소</label><input type="text" id="setFalModel" placeholder="fal-ai/bytedance/seedance/v1/lite/text-to-video"></div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <div><label>Veo 1초당 예상(원)</label><input type="number" id="setWonVeo" min="0" step="10"></div>
+        <div><label>fal 1초당 예상(원)</label><input type="number" id="setWonFal" min="0" step="10"></div>
+        <div><label>월 사용 한도(원) — 0이면 한도 없음</label><input type="number" id="setAiLimit" min="0" step="1000"></div>
+      </div>
+      <div class="hint" style="margin-top:6px">여기 요금표는 <b>예상치</b>예요 — 제공자 가격이 바뀌면 숫자를 고쳐주세요.
+        실제 청구는 구글/fal.ai 계정에서 확인됩니다. 한도를 넘으면 [✨ AI 클립]이 잠기고, 다음 달이 되면 자동으로 풀려요.</div>
+    </details>
+
+    <details class="opt">
       <summary>📦 내 채널 정보·브랜딩 <span class="hint">— 업로드 키트 문구 톤 + 인트로/아웃트로 (선택)</span></summary>
       <div class="row" style="margin-top:4px">
         <div><label>채널명</label><input type="text" id="setChName" placeholder="예) 곰대리의 자동화"></div>
@@ -6576,6 +6716,32 @@ body.easy #easyBar { display: block; }
   </details>
 </div>
 
+<!-- ✨ AI 클립 만들기 (v1.19, 목록 24·25) — 텍스트로 구간용 짧은 영상 -->
+<div id="aiClipBox" class="hidden" style="position:fixed;inset:0;background:rgba(8,10,16,.84);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px">
+  <div style="width:min(640px,94vw);background:#171a23;border:1px solid #2c3347;border-radius:12px;padding:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <b>✨ AI 클립 만들기</b>
+      <button class="ghost" onclick="aiClipClose(event)">✕ 닫기</button>
+    </div>
+    <div class="hint" style="margin-top:6px">어떤 장면인지 적으면 AI가 짧은 영상을 만들어 <b>이 구간의 클립 칸에 자동으로</b> 넣어줘요.
+      화면 메모가 있으면 미리 채워드려요 — 고쳐 쓰셔도 됩니다.</div>
+    <textarea id="aiClipPrompt" rows="4" style="width:100%;margin-top:8px" placeholder="예) 밤의 도시 위를 천천히 나는 드론 샷, 네온 불빛"></textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <select id="aiClipProv" style="width:auto;padding:6px 8px" onchange="aiClipEst()"></select>
+      <select id="aiClipDur" style="width:auto;padding:6px 8px" onchange="aiClipEst()">
+        <option value="5">5초</option><option value="8">8초</option><option value="10">10초</option>
+      </select>
+      <b id="aiClipEstLine" style="color:#ffd166"></b>
+    </div>
+    <div class="hint" id="aiClipKeyHint" style="margin-top:6px;color:#ff9aa6"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button onclick="aiClipGo(event)">✨ 이 내용으로 만들기</button>
+    </div>
+    <div class="hint" style="margin-top:6px">요금은 <b>예상치</b>예요 — 실제 청구는 구글/fal.ai 계정 기준.
+      같은 내용을 다시 만들면 저장해 둔 클립을 재사용해 <b>과금이 없어요</b>. 월 사용액이 한도(⚙설정)를 넘으면 잠깁니다.</div>
+  </div>
+</div>
+
 <!-- ⤢ 구간 대본 크게 보기 (v1.13) — 여기서 고치면 원래 칸에 바로 반영 -->
 <div id="secZoom" class="hidden" style="position:fixed;inset:0;background:rgba(8,10,16,.84);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px">
   <div style="width:min(880px,94vw);background:#171a23;border:1px solid #2c3347;border-radius:12px;padding:14px">
@@ -6597,7 +6763,8 @@ const STAGE_KO = {queued:'⏳ 대기 중 (동시 한도에 자리가 나면 자�
                   script:'대본 생성', tts:'목소리 합성(TTS)', background:'배경 준비',
                   timeline:'타임라인 계산', render:'영상 렌더링',
                   review:'대본 검토 대기', done:'완료',
-                  analyze:'무음 구간 분석', cut:'무음 잘라내기', stt:'음성 인식(자막 만들기)'};
+                  analyze:'무음 구간 분석', cut:'무음 잘라내기', stt:'음성 인식(자막 만들기)',
+                  ai_clip:'✨ AI 클립 생성 (보통 1~5분)'};
 
 document.querySelectorAll('input[name=prov]').forEach(r => r.onchange = () => {
   const isGemini = pick('prov') === 'gemini';
@@ -8514,6 +8681,99 @@ function autoCheckUpdate(){
   }catch(e){}
 }
 
+// ── ✨ AI 클립 만들기 (v1.19, 목록 24·25) — 예상 요금 확인 후 생성 ──
+let _aiClipVi = null, _aiClipBtn = null, _aiCost = null;
+async function _loadAiCost(){
+  try{ _aiCost = await (await fetch('/api/ai_cost')).json(); }
+  catch(e){ _aiCost = null; }
+  return _aiCost;
+}
+function _renderAiSpend(){
+  const el = $('aiSpendLine'); if(!el || !_aiCost || !_aiCost.ok) return;
+  if(!_aiCost.spent_won){ el.textContent = ''; return; }
+  el.textContent = '✨ 이번 달 AI 클립 약 ' + (_aiCost.spent_won||0).toLocaleString() + '원'
+    + (_aiCost.monthly_limit_won ? ' / 한도 ' + _aiCost.monthly_limit_won.toLocaleString() + '원' : '')
+    + ' (예상치)';
+}
+function _aiClipPerWon(prov){
+  return _aiCost && _aiCost.won_per_s ? (+_aiCost.won_per_s[prov] || 0) : 0;
+}
+function aiClipEst(){
+  const line = $('aiClipEstLine'); if(!line) return;
+  const prov = $('aiClipProv').value, dur = +$('aiClipDur').value || 5;
+  const est = Math.round(_aiClipPerWon(prov) * dur);
+  line.textContent = est ? ('예상 요금: 약 ' + est.toLocaleString() + '원')
+                         : '예상 요금: ⚙설정에 1초당 단가를 넣으면 보여요';
+  const hint = $('aiClipKeyHint');
+  if(hint && _aiCost){
+    hint.textContent = prov === 'fal'
+      ? (_aiCost.has_fal ? '' : '⚠ fal.ai 키가 아직 없어요 — 🔑 API 연동에서 저장해 주세요 (선불 크레딧)')
+      : (_aiCost.has_gemini ? '' : '⚠ 제미나이 키가 아직 없어요 — [만들기]를 누르면 붙여넣기 창이 떠요');
+  }
+}
+function aiClipOpen(ev, row, vi, btn){
+  if(ev) ev.preventDefault();
+  _aiClipVi = vi; _aiClipBtn = btn;
+  const scr = row.querySelector('.sec-screen'), nar = row.querySelector('.sec-narr');
+  const seed = ((scr && scr.value.trim())
+    || (nar && (nar.value.trim().split('\\n')[0] || '')) || '').trim();
+  if(seed && !$('aiClipPrompt').value.trim()) $('aiClipPrompt').value = seed;
+  const sel = $('aiClipProv');
+  const fill = function(){
+    sel.innerHTML = '';
+    sel.add(new Option('Veo (제미나이 키' + (_aiCost && _aiCost.has_gemini ? ' ✓' : '') + ')', 'veo'));
+    sel.add(new Option('fal.ai — 시댄스·클링' + (_aiCost && _aiCost.has_fal ? ' ✓' : ''), 'fal'));
+    sel.value = (_aiCost && _aiCost.provider) || 'veo';
+    aiClipEst();
+  };
+  if(_aiCost) fill(); else _loadAiCost().then(fill);
+  $('aiClipBox').classList.remove('hidden');
+}
+function aiClipClose(ev){ if(ev) ev.preventDefault(); $('aiClipBox').classList.add('hidden'); }
+async function aiClipGo(ev){
+  ev.preventDefault();
+  const prompt = $('aiClipPrompt').value.trim();
+  if(!prompt){ alert('어떤 장면인지 한 줄이라도 적어주세요 — 예) 밤의 도시 드론 샷'); return; }
+  const prov = $('aiClipProv').value, dur = +$('aiClipDur').value || 5;
+  let key = '';
+  if(prov !== 'fal'){ key = ensureGeminiKey(); }
+  const est = Math.round(_aiClipPerWon(prov) * dur);
+  if(!confirm('✨ AI 클립을 만들까요?\\n\\n'
+      + (est ? ('예상 요금: 약 ' + est.toLocaleString() + '원 (예상치 — 실제 청구는 제공자 계정 기준)\\n') : '')
+      + '같은 내용을 다시 만들면 과금 없이 재사용돼요.')) return;
+  const vi = _aiClipVi, btn = _aiClipBtn;
+  const d = await (await fetch('/api/gen_clip', {method:'POST', body: JSON.stringify(
+    {prompt: prompt, provider: prov, duration_s: dur, aspect: '16:9',
+     gemini_key: key, save_key: true})})).json();
+  if(d.error){ alert(d.error); return; }
+  aiClipClose();
+  if(btn){ btn.disabled = true; btn.textContent = '✨ 만드는 중…'; }
+  let waited = 0;
+  const timer = setInterval(async function(){
+    waited += 3;
+    try{
+      const st = await (await fetch('/api/state')).json();
+      const j = (st.jobs || []).find(function(x){ return x.id === d.job_id; });
+      if(!j) return;
+      if(j.status === 'ok' && j.clip){
+        clearInterval(timer);
+        if(btn){ btn.disabled = false; btn.textContent = '✨ AI 클립'; }
+        if(vi){ vi.value = j.clip; vi.dispatchEvent(new Event('input', {bubbles:true})); }
+        _loadAiCost().then(_renderAiSpend);
+        alert((j.note || '✨ AI 클립 완성!') + '\\n\\n구간의 클립 칸에 자동으로 넣어드렸어요.');
+      } else if(j.status === 'failed'){
+        clearInterval(timer);
+        if(btn){ btn.disabled = false; btn.textContent = '✨ AI 클립'; }
+        alert('❌ AI 클립 실패: ' + ((j.errors || [])[0] || '알 수 없는 오류'));
+      } else if(waited > 480){
+        clearInterval(timer);
+        if(btn){ btn.disabled = false; btn.textContent = '✨ AI 클립'; }
+        alert('⏱ 8분이 지나도 끝나지 않았어요 — 완성되면 📋 진행·대기 목록에 남아요');
+      }
+    }catch(e){}
+  }, 3000);
+}
+
 async function toggleEasy(ev){
   if(ev) ev.preventDefault();
   const on = !document.body.classList.contains('easy');
@@ -8639,6 +8899,8 @@ function toggleApiCard(){
 function refreshApiStates(){
   const g = $('apiGeminiState'), e = $('apiElevenState');
   if(g) g.textContent = window._hasGeminiKey ? '✅ 연결됨' : '⬜ 미등록';
+  const f = $('apiFalState');
+  if(f) f.textContent = window._hasFalKey ? '✅ 연결됨' : '⬜ 미등록 (없어도 Veo는 동작해요)';
   if(e) e.textContent = window._hasElevenKey ? '🔑 키 저장됨 · 확인 중...' : '⬜ 미등록';
   // 일레븐랩스는 "저장됨"과 "실제로 됨"이 달라서, 열 때마다 진짜로 확인 (v0.64.1)
   if(e && window._hasElevenKey){
@@ -8652,14 +8914,20 @@ function refreshApiStates(){
 }
 async function saveApiKey(ev, which){
   ev.preventDefault();
-  const val = (which === 'gemini' ? $('apiGeminiKey').value : $('apiElevenKey').value).trim();
+  const val = (which === 'gemini' ? $('apiGeminiKey').value
+             : which === 'fal' ? $('apiFalKey').value : $('apiElevenKey').value).trim();
   if(!val){ alert('키를 붙여넣은 뒤 [저장]을 눌러주세요'); return; }
   const body = {action:'save'};
-  if(which === 'gemini') body.gemini_key = val; else body.elevenlabs_key = val;
+  if(which === 'gemini') body.gemini_key = val;
+  else if(which === 'fal') body.fal_key = val;
+  else body.elevenlabs_key = val;
   const d = await (await fetch('/api/keys', {method:'POST', body: JSON.stringify(body)})).json();
   if(d.error){ alert(d.error); return; }
   window._hasGeminiKey = !!d.gemini; window._hasElevenKey = !!d.elevenlabs;
-  if(which === 'gemini') $('apiGeminiKey').value = ''; else $('apiElevenKey').value = '';
+  window._hasFalKey = !!d.fal;
+  if(which === 'gemini') $('apiGeminiKey').value = '';
+  else if(which === 'fal') $('apiFalKey').value = '';
+  else $('apiElevenKey').value = '';
   refreshApiStates();
   if(which === 'elevenlabs' && d.eleven_check){
     // 저장 즉시 서버가 실제 조회로 검사한 결과 (v0.64.1) — 되는 척 금지
@@ -8671,7 +8939,9 @@ async function saveApiKey(ev, which){
     }
     return;
   }
-  alert('저장했어요 — 이제 이 키가 필요한 기능이 모두 켜집니다');
+  alert(which === 'fal'
+    ? '저장했어요 — 구간 만들기의 [✨ AI 클립]에서 시댄스·클링 같은 fal.ai 모델을 쓸 수 있어요'
+    : '저장했어요 — 이제 이 키가 필요한 기능이 모두 켜집니다');
 }
 async function clearAllKeys(ev){
   ev.preventDefault();
@@ -9053,6 +9323,7 @@ function fillSettings(s){
   restoreDrafts(s); bindDrafts(); bindDrops();   // 📥 끌어넣기 (v1.13)
   applyEasy(!!(((s || {}).ui || {}).easy_mode)); // 🔰 쉬운 모드 기억 (v1.17)
   autoCheckUpdate();                             // 🔄 하루 1회 새 버전 확인 (v1.18)
+  _loadAiCost().then(_renderAiSpend);            // ✨ AI 클립 월 사용액 (v1.19)
   initEzChips(); injectQuickDeco();
   setTimeout(() => { markEzChips(); markQuickDeco(); }, 0);
   $('setFontSize').value = s.subtitle.font_size;
@@ -9087,6 +9358,14 @@ function fillSettings(s){
   const br = s.branding || {};
   $('setIntroPath').value = br.intro || '';
   $('setOutroPath').value = br.outro || '';
+  const ai = s.ai || {};                          // ✨ AI 클립 생성 (v1.19)
+  $('setAiProv').value = ai.video_provider || 'veo';
+  $('setVeoModel').value = ai.veo_model || '';
+  $('setFalModel').value = ai.fal_model || '';
+  const wps = ai.won_per_s || {};
+  $('setWonVeo').value = wps.veo != null ? wps.veo : 210;
+  $('setWonFal').value = wps.fal != null ? wps.fal : 60;
+  $('setAiLimit').value = ai.monthly_limit_won != null ? ai.monthly_limit_won : 10000;
   window._templates = ((s.ui || {}).templates) || {};
   refreshTplSel('');
 }
@@ -9177,6 +9456,11 @@ async function saveSettings(){
     channel: {name: $('setChName').value.trim(), topic: $('setChTopic').value.trim(),
               audience: $('setChAudience').value.trim(), stage: $('setChStage').value},
     branding: {intro: $('setIntroPath').value.trim(), outro: $('setOutroPath').value.trim()},
+    ai: {video_provider: $('setAiProv').value,
+         veo_model: $('setVeoModel').value.trim(),
+         fal_model: $('setFalModel').value.trim(),
+         won_per_s: {veo: +$('setWonVeo').value||0, fal: +$('setWonFal').value||0},
+         monthly_limit_won: +$('setAiLimit').value||0},
   }};
   const data = await (await fetch('/api/settings', {method:'POST', body: JSON.stringify(body)})).json();
   alert(data.ok ? '저장했습니다. 다음 작업부터 적용됩니다.' : ('저장 실패: ' + data.error));
@@ -10191,7 +10475,12 @@ function addSectionRow(title, narration){
   [['', '컷: 자동 (핵심 몽타주)'], ['fit', '⏩ 배속으로 통째로 맞춤 (안 잘림)'],
    ['1.5', '⏩ 1.5배속'], ['2', '⏩ 2배속'], ['3', '⏩ 3배속']
   ].forEach(function(o){ sp.add(new Option(o[1], o[0])); });
-  vrow.appendChild(vi); vrow.appendChild(pick); vrow.appendChild(sp);
+  const aib = document.createElement('button');      // ✨ AI 클립 (v1.19)
+  aib.className = 'ghost sec-ai'; aib.textContent = '✨ AI 클립';
+  aib.style.cssText = 'white-space:nowrap';
+  aib.title = '이 구간에 쓸 짧은 영상을 AI가 만들어 드려요 — 만들기 전에 예상 요금을 보여줘요';
+  aib.onclick = function(ev){ aiClipOpen(ev, div, vi, aib); };
+  vrow.appendChild(vi); vrow.appendChild(pick); vrow.appendChild(aib); vrow.appendChild(sp);
   // 🎥 풀영상 모드: 이 구간이 풀영상의 몇 초~몇 초인지 (v0.84)
   const rrow = document.createElement('div');
   rrow.className = 'sec-rangebox';
@@ -10742,6 +11031,7 @@ async function poll(){
     $('cpKeyState').textContent = '— ✅ 키 저장됨, 상품을 검색해 보세요';
   }
   window._hasNaverKey = !!(state.keys || {}).naver;       // 🟢 쇼핑커넥트 (v0.89)
+  window._hasFalKey = !!(state.keys || {}).fal;           // ✨ AI 클립 (v1.19)
   if(window._hasNaverKey && $('nvKeyState') && !window._nvStateSet){
     window._nvStateSet = true;
     $('nvKeyState').textContent = '— ✅ 키 저장됨, 상품을 검색해 보세요';

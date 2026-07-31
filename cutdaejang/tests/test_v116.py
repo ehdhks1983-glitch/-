@@ -23,7 +23,7 @@ from tests.conftest import requires_ffmpeg
 
 
 def test_version():
-    assert __version__ == "1.18.0"
+    assert __version__ == "1.19.0"
 
 
 # ── ⬆⬇ 순서 이동 — 행을 통째로 옮긴다 ───────────────────────────

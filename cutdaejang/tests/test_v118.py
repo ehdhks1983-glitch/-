@@ -21,7 +21,7 @@ from cutdaejang.gui import webui
 
 
 def test_version():
-    assert __version__ == "1.18.0"
+    assert __version__ == "1.19.0"
 
 
 # ── 🪟 전용 창 ───────────────────────────────────────────────────
