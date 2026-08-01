@@ -30,7 +30,7 @@ PAD = "<div class='prod-detail'><p>상품 상세 설명 문단입니다. 길게 
 
 
 def test_version():
-    assert __version__ == "1.22.1"
+    assert __version__ == "1.23.0"
 
 
 # ── 최소 WebSocket/CDP 구현 자체 ────────────────────────────────

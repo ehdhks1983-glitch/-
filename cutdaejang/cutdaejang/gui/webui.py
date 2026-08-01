@@ -4899,7 +4899,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.22.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.23.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5009,6 +5009,7 @@ body.easy #easyBar { display: block; }
         <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','folder')">📁 폴더째</button>
       </div>
       <div class="hint">[🖼 사진 고르기]에서 Ctrl/Shift로 여러 장을 한 번에 — 고른 순서(입력칸의 세미콜론 순서)대로 들어가요. 폴더를 고르면 안의 사진 전부(이름순). 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
+      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 <b>[🎞 구간 대본 영상]</b>의 [✨ AI 클립]으로 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
       <div class="chk" style="gap:8px">
         <span>영상 전체 길이</span>
         <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px">
@@ -5311,6 +5312,12 @@ body.easy #easyBar { display: block; }
           <option value="tiktok">🎵 틱톡 감성</option>
           <option value="youtube">▶ 유튜브 예능</option>
           <option value="cinema">🎬 시네마틱</option>
+          <option value="news">📰 뉴스 정보</option>
+          <option value="retro">🕹 레트로 네온</option>
+          <option value="cozy">☕ 아늑 브이로그</option>
+          <option value="kids">🧸 키즈 팝</option>
+          <option value="luxury">💎 럭셔리</option>
+          <option value="docu">🎞 흑백 다큐</option>
         </select>
         <span class="hint">— 자막 스타일·색감·등장·위치를 한 번에 (틱톡은 말하는 단어가 차오르는 하이라이트)</span>
       </div>
@@ -5736,6 +5743,12 @@ body.easy #easyBar { display: block; }
           <option value="tiktok">🎵 틱톡 감성 (단어 하이라이트+블랙 박스+쨍한 색)</option>
           <option value="youtube">▶ 유튜브 예능 (노랑 자막 팝+선명)</option>
           <option value="cinema">🎬 시네마틱 (차분한 영화 색감)</option>
+          <option value="news">📰 뉴스 정보 (블랙 박스 자막+또박또박)</option>
+          <option value="retro">🕹 레트로 네온 (민트 글로우+통통 등장)</option>
+          <option value="cozy">☕ 아늑 브이로그 (말풍선 띠+화사한 색)</option>
+          <option value="kids">🧸 키즈 팝 (문장마다 색이 바뀌는 알록달록)</option>
+          <option value="luxury">💎 럭셔리 (영화 색감+타자기 등장)</option>
+          <option value="docu">🎞 흑백 다큐 (드라마틱한 흑백)</option>
         </select>
         <span class="hint" id="genThemeHint">— 한 번에 그 느낌으로 (자막 스타일·색감·자막 등장을 묶어 세팅)</span>
       </div>
@@ -5887,6 +5900,7 @@ body.easy #easyBar { display: block; }
         <span class="hint" id="wlPhotoCnt" style="align-self:center"></span>
         <button class="ghost" style="border-color:#4266d5" onclick="loadWeblinkPasted(event)">🤖 이 내용으로 대본 만들기</button>
       </div>
+      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 <b>[🎞 구간 대본 영상]</b>의 [✨ AI 클립]으로 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
     </details>
     <div id="wlPreview" class="hidden">
       <div class="steplabel"><span class="stepnum">2</span>사진 확인 <span class="hint">— 체크를 끄면 그 사진은 영상에서 빠져요 (순서 = 문장 순서)</span></div>
@@ -5897,6 +5911,7 @@ body.easy #easyBar { display: block; }
       <div class="chk" style="gap:8px;flex-wrap:wrap">
         <span>목소리</span>
         <select id="wlVoiceSel" style="width:auto;min-width:200px"></select>
+        <button class="ghost" style="padding:5px 10px" onclick="previewNarrVoice(event,'wlVoiceSel')">🔊 미리듣기</button>
         <span>배경음악</span>
         <select id="wlBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
         <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'wlBgmSel','')">▶</button>
@@ -5926,6 +5941,12 @@ body.easy #easyBar { display: block; }
             <option value="tiktok">🎵 틱톡 감성</option>
             <option value="youtube">▶ 유튜브 예능</option>
             <option value="cinema">🎬 시네마틱</option>
+            <option value="news">📰 뉴스 정보</option>
+            <option value="retro">🕹 레트로 네온</option>
+            <option value="cozy">☕ 아늑 브이로그</option>
+            <option value="kids">🧸 키즈 팝</option>
+            <option value="luxury">💎 럭셔리</option>
+            <option value="docu">🎞 흑백 다큐</option>
           </select>
           <span>자막 스타일</span><select id="wlSubStyleSel" style="width:auto"></select>
           <span>제목 스타일</span><select id="wlHookStyleSel" style="width:auto"></select>
@@ -5987,6 +6008,7 @@ body.easy #easyBar { display: block; }
       </div>
       <span style="margin-left:6px">목소리</span>
       <select id="secVoiceSel" style="width:auto;min-width:180px"></select>
+      <button class="ghost" style="padding:5px 10px" onclick="previewNarrVoice(event,'secVoiceSel')">🔊 미리듣기</button>
     </div>
     <details class="opt" id="secAdvancedBox">
       <summary>세부 설정 <span class="hint">— 압축 템포 · 배경음악 · 구간 전환 · 화질 (안 바꾸면 추천값)</span></summary>
@@ -6036,6 +6058,12 @@ body.easy #easyBar { display: block; }
           <option value="tiktok">🎵 틱톡 감성</option>
           <option value="youtube">▶ 유튜브 예능</option>
           <option value="cinema">🎬 시네마틱</option>
+          <option value="news">📰 뉴스 정보</option>
+          <option value="retro">🕹 레트로 네온</option>
+          <option value="cozy">☕ 아늑 브이로그</option>
+          <option value="kids">🧸 키즈 팝</option>
+          <option value="luxury">💎 럭셔리</option>
+          <option value="docu">🎞 흑백 다큐</option>
         </select>
         <span>자막 스타일</span><select id="secSubStyleSel" style="width:auto"></select>
         <span>제목 스타일</span><select id="secHookStyleSel" style="width:auto"></select>
@@ -6131,6 +6159,7 @@ body.easy #easyBar { display: block; }
       <button class="ghost" onclick="resetShopCard(event)" title="링크·결과 글·사진·대본·훅을 한 번에 비우고 처음부터 (로그인 창은 그대로)">🧹 전체 초기화</button>
       <span class="hint" id="shopPhotoCnt" style="align-self:center"></span>
     </div>
+    <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 <b>[🎞 구간 대본 영상]</b>의 [✨ AI 클립]으로 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
     <div id="shopPhotoPrev" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
     <div class="hint" style="margin-top:4px">📋 <b>사진 한꺼번에 넣기</b> — 상품 페이지에서 사진 있는 부분을 마우스로 드래그해 복사(Ctrl+C)한 뒤 이 화면에 붙여넣기(Ctrl+V)하면 사진 여러 장이 자동으로 들어와요. 스크린샷(Win+Shift+S)을 바로 붙여넣어도 됩니다</div>
     <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)" title="수집된 설명을 수정한 뒤 대본만 다시 만들 때 사용하세요">🤖 수정한 정보로 대본 다시 만들기</button>
@@ -6173,6 +6202,12 @@ body.easy #easyBar { display: block; }
             <option value="tiktok">🎵 틱톡 감성</option>
             <option value="youtube">▶ 유튜브 예능</option>
             <option value="cinema">🎬 시네마틱</option>
+            <option value="news">📰 뉴스 정보</option>
+            <option value="retro">🕹 레트로 네온</option>
+            <option value="cozy">☕ 아늑 브이로그</option>
+            <option value="kids">🧸 키즈 팝</option>
+            <option value="luxury">💎 럭셔리</option>
+            <option value="docu">🎞 흑백 다큐</option>
           </select>
           <span>자막 스타일</span><select id="shopSubStyleSel" style="width:auto"></select>
           <span>제목 스타일</span><select id="shopHookStyleSel" style="width:auto"></select>
@@ -9760,6 +9795,12 @@ const THEMES = {
   tiktok:  {sub_style: '블랙 박스', tone: '선명', anim: 'karaoke', pos: 'center'},
   youtube: {sub_style: '예능 노랑', tone: '선명', anim: 'pop', pos: ''},
   cinema:  {sub_style: '기본', tone: '시네마틱', anim: 'none', pos: ''},
+  news:    {sub_style: '블랙 박스', tone: '기본', anim: 'none', pos: ''},
+  retro:   {sub_style: '네온', tone: '시네마틱', anim: 'pop', pos: ''},
+  cozy:    {sub_style: '말풍선 띠', tone: '화사', anim: 'none', pos: ''},
+  kids:    {sub_style: '다색 팝', tone: '선명', anim: 'pop', pos: ''},
+  luxury:  {sub_style: '기본', tone: '시네마틱', anim: 'type', pos: ''},
+  docu:    {sub_style: '기본', tone: '흑백', anim: 'none', pos: ''},
 };
 window._themeAnim = window._themeAnim || {};
 window._themePos = window._themePos || {};

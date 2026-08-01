@@ -76,6 +76,37 @@ TRACKS = [
     ("트렌디", "Itty Bitty 8 Bit"),           # 레트로 게임풍
     ("정보형", "Wholesome"),                  # 담백한 정보 전달
     ("정보형", "Study and Relax"),            # 공부·집중
+    # ── v1.23 확장: +28곡 (같은 Kevin MacLeod CC BY 라이브러리) ──
+    # 곡 제목이 원저작자 사이트에서 바뀌었으면 그 곡만 건너뛰고 나머지는 정상 —
+    # 재실행하면 실패분만 다시 시도하므로 목록이 커져도 안전하다.
+    ("코믹", "Hyperfun"),                     # 정신없이 몰아치는 예능
+    ("코믹", "Quirky Dog"),                   # 능청스러운 장면
+    ("코믹", "Happy Boy Theme"),              # 휘파람 코믹
+    ("코믹", "The Show Must Be Go"),          # 서커스식 진행
+    ("코믹", "Killing Time"),                 # 뒤뚱뒤뚱 기다림
+    ("예능", "The Cannery"),                  # 부산한 작업 몽타주
+    ("예능", "Daily Beetle"),                 # 아기자기한 일상 예능
+    ("예능", "Beachfront Celebration"),       # 흥겨운 야외
+    ("브이로그", "Bicycle"),                  # 자전거 타는 오후
+    ("브이로그", "Payday"),                   # 경쾌한 보상
+    ("브이로그", "George Street Shuffle"),    # 산책 재즈
+    ("브이로그", "Porch Swing Days - faster"),  # 한가한 오후(빠른판)
+    ("신나는", "Funk Game Loop"),             # 게임풍 펑크
+    ("신나는", "Cut and Run"),                # 스피디한 전개
+    ("신나는", "Overworld"),                  # 모험 시작
+    ("신나는", "Upbeat Forever"),             # 계속 밝게
+    ("잔잔", "Thinking Music"),               # 곰곰이 생각
+    ("잔잔", "Wonder Cycle"),                 # 몽글몽글 회상
+    ("잔잔", "Open Those Bright Eyes"),       # 맑은 아침
+    ("감동", "Tenderness"),                   # 부드러운 감동
+    ("감동", "At Rest"),                      # 차분한 여운
+    ("긴장", "Volatile Reaction"),            # 사건 전개
+    ("긴장", "Crypto"),                       # 서늘한 의심
+    ("긴장", "Epic Unease"),                  # 불길한 웅장
+    ("시네마틱", "Five Armies"),              # 대규모 전개·웅장
+    ("시네마틱", "Darkest Child"),            # 어두운 드라마
+    ("시네마틱", "Prelude and Action"),       # 예고편식 오프닝
+    ("로파이", "Smooth Lovin"),               # 느긋한 그루브
 ]
 
 CREDIT_FILE = "음원_크레딧(설명란에_붙여넣기).txt"
