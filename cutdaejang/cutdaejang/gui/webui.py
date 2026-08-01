@@ -1901,8 +1901,9 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                         why += ((f" · 로그인 창으로 읽음({_login or '로그인 없음'})"
                                  if _win else f" · 로그인: {_login} (창은 닫혀 있었어요 "
                                  "— 창을 켜 두고 다시 하면 더 잘 돼요)") if _login or _win
-                                else " · 로그인: 없음 — 쇼핑 카드의 [🌐 내 크롬 열기]로 창을 "
-                                "열고 로그인한 뒤, 그 창을 켜 둔 채 다시 수집해 보세요")
+                                else " · 로그인: 없음 — 쇼핑 카드의 [🛒 쿠팡 창 열기]·"
+                                "[🟢 네이버 창 열기]로 전용 창을 열고 로그인한 뒤, "
+                                "창을 켜 둔 채 다시 수집해 보세요")
                         art["notes"] = [
                             "🛒 링크는 열렸는데 상품 사진은 못 가져왔어요 — " + why
                             + " · 상품 페이지에서 사진 부분을 복사(Ctrl+C)해 이 화면에 "
@@ -1949,8 +1950,9 @@ def _fetch_weblink_bg(url: str, workdir: str, target_sec: int,
                 why += ((f" · 로그인 창으로 읽음({_login or '로그인 없음'})"
                          if _win else f" · 로그인: {_login} (창은 닫혀 있었어요 "
                          "— 창을 켜 두고 다시 하면 더 잘 돼요)") if _login or _win
-                        else " · 로그인: 없음 — 위 [🌐 내 크롬 열기]로 창을 열고 "
-                        "로그인한 뒤, 그 창을 켜 둔 채 다시 수집해 보세요")
+                        else " · 로그인: 없음 — 위 [🛒 쿠팡 창 열기]·[🟢 네이버 창 "
+                        "열기]로 전용 창을 열고 로그인한 뒤, 창을 켜 둔 채 다시 "
+                        "수집해 보세요")
                 note = ("🖼 글은 가져왔는데 사진은 자동으로 못 가져왔어요 — " + why
                         + " · 방금 연 상품 페이지에서 Ctrl+A(전체 선택) → "
                           "Ctrl+C(복사) 후 이 화면에 Ctrl+V 하면 사진이 들어와요")
@@ -3849,9 +3851,21 @@ class _Handler(BaseHTTPRequestHandler):
                 "est_won": est, "aspect": str(params.get("aspect") or "16:9"),
             }, workdir)
             self._send_json({"job_id": job_id, "est_won": est})
-        elif path == "/api/shop_login_open":   # 🌐 내 크롬 열기 — 로그인용 (v1.12)
+        elif path == "/api/shop_login_open":   # 🌐 로그인 창 열기 (v1.12→v1.20)
             from ..tools import product_page  # noqa: PLC0415
 
+            shop = str(params.get("shop") or "").strip()
+            if shop:                          # 🔌 v1.20: 사이트별 전용 창(9222/9223)
+                reused = bool(product_page.shop_window_port(shop))
+                why = product_page.open_shop_window(shop)
+                if why:
+                    self._send_json({"error": why}, 400)
+                else:
+                    self._send_json({"ok": True, "reused": reused,
+                                     "port": product_page.shop_window_port(shop),
+                                     "browser": product_page.login_browser_name(),
+                                     "hosts": product_page.logged_in_hosts()})
+                return
             why = product_page.open_login_browser(
                 str(params.get("url") or "https://www.coupang.com/"))
             if why:
@@ -4885,7 +4899,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.19.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.20.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6054,15 +6068,20 @@ body.easy #easyBar { display: block; }
     <div class="hint" style="margin-top:4px">수집이 막히면 상품 페이지의 사진·설명 부분을 복사해 아래 결과 칸에 붙여넣으면 됩니다.</div>
     <div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:#1b2436">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="ghost" style="white-space:nowrap" onclick="openShopLogin(event)"
-                title="컷대장 전용 크롬 창을 엽니다. 거기서 쿠팡·네이버에 한 번만 로그인해 두세요">🌐 내 크롬 열기 (로그인)</button>
+        <button class="ghost" style="white-space:nowrap" onclick="openShopLogin(event,'coupang')"
+                title="쿠팡 전용 크롬 창(포트 9222)을 엽니다 — 그 창에서 쿠팡파트너스에 로그인해 두세요">🛒 쿠팡 창 열기</button>
+        <button class="ghost" style="white-space:nowrap" onclick="openShopLogin(event,'naver')"
+                title="네이버 전용 크롬 창(포트 9223)을 엽니다 — 그 창에서 쇼핑커넥트에 로그인해 두세요">🟢 네이버 창 열기</button>
         <span class="hint" id="shopLoginState">로그인 상태 확인 중…</span>
         <button class="ghost" style="padding:2px 8px" onclick="refreshShopLogin(event)">↻ 다시 확인</button>
       </div>
-      <div class="hint" style="margin-top:5px">🔐 <b>사진이 0장으로 나오면 여기부터 하세요.</b>
-        쿠팡·네이버는 <b>로그인한 브라우저</b>에게만 사진이 든 전체 페이지를 보여줍니다.
-        순서는 <b>① 위 버튼으로 창 열기 → ② 그 창에서 로그인 → ③ 창을 켜 둔 채 수집</b>.
-        수집은 <b>그 창에 탭을 잠깐 열어</b> 페이지를 읽고 바로 닫아요(v1.15).
+      <div class="hint" style="margin-top:5px">🔐 <b>순서가 중요해요:</b>
+        <b>① 위 버튼으로 그 쇼핑몰 전용 창 열기(쿠팡 9222 · 네이버 9223) →
+        ② 그 창에서 본인 아이디로 로그인(쿠팡파트너스/쇼핑커넥트) →
+        ③ 창을 켜 둔 채 [🔗 사진·대본 자동 수집]</b>.
+        쿠팡·네이버는 <b>로그인한 브라우저</b>에게만 사진이 든 전체 페이지를 보여줘서,
+        수집은 반드시 <b>그 창에 탭을 잠깐 열어</b> 읽고 바로 닫아요 — 창이 꺼져
+        있으면 수집이 시작되지 않고 이 순서를 다시 안내합니다(v1.20).
         (로그인 정보는 이 PC의 컷대장 전용 폴더에만 남고 어디로도 전송되지 않습니다)</div>
     </div>
     <details class="home-more" id="shopSearchTools">
@@ -10079,7 +10098,18 @@ async function refreshShopLogin(ev){
     const d = await (await fetch('/api/shop_login')).json();
     const hosts = d.hosts || [], g = d.debug || {};
     const bw = g.browser || '브라우저';
-    // 🔌 v1.15: 창이 열려 있으면 **그 창으로** 수집한다 — 가장 확실한 상태
+    // 🔌 v1.20: 사이트별 전용 창(쿠팡 9222 · 네이버 9223) 상태를 먼저
+    const w = g.windows || {};
+    if(w.coupang || w.naver){
+      const parts = [
+        w.coupang ? '🛒 쿠팡 창(' + w.coupang + ') ✅ 연결됨' : '🛒 쿠팡 창 꺼짐',
+        w.naver ? '🟢 네이버 창(' + w.naver + ') ✅ 연결됨' : '🟢 네이버 창 꺼짐'];
+      el.innerHTML = '<b>' + parts.join(' · ') + '</b>' +
+        (hosts.length ? ' <span style="opacity:.85">(' + hosts.join(' · ') + ' 로그인됨)</span>'
+                      : ' <span style="opacity:.85">· 열린 창에서 로그인해 두세요</span>');
+      return;
+    }
+    // 🔌 v1.15: (구) 공용 창이 열려 있으면 그 창으로 수집한다
     if(g.window){
       el.innerHTML = '✅ <b>' + bw + ' 창 연결됨</b> — 이 창으로 수집해요' +
         (hosts.length ? ' <span style="opacity:.85">(' + hosts.join(' · ') + ' 로그인됨)</span>'
@@ -10103,17 +10133,20 @@ async function refreshShopLogin(ev){
     el.innerHTML = '⚠ 아직 로그인 안 됨 — ' + why;
   }catch(_e){ el.textContent = '로그인 상태를 확인하지 못했어요'; }
 }
-async function openShopLogin(ev){
+async function openShopLogin(ev, shop){
   ev.preventDefault();
   const btn = ev.target; btn.disabled = true; const old = btn.textContent;
   btn.textContent = '브라우저 여는 중…';
   try{
     const d = await (await fetch('/api/shop_login_open', {method:'POST',
-      body: JSON.stringify({url: 'https://www.coupang.com/'})})).json();
+      body: JSON.stringify({shop: shop || ''})})).json();
     if(d.error){ alert(d.error); return; }
     const bw = d.browser || '브라우저';
-    uiBanner('🌐 ' + bw + ' 창을 열었어요 — 그 창에서 쿠팡·네이버에 로그인하세요. ' +
-             '창은 그대로 켜 두시면 됩니다 (수집이 이 창을 그대로 써요)');
+    const label = shop === 'naver' ? '네이버 전용' : shop === 'coupang' ? '쿠팡 전용' : '';
+    uiBanner('🌐 ' + bw + ' ' + label + ' 창' + (d.port ? '(포트 ' + d.port + ')' : '')
+             + (d.reused ? '이 이미 켜져 있어요 — 그 창을 그대로 써요. ' : '을 열었어요 — ')
+             + '그 창에서 본인 아이디로 로그인한 뒤, 창을 켜 둔 채 '
+             + '[🔗 사진·대본 자동 수집]을 눌러주세요');
   }catch(e){ alert('브라우저를 열지 못했어요: ' + e); }
   finally{ btn.disabled = false; btn.textContent = old; refreshShopLogin(); }
 }

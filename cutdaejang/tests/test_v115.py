@@ -30,7 +30,7 @@ PAD = "<div class='prod-detail'><p>상품 상세 설명 문단입니다. 길게 
 
 
 def test_version():
-    assert __version__ == "1.19.0"
+    assert __version__ == "1.20.0"
 
 
 # ── 최소 WebSocket/CDP 구현 자체 ────────────────────────────────
@@ -179,8 +179,9 @@ def test_login_debug_reports_open_window(login_window):
 # ── 화면 안내가 새 순서를 말한다 ───────────────────────────────
 def test_ui_explains_window_flow():
     html = webui._apply_links(webui._HTML)
-    assert "① 위 버튼으로 창 열기" in html and "창을 켜 둔 채 수집" in html
+    assert "① 위 버튼으로 그 쇼핑몰 전용 창 열기" in html      # v1.20 새 순서 안내
+    assert "창을 켜 둔 채 [🔗 사진·대본 자동 수집]" in html
     assert "창 연결됨" in html                     # 상태줄의 성공 표시
-    assert "창은 그대로 켜 두시면 됩니다" in html   # 창을 열었을 때 안내
+    assert "창을 켜 둔 채 " in html                # 창을 열었을 때 안내(배너)
     src = open("cutdaejang/gui/webui.py", encoding="utf-8").read()
     assert "login_window_port()" in src           # 사진 0장 메시지에도 창 상태

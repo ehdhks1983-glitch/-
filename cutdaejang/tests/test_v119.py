@@ -23,7 +23,7 @@ from cutdaejang.gui import webui
 
 
 def test_version():
-    assert __version__ == "1.19.0"
+    assert __version__ == "1.20.0"
 
 
 # ── 설정·키 배선 ─────────────────────────────────────────────────

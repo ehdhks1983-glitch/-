@@ -59,6 +59,10 @@ class ShopBlockedError(ValueError):
     """상품 페이지가 프로그램 접속을 차단 — 화면에서 복사→붙여넣기 안내용."""
 
 
+class ShopLoginNeededError(ValueError):
+    """쿠팡·네이버 수집에 필요한 로그인 창이 꺼져 있음 — ①②③ 안내용 (v1.20)."""
+
+
 def _host_of(url: str) -> str:
     try:
         return urllib.parse.urlsplit((url or "").strip()).netloc.lower().split(":")[0]
@@ -170,15 +174,18 @@ def _browser_candidates() -> List[str]:
         pf = os.environ.get("ProgramFiles", r"C:\Program Files")
         pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
         local = os.environ.get("LOCALAPPDATA", "")
+        # v1.20: 크롬을 엣지보다 먼저 — 버튼·안내가 "크롬"이고, 회원님이 참고하는
+        # 블로그 툴들도 크롬 기준이라 다른 브라우저가 뜨면 순서부터 헷갈린다.
         for base in (pf, pf86):
-            cands.append(base + r"\Microsoft\Edge\Application\msedge.exe")
             cands.append(base + r"\Google\Chrome\Application\chrome.exe")
         if local:
             cands.append(local + r"\Google\Chrome\Application\chrome.exe")
+        for base in (pf, pf86):
+            cands.append(base + r"\Microsoft\Edge\Application\msedge.exe")
     else:
         import shutil  # noqa: PLC0415
 
-        for name in ("msedge", "google-chrome", "chromium", "chromium-browser", "chrome"):
+        for name in ("google-chrome", "chromium", "chromium-browser", "chrome", "msedge"):
             p = shutil.which(name)
             if p:
                 cands.append(p)
@@ -298,7 +305,9 @@ def login_debug() -> dict:
     return {"hosts": known_ko, "profile": prof.is_dir(), "db": db_rel,
             "cookies": total, "browser": login_browser_name(), "error": err,
             # 🔌 v1.15: 창이 열려 있으면 **그 창으로** 수집한다 (가장 확실한 길)
-            "window": bool(login_window_port())}
+            "window": bool(login_window_port()),
+            # 🔌 v1.20: 사이트별 전용 창(고정 포트) 상태 — 0이면 꺼져 있음
+            "windows": {k: shop_window_port(k) for k in SHOP_WINDOWS}}
 
 
 def logged_in_hosts() -> List[str]:
@@ -389,6 +398,105 @@ def login_window_port() -> int:
     return port if cdp.is_alive(port) else 0
 
 
+# 🔌 v1.20 (1·2번 6차): **사이트별 전용 로그인 창** — 회원님이 지목한 블로그 툴
+# 방식 그대로. 쿠팡 창은 고정 포트 9222, 네이버 창은 9223으로 열어서(같은 번호를
+# 쓰는 툴들과 같은 규칙) 수집이 반드시 "그 창"으로만 페이지를 읽는다. 창이 없으면
+# 조용히 헤드리스로 넘어가지 않고 ①②③ 순서를 정확히 안내한다 — 지금까지
+# "아예 안 되는" 체감의 근원이 바로 이 조용한 폴백(쿠키를 못 푸는 경로)이었다.
+SHOP_WINDOWS = {
+    "coupang": {"port": 9222, "label": "쿠팡", "button": "🛒 쿠팡 창 열기",
+                "login_name": "쿠팡파트너스(또는 쿠팡)",
+                "login_url": "https://partners.coupang.com/",
+                "hosts": ("coupang.com",)},
+    "naver": {"port": 9223, "label": "네이버", "button": "🟢 네이버 창 열기",
+              "login_name": "네이버 쇼핑커넥트(브랜드커넥트)",
+              "login_url": "https://brandconnect.naver.com/",
+              "hosts": ("naver.com", "naver.me")},
+}
+
+
+def shop_for_url(url: str) -> str:
+    """상품 주소가 어느 전용 창 담당인지 — "coupang"/"naver"/""(기타)."""
+    host = _host_of(url)
+    for key, win in SHOP_WINDOWS.items():
+        if _host_in(host, tuple(win["hosts"])):
+            return key
+    return ""
+
+
+def shop_profile_dir(shop: str) -> Path:
+    """사이트별 창 프로필 — 두 창을 동시에 켜 두려면 프로필이 갈려야 한다."""
+    return Path(str(login_profile_dir()) + "_" + shop)
+
+
+def shop_window_port(shop: str) -> int:
+    """그 사이트 전용 창이 살아 있으면 포트(보통 9222/9223), 꺼져 있으면 0.
+
+    포트 기록 파일이 지워졌어도 **고정 포트 자체를 직접 두드려** 살아 있으면
+    그 창을 그대로 쓴다 — 파일 유실로 "창은 떠 있는데 연결이 안 되던" 상태의
+    자가 회복 (6차 결함 ①의 안전망).
+    """
+    win = SHOP_WINDOWS.get(shop)
+    if not win:
+        return 0
+    port = cdp.read_debug_port(shop_profile_dir(shop))
+    if port and cdp.is_alive(port):
+        return port
+    for fixed in (int(win["port"]), int(win["port"]) + 10):
+        if cdp.is_alive(fixed):
+            return fixed
+    return 0
+
+
+def open_shop_window(shop: str) -> str:
+    """[🛒 쿠팡 창 열기]·[🟢 네이버 창 열기] — 성공/재사용이면 "", 실패면 사유.
+
+    이미 켜져 있으면 **그 창을 그대로 재사용**한다(새로 띄우지 않음). v1.15의
+    "다시 누르면 포트 기록부터 지우고 새로 실행" 방식은, 크로미움이 같은
+    프로필의 창이 떠 있으면 새 탭 신호만 보내고 즉시 종료하는 특성 때문에
+    포트 기록이 영영 다시 안 적혀 **창은 떠 있는데 연결만 끊긴 상태**를 만들었다
+    — 회원님 6차 리포트 "크롤링 자체가 아예 안 돼"의 가장 유력한 원인.
+    """
+    import subprocess  # noqa: PLC0415
+
+    win = SHOP_WINDOWS.get(shop)
+    if not win:
+        return f"모르는 쇼핑몰 창이에요: {shop}"
+    if shop_window_port(shop):
+        return ""                            # 이미 켜져 있음 — 그대로 사용
+    exes = _ordered_candidates()
+    if not exes:
+        return "PC에서 크롬·엣지를 찾지 못했어요 — 크롬을 설치한 뒤 다시 눌러주세요"
+    prof = shop_profile_dir(shop)
+    prof.mkdir(parents=True, exist_ok=True)
+    try:                                     # 수집도 같은 엔진을 쓰도록 기억
+        _engine_file().parent.mkdir(parents=True, exist_ok=True)
+        _engine_file().write_text(exes[0], encoding="utf-8")
+    except OSError:
+        pass
+    # 같은 프로필로 두 번 띄우면 잠금 충돌만 난다 — 실행은 **딱 한 번**, 기동이
+    # 느리면 "여는 중" 상태로 정직하게 돌려주고 상태줄(↻)이 이어받는다.
+    (prof / cdp.DEVTOOLS_PORT_FILE).unlink(missing_ok=True)
+    try:
+        proc = subprocess.Popen(
+            [exes[0], f"--user-data-dir={prof}", "--profile-directory=Default",
+             f"--remote-debugging-port={int(win['port'])}",
+             f"--remote-allow-origins=http://{_CDP_HOST}",
+             "--no-first-run", "--no-default-browser-check", "--new-window",
+             str(win["login_url"])],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:  # noqa: BLE001
+        return f"브라우저를 열지 못했어요: {str(e)[:120]}"
+    for _ in range(48):                      # 창이 뜨고 포트가 열릴 때까지 최대 12초
+        if shop_window_port(shop):
+            return ""
+        if proc.poll() is not None:          # 곧바로 종료 = 프로필 잠금 등 실행 실패
+            return (f"{win['label']} 창이 바로 닫혔어요 — 이 프로그램이 연 창이 "
+                    "이미 떠 있으면 전부 닫고 다시 눌러주세요")
+        time.sleep(0.25)
+    return ""                                # 아직 기동 중 — 상태줄 ↻로 확인
+
+
 def _collect_profile() -> str:
     """수집용 프로필 경로 — 로그인 프로필이 있으면 **복제해서** 쓴다 (v1.12).
 
@@ -463,6 +571,28 @@ def _browser_dump(url: str, timeout: float = 50.0) -> str:
     global _LAST_DUMP_VIA
     _LAST_DUMP_VIA = ""
     deadline = time.monotonic() + max(1.0, float(timeout))
+    # 🔌 v1.20: 쿠팡·네이버 상품은 **그 사이트 전용 창(9222/9223)** 으로만 읽는다.
+    # 창이 없으면 헤드리스로 조용히 넘어가지 않는다 — 그 경로는 최신 크롬의
+    # 앱 결합 암호화 때문에 로그아웃 페이지(사진 0장)만 돌려줘서, 회원님께는
+    # "아예 안 되는" 것으로 보였다. 대신 ①②③ 순서를 정확히 안내한다.
+    shop = shop_for_url(url)
+    if shop:
+        win = SHOP_WINDOWS[shop]
+        sport = shop_window_port(shop)
+        if not sport:
+            raise ShopLoginNeededError(
+                f"{win['label']} 로그인 창이 꺼져 있어요 — 쇼핑 카드에서 "
+                f"① [{win['button']}] 버튼으로 전용 창(포트 {win['port']})을 열고 "
+                f"② 그 창에서 {win['login_name']}에 본인 아이디로 로그인한 뒤 "
+                "③ 창을 켜 둔 채 다시 [🔗 사진·대본 자동 수집]을 눌러주세요 "
+                f"(다른 자동화 프로그램이 {win['port']}번 포트를 쓰고 있으면 "
+                "그 프로그램을 잠깐 끄고 창을 다시 여세요)")
+        html, _final = cdp.fetch_dom(
+            sport, url, timeout=max(5.0, min(40.0, deadline - time.monotonic())))
+        if len(html) > 3000 and "<html" in html.lower():
+            _LAST_DUMP_VIA = f"{win['label']} 창"
+            return html
+        # 창은 있는데 내용이 얇게 왔으면(리다이렉트 등) 아래 기존 경로도 시도
     port = login_window_port()
     if port:
         html, _final = cdp.fetch_dom(
@@ -669,7 +799,16 @@ def collect_product(url: str, progress_cb: Optional[Callable] = None) -> dict:
                                     else "PC의 엣지/크롬으로")
             + " 페이지 읽는 중… (최대 30초)")
         globals()["_LAST_DUMP_VIA"] = ""
-        dumped = _browser_dump(final)
+        try:
+            dumped = _browser_dump(final)
+        except ShopLoginNeededError:
+            # 사진 없이도 대본이 되는 상태면 안내만 붙이고 진행 — 붙여넣기 폴백
+            # 정신(v1.12) 유지. 사진까지 아무것도 없으면 ①②③ 안내를 그대로 올린다.
+            if parsed and _usable(parsed) and parsed.get("images"):
+                stages.append("전용 창 꺼짐")
+                dumped = ""
+            else:
+                raise
         _dump_via = _LAST_DUMP_VIA or ("로그인 창" if _win else "브라우저")
         if dumped:
             p2 = parse_product(dumped, final)
