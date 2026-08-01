@@ -4793,7 +4793,7 @@ _HTML = """<!doctype html>
   table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
   th, td { text-align:left; padding:8px 6px; border-bottom:1px solid #232838; color:#cdd3e0; }
   th { color:#8b93a7; font-weight:400; }
-  .hint { font-size:12px; color:#6b7387; margin-top:4px; }
+  .hint { font-size:12px; color:#9aa4bb; margin-top:4px; }  /* v1.22.1: 대비 상향 — 안내 글씨가 안 보인다는 지적 */
   .banner { background:#3a1520; border:1px solid #ff7b8a; color:#ffb3bd; border-radius:10px;
             padding:12px 14px; margin-top:14px; font-size:13px; }
   .hookcands { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
@@ -4899,7 +4899,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.22.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.22.1)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6402,8 +6402,10 @@ body.easy #easyBar { display: block; }
               프로필·피드 <b>썸네일이 위아래로 잘려 보이는 건 정상</b>(인스타가 4:5로 미리보기 crop). 릴스로 재생하면 제목까지 다 나와요.</div>
           </details>
           <details class="opt">
-            <summary>🟢 네이버 클립 <span class="hint">— 제목·태그 각각 복사 + 카테고리 추천</span>
+            <summary>🟢 네이버 클립 <span class="hint">— 설명란에 한 번에 붙여넣기 + 카테고리 추천</span>
+              <button class="ghost" style="padding:2px 8px" onclick="copyKitNaverAll(event)">📋 한 번에 복사 (제목+태그)</button>
               <a href="https://clipcreators.naver.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none" onclick="event.stopPropagation()">↗ 클립 열기</a></summary>
+            <div class="hint" style="margin-top:4px">클립 업로드의 <b>「설명」 한 칸</b>에 제목과 태그를 같이 붙여넣는 방식이면 위 [📋 한 번에 복사]를 쓰세요 — 아래는 따로 붙일 때용.</div>
             <div class="chk" style="gap:8px;margin-top:4px"><b style="font-size:13px">제목</b>
               <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitNaverTitle')">📋 복사</button>
               <span class="hint">— 제목란에 그대로 (라벨 없이 붙어요)</span></div>
@@ -6412,7 +6414,7 @@ body.easy #easyBar { display: block; }
               <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitNaverTags')">📋 복사</button>
               <span class="hint">— 쉼표로 구분돼 태그란에 그대로</span></div>
             <textarea id="kitNaverTags" style="min-height:48px;margin-top:2px"></textarea>
-            <div class="hint" id="kitNaverCat" style="margin-top:6px"></div>
+            <div id="kitNaverCat" style="margin-top:8px;font-size:14px;line-height:1.6"></div>
           </details>
           <details class="opt">
             <summary>🧵 스레드 <span class="hint">— 짧은 반말 + 토픽 태그 1개만</span>
@@ -8585,8 +8587,11 @@ function renderKit(data){
   if($('kitNaverTags')) $('kitNaverTags').value =
     (nc.tags || []).map(t => '#' + String(t).replace(/^#/, '')).join(' ');  // 🟢 클립은 # 필수 (v0.99)
   if($('kitNaverCat')) $('kitNaverCat').innerHTML = nc.category1
-    ? ('📂 카테고리 추천: <b>1차 — ' + escHtml(nc.category1) + '</b> · <b>2차 — ' +
-       escHtml(nc.category2 || '자유 선택') + '</b> <span class="hint">(업로드 화면에서 가장 비슷한 항목을 고르세요)</span>')
+    ? ('📂 업로드 화면의 「카테고리」는 이렇게 고르세요 → '
+       + '<b style="color:#ffd166;font-size:15px">1차: ' + escHtml(nc.category1) + '</b>'
+       + ' · <b style="color:#ffd166;font-size:15px">2차: '
+       + escHtml(nc.category2 || '자유 선택') + '</b>'
+       + '<br><span class="hint">목록에 똑같은 이름이 없으면 가장 비슷한 항목을 고르면 됩니다</span>')
     : '';
   const th = kit.threads || {};
   $('kitThreads').value = th.post
@@ -8604,6 +8609,20 @@ function renderKit(data){
   $('kitPath').textContent = data.path
     ? ('💾 저장됨: ' + data.path + ' — 업로드할 때 이 파일을 열어 복붙해도 돼요') : '';
   $('kitBody').classList.remove('hidden');
+}
+async function copyKitNaverAll(ev){
+  // 🟢 네이버 클립 「설명」 한 칸용 — 실제 업로드 화면 방식(제목+태그 같이) (v1.22.1)
+  ev.preventDefault(); ev.stopPropagation();
+  const t = ($('kitNaverTitle').value || '').trim();
+  const tags = ($('kitNaverTags').value || '').trim()
+    .split(/[,\s]+/).filter(Boolean)
+    .map(function(x){ return x.startsWith('#') ? x : ('#' + x); }).join(' ');
+  if(!t && !tags){ alert('먼저 [📦 업로드 키트 만들기]로 문구를 만들어 주세요'); return; }
+  try{
+    await navigator.clipboard.writeText(t + (tags ? ('\\n\\n' + tags) : ''));
+    const btn = ev.target; const old = btn.textContent; btn.textContent = '✓ 복사됨';
+    setTimeout(function(){ btn.textContent = old; }, 1500);
+  } catch(e){ alert('복사 실패 — 직접 드래그해서 복사하세요'); }
 }
 async function copyKit(ev, id){
   ev.preventDefault(); ev.stopPropagation();   // summary 안 버튼 — 접힘 토글 방지
