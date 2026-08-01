@@ -4899,7 +4899,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.20.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.21.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6060,13 +6060,8 @@ body.easy #easyBar { display: block; }
     </div>
     <div class="hint">가장 쉬운 방법은 상품 링크 하나를 붙여넣는 것입니다. 사진 수집 결과를 확인한 뒤
       AI가 홍보 대본과 <b>사진+내레이션 영상</b>을 만듭니다.</div>
-    <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>상품 링크 붙여넣기 <span class="hint">— 추천 · 쿠팡·네이버·11번가·지마켓 등</span></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-      <input type="text" id="shopLinkInput" style="flex:1;min-width:240px" placeholder="상품 주소 또는 내 수익 링크를 여기에 붙여넣으세요">
-      <button class="ghost" style="border-color:#4266d5;white-space:nowrap" onclick="makeShopScript(event)" title="링크에서 사진·설명을 자동 수집하고 대본까지 만들어요">🔗 사진·대본 자동 수집</button>
-    </div>
-    <div class="hint" style="margin-top:4px">수집이 막히면 상품 페이지의 사진·설명 부분을 복사해 아래 결과 칸에 붙여넣으면 됩니다.</div>
-    <div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:#1b2436">
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">1</span>쿠팡·네이버 로그인 창 준비 <span class="hint">— 처음 한 번만. 아래가 ✅ 연결됨이면 바로 ②로 가세요</span></div>
+    <div style="margin-top:6px;padding:8px 10px;border-radius:8px;background:#1b2436">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="ghost" style="white-space:nowrap" onclick="openShopLogin(event,'coupang')"
                 title="쿠팡 전용 크롬 창(포트 9222)을 엽니다 — 그 창에서 쿠팡파트너스에 로그인해 두세요">🛒 쿠팡 창 열기</button>
@@ -6075,15 +6070,19 @@ body.easy #easyBar { display: block; }
         <span class="hint" id="shopLoginState">로그인 상태 확인 중…</span>
         <button class="ghost" style="padding:2px 8px" onclick="refreshShopLogin(event)">↻ 다시 확인</button>
       </div>
-      <div class="hint" style="margin-top:5px">🔐 <b>순서가 중요해요:</b>
-        <b>① 위 버튼으로 그 쇼핑몰 전용 창 열기(쿠팡 9222 · 네이버 9223) →
-        ② 그 창에서 본인 아이디로 로그인(쿠팡파트너스/쇼핑커넥트) →
-        ③ 창을 켜 둔 채 [🔗 사진·대본 자동 수집]</b>.
-        쿠팡·네이버는 <b>로그인한 브라우저</b>에게만 사진이 든 전체 페이지를 보여줘서,
-        수집은 반드시 <b>그 창에 탭을 잠깐 열어</b> 읽고 바로 닫아요 — 창이 꺼져
-        있으면 수집이 시작되지 않고 이 순서를 다시 안내합니다(v1.20).
-        (로그인 정보는 이 PC의 컷대장 전용 폴더에만 남고 어디로도 전송되지 않습니다)</div>
+      <div class="hint" style="margin-top:5px">🔐 쿠팡·네이버는 <b>로그인한 브라우저</b>에게만 사진이 든
+        전체 페이지를 보여줘요. <b>[창 열기] → 그 창에서 본인 아이디로 로그인(쿠팡파트너스/쇼핑커넥트)
+        → 창을 켜 둔 채 ②로.</b> 로그인은 처음 한 번(또는 로그아웃됐을 때)만 —
+        다음부터는 위가 ✅ 연결됨인지 확인만 하면 됩니다. 수집은 그 창에 탭을 잠깐
+        열어 읽고 바로 닫으며, 창이 꺼져 있으면 수집이 시작되지 않고 이 순서를 다시
+        안내합니다. (로그인 정보는 이 PC의 컷대장 전용 폴더에만 남고 어디로도 전송되지 않습니다)</div>
     </div>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>상품 링크 붙여넣기 <span class="hint">— 추천 · 쿠팡·네이버·11번가·지마켓 등</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+      <input type="text" id="shopLinkInput" style="flex:1;min-width:240px" placeholder="상품 주소 또는 내 수익 링크를 여기에 붙여넣으세요">
+      <button class="ghost" style="border-color:#4266d5;white-space:nowrap" onclick="makeShopScript(event)" title="링크에서 사진·설명을 자동 수집하고 대본까지 만들어요">🔗 사진·대본 자동 수집</button>
+    </div>
+    <div class="hint" style="margin-top:4px">수집이 막히면 상품 페이지의 사진·설명 부분을 복사해 아래 결과 칸에 붙여넣으면 됩니다.</div>
     <details class="home-more" id="shopSearchTools">
       <summary>다른 방법: 상품 검색으로 고르기 <span class="hint">— 파트너스·쇼핑커넥트 API를 쓰는 분만</span></summary>
     <details class="opt">
@@ -6124,7 +6123,7 @@ body.easy #easyBar { display: block; }
       <div class="hint" style="margin-top:4px">쇼핑커넥트 수익 링크는 <b>브랜드커넥트</b>(위 ↗ 버튼) 로그인 → <b>쇼핑커넥트</b> 메뉴에서 만들어 아래 「내 수익 링크」에 붙여넣어 주세요 (API로는 발급이 안 돼요)</div>
     </details>
     </details>
-    <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>수집 결과 확인 <span class="hint">— 사진은 아래 번호 순서대로 영상에 모두 반영됩니다</span></div>
+    <div class="steplabel" style="margin-top:10px"><span class="stepnum">3</span>수집 결과 확인 <span class="hint">— 사진은 아래 번호 순서대로 영상에 모두 반영됩니다</span></div>
     <textarea id="shopPasteText" style="min-height:100px" placeholder="상품 이름·특징·후기 등 — 위에서 상품을 고르면 자동으로 채워지고, 상품 페이지의 상세설명을 복사해 덧붙일 수 있어요"></textarea>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
       <button class="ghost" onclick="pickShopPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
@@ -6145,6 +6144,11 @@ body.easy #easyBar { display: block; }
       <textarea id="shopScript" style="min-height:110px"></textarea>
       <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:4px">
         <span>목소리</span><select id="shopVoiceSel" style="width:auto;min-width:180px"></select>
+        <button class="ghost" style="padding:5px 10px" onclick="previewNarrVoice(event,'shopVoiceSel')">🔊 미리듣기</button>
+        <span class="hint" title="미리듣기 소리 크기">🔉</span>
+        <input type="range" id="vpVol" min="10" max="100" value="100" style="width:90px"
+               title="미리듣기 볼륨 (영상 속 목소리 크기는 자동으로 맞춰져요)"
+               oninput="setPreviewVol(this.value)">
         <span>배경음악</span><select id="shopBgmSel" style="width:auto;min-width:140px"><option value="">없음</option></select>
         <button class="ghost" style="padding:6px 10px" onclick="previewBgm(event,'shopBgmSel','')">▶</button>
         <span>비율</span><select id="shopOrientSel" style="width:auto">
@@ -6987,7 +6991,7 @@ async function previewElevenVoice(ev){
       tts_provider: 'elevenlabs', voice: $('elevenVoiceSel').value,
     })});
     const data = await res.json();
-    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+    if(data.error){ alert(data.error); } else { _playPreview(data.url); }
   } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
 }
 
@@ -7155,7 +7159,7 @@ async function previewMyVoice(ev, prov){
       body.elevenlabs_key = $('elevenKey').value.trim(); body.save_key = true;
     }
     const data = await (await fetch('/api/preview', {method:'POST', body: JSON.stringify(body)})).json();
-    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+    if(data.error){ alert(data.error); } else { _playPreview(data.url); }
   } finally { btn.disabled = false; btn.textContent = old; }
 }
 function onFinishChange(){
@@ -8249,7 +8253,7 @@ async function previewVoice(ev){
       tts_style: $('styleSel').value, gemini_key: $('geminiKey').value,
     })});
     const data = await res.json();
-    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+    if(data.error){ alert(data.error); } else { _playPreview(data.url); }
   } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
 }
 
@@ -8308,13 +8312,21 @@ async function previewWinVoice(ev){
       text: '안녕하세요, 컷대장 내장 음성 미리듣기입니다.',
     })});
     const data = await res.json();
-    if(data.error){ alert(data.error); } else { new Audio(data.url).play(); }
+    if(data.error){ alert(data.error); } else { _playPreview(data.url); }
   } finally { btn.disabled = false; btn.textContent = oldTxt; }
 }
 
-async function previewNarrVoice(ev){
+function setPreviewVol(v){ try{ localStorage.setItem('vp_vol', String(v)); }catch(e){} }
+function _playPreview(url){
+  // 🔉 미리듣기 공용 재생 — 볼륨 슬라이더(vpVol)를 모든 미리듣기에 적용 (v1.21)
+  const a = new Audio(url);
+  let v = 100; try{ v = +(localStorage.getItem('vp_vol') || 100); }catch(e){}
+  a.volume = Math.max(0.05, Math.min(1, v / 100));
+  a.play();
+}
+async function previewNarrVoice(ev, selId){
   ev.preventDefault();
-  const v = $('narrVoiceSel').value;
+  const v = $(selId || 'narrVoiceSel').value;
   let prov = window._hasGeminiKey ? 'gemini' : (window._isWin ? 'windows' : 'stub');
   let key = '';
   if(v === '__mine__') prov = 'elevenlabs';
@@ -8335,7 +8347,7 @@ async function previewNarrVoice(ev){
       tts_style: $('narrStyleSel').value, gemini_key: key, save_key: true,
     })});
     const data = await res.json();
-    if(data.error){ alert(data.error); } else { if(key) window._hasGeminiKey = true; new Audio(data.url).play(); }
+    if(data.error){ alert(data.error); } else { if(key) window._hasGeminiKey = true; _playPreview(data.url); }
   } finally { btn.disabled = false; btn.textContent = '🔊 미리듣기'; }
 }
 
@@ -9344,6 +9356,7 @@ function fillSettings(s){
   applyEasy(!!(((s || {}).ui || {}).easy_mode)); // 🔰 쉬운 모드 기억 (v1.17)
   autoCheckUpdate();                             // 🔄 하루 1회 새 버전 확인 (v1.18)
   _loadAiCost().then(_renderAiSpend);            // ✨ AI 클립 월 사용액 (v1.19)
+  try{ const _vv = $('vpVol'); if(_vv) _vv.value = localStorage.getItem('vp_vol') || 100; }catch(e){}
   initEzChips(); injectQuickDeco();
   setTimeout(() => { markEzChips(); markQuickDeco(); }, 0);
   $('setFontSize').value = s.subtitle.font_size;
@@ -10033,7 +10046,17 @@ async function makeShopScript(ev){
   ev.preventDefault();
   const text = (($('shopPasteText')||{}).value || '').trim();
   const link = (($('shopLinkInput')||{}).value||'').trim();
-  const linkOnly = text.length < 20 && !!link && SHOP_HOST_RE.test(link);   // 🔗 링크 자동 수집 (v0.92)
+  const isShop = !!link && SHOP_HOST_RE.test(link);
+  // 🧹 v1.21 (회원님 리포트): 이전 상품 글이 결과 칸에 남은 채 새 링크를 수집하면
+  // 옛 글(20자만 넘으면)로 대본을 만들어 "다른 제품 정보가 들어가" 있었다.
+  // 결과 칸이 예전 수집으로 자동 채워진 글이거나 링크가 바뀌었으면 링크를 새로
+  // 수집하고, 회원님이 직접 붙여넣은 긴 글 + 링크가 함께면 한 번만 물어본다.
+  const autoFilled = !!text && text === ((window._shopAutoText || '').trim());
+  const changedLink = isShop && !!(window._shopLastLink) && link !== window._shopLastLink;
+  let linkOnly = isShop && (text.length < 20 || autoFilled || changedLink);
+  if(isShop && !linkOnly && text.length >= 20){
+    linkOnly = confirm('링크에서 새로 수집할까요?\\n\\n[확인] 링크에서 수집 — 아래 글을 새 상품 정보로 교체\\n[취소] 지금 붙여넣어 둔 글로 대본 만들기');
+  }
   if(text.length < 20 && !linkOnly){
     alert('상품 정보가 아직 없어요 — 상품 링크를 「내 수익 링크」칸에 붙여넣거나, 위에서 상품을 고르거나, 상세설명을 붙여넣어 주세요'); return;
   }
@@ -10079,7 +10102,9 @@ async function makeShopScript(ev){
       }
       if(linkOnly && r.text){                            // 수집한 설명을 눈으로 확인·보강
         $('shopPasteText').value = r.text;
+        window._shopAutoText = r.text;                   // 🧹 v1.21: 자동 채움 기억
       }
+      if(linkOnly) window._shopLastLink = link;          // 링크가 바뀌면 새로 수집
       const note = ((r.notes || [])[0]) || '';
       if(note) uiBanner(note);
       else if(!(window._shopPhotos || []).length)

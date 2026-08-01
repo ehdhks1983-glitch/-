@@ -23,7 +23,7 @@ from cutdaejang.tools import fetch_bgm, product_page as pp
 
 
 def test_version():
-    assert __version__ == "1.20.1"
+    assert __version__ == "1.21.0"
 
 
 # ── ①② 쇼핑: 로그인한 브라우저로 수집 ──────────────────────────
