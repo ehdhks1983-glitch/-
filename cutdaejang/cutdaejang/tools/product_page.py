@@ -170,7 +170,19 @@ def resolve_shop_url(url: str, timeout: float = 8.0) -> str:
     if not is_short_url(u):
         return ""
     landed = _landing_url(u, timeout=timeout)
-    return landed if landed and is_shop_url(landed) else ""
+    if landed and is_shop_url(landed):
+        return landed
+    # 🔌 v1.21.1 (1·2번 9차): 일반 요청이 최종 주소를 못 알아내면(차단·JS 이동)
+    # **열려 있는 전용 창**으로 잠깐 열어 실제 도착 주소를 읽는다 — naver.me가
+    # 상품인데도 블로그로 오판되어 "글에서 본문과 사진을 찾지 못했어요"로
+    # 빠지던 사고 방지. 창이 없으면 예전 판정 그대로(블로그 흐름 불변).
+    shop = shop_for_url(u)
+    port = shop_window_port(shop) if shop else 0
+    if port:
+        _h, final = cdp.fetch_dom(port, u, timeout=20.0, settle_s=1.0)
+        if final and final != u and is_shop_url(final):
+            return final
+    return ""
 
 
 def _fetch_html(url: str, timeout: float = 20.0, ua: str = "",

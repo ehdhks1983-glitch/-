@@ -4899,7 +4899,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.21.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.21.1)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6128,6 +6128,7 @@ body.easy #easyBar { display: block; }
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
       <button class="ghost" onclick="pickShopPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
       <button class="ghost" onclick="clearShopPhotos(event)" title="지금까지 모은 상품 사진을 전부 비우고 처음부터 다시">🗑 사진 비우기</button>
+      <button class="ghost" onclick="resetShopCard(event)" title="링크·결과 글·사진·대본·훅을 한 번에 비우고 처음부터 (로그인 창은 그대로)">🧹 전체 초기화</button>
       <span class="hint" id="shopPhotoCnt" style="align-self:center"></span>
     </div>
     <div id="shopPhotoPrev" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
@@ -10067,6 +10068,15 @@ async function makeShopScript(ev){
   if(linkOnly){
     const pt = $('shopPasteText'); if(pt) pt.value = '';
     if(typeof clearShopPhotos === 'function'){ try{ clearShopPhotos(); }catch(_e){} }
+    // 🧹 v1.21.1 (회원님 요청): **다른 상품**이면 아래 대본·훅·미리보기까지 전부
+    // 초기화 — 이전 상품 대본이 ③에 그대로 남아 헷갈리던 문제. 같은 링크의
+    // 재수집이면 직접 다듬은 훅·대본을 존중해 그대로 둔다.
+    const newProduct = !window._shopLastLink || link !== window._shopLastLink;
+    if(newProduct){
+      $('shopScript').value = ''; $('shopHook').value = '';
+      window._shopAutoText = '';
+      const pv = $('shopPreview'); if(pv) pv.classList.add('hidden');
+    }
   }
   try{
     const key = ensureGeminiKey();
@@ -10113,6 +10123,20 @@ async function makeShopScript(ev){
     }
   } catch(e){ alert('대본 만들기 오류: ' + e); }
   finally { btn.disabled = false; btn.textContent = old; }
+}
+
+async function resetShopCard(ev){
+  // 🧹 쇼핑 카드 전체 초기화 (v1.21.1, 회원님 요청) — 로그인 창·API 키는 그대로
+  ev.preventDefault();
+  if(!confirm('쇼핑 카드를 처음 상태로 비울까요?\\n(링크 · 결과 글 · 사진 · 대본 · 훅 제목 — 로그인 창은 그대로 둡니다)')) return;
+  $('shopLinkInput').value = ''; $('shopPasteText').value = '';
+  $('shopScript').value = ''; $('shopHook').value = '';
+  window._shopAutoText = ''; window._shopLastLink = '';
+  if(typeof clearShopPhotos === 'function'){ try{ clearShopPhotos(); }catch(_e){} }
+  const pv = $('shopPreview'); if(pv) pv.classList.add('hidden');
+  try{ await fetch('/api/draft', {method:'POST',
+    body: JSON.stringify({card: 'shop', data: {}})}); }catch(_e){}
+  uiBanner('🧹 쇼핑 카드를 비웠어요 — ① 로그인 창이 ✅면 바로 새 링크를 붙여넣으면 됩니다');
 }
 
 // ── 🔐 쇼핑 로그인 (v1.12) — 쿠팡·네이버는 로그인한 브라우저에만 사진을 다 준다 ──
