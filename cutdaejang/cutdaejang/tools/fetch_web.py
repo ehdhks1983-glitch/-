@@ -267,6 +267,59 @@ def fetch_bytes(url: str, timeout: float = 20.0, cap: int = 15_000_000,
     return data
 
 
+def image_dims(raw: bytes):
+    """이미지 바이트 → (가로, 세로). 모르면 (0, 0). 표준 라이브러리만 (v1.22).
+
+    수집 사진의 "기준 미달(너무 작아 흐려질) 이미지"를 거르기 위한 최소 판독기 —
+    JPEG(SOF)·PNG(IHDR)·WebP(VP8/VP8L/VP8X)·GIF·BMP 헤더만 읽는다.
+    """
+    import struct  # noqa: PLC0415
+
+    b = raw or b""
+    try:
+        if b[:8] == b"\x89PNG\r\n\x1a\n" and len(b) >= 24:
+            w, h = struct.unpack(">II", b[16:24])
+            return int(w), int(h)
+        if b[:3] == b"\xff\xd8\xff":                 # JPEG — SOF 마커 탐색
+            i = 2
+            while i + 9 < len(b):
+                if b[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = b[i + 1]
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    i += 2
+                    continue
+                seg = struct.unpack(">H", b[i + 2:i + 4])[0]
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    h, w = struct.unpack(">HH", b[i + 5:i + 9])
+                    return int(w), int(h)
+                i += 2 + seg
+            return 0, 0
+        if b[:4] == b"RIFF" and b[8:12] == b"WEBP" and len(b) >= 30:
+            fmt = b[12:16]
+            if fmt == b"VP8X":
+                w = 1 + int.from_bytes(b[24:27], "little")
+                h = 1 + int.from_bytes(b[27:30], "little")
+                return w, h
+            if fmt == b"VP8L":
+                bits = int.from_bytes(b[21:25], "little")
+                return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+            if fmt == b"VP8 ":
+                w, h = struct.unpack("<HH", b[26:30])
+                return int(w) & 0x3FFF, int(h) & 0x3FFF
+            return 0, 0
+        if b[:6] in (b"GIF87a", b"GIF89a") and len(b) >= 10:
+            w, h = struct.unpack("<HH", b[6:10])
+            return int(w), int(h)
+        if b[:2] == b"BM" and len(b) >= 26:
+            w, h = struct.unpack("<ii", b[18:26])
+            return int(abs(w)), int(abs(h))
+    except Exception:  # noqa: BLE001 — 판독 실패 = 모름
+        return 0, 0
+    return 0, 0
+
+
 def sniff_image_ext(data: bytes) -> str:
     """매직바이트만으로 이미지 확장자(점 없이) — 모르면 빈 문자열 (v0.88)."""
     ext = _sniff_ext(data, "")

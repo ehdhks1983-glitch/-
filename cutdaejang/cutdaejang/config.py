@@ -104,6 +104,7 @@ DEFAULTS: dict = {
         "text_cards": True,           # 🅰 의미 기반 텍스트 카드 장면
         "card_pack": "auto",          # auto | info | shopping | review | promo
         "card_density": "auto",       # low | auto | rich
+        "card_variety": True,         # 🎨 영상마다 카드 룩(팔레트·배치·라벨) 자동 변화 (v1.22)
         "font_pack": "auto",          # auto | info | impact | friendly | retro | ugc
     },
     "branding": {                     # 인트로/아웃트로 (v0.43) — 영상 또는 사진 경로

@@ -99,6 +99,8 @@ class Style:
     card_accent: str = "#4D8DFF"   # 카드 숫자 강조색 (스샷의 파랑 글로우)
     card_pack: str = "auto"        # v1.11 자동 장면 성격: auto | info | shopping | review | promo
     card_density: str = "auto"     # v1.11 장면 빈도: low | auto | rich
+    card_seed: int = 0             # 🎨 카드 룩 시드 (v1.22) — 0=자막에서 자동 유도,
+                                   # -1=클래식(예전 고정 룩), 양수=그 시드 고정
     font_pack: str = "auto"        # v1.11 제목+자막 글꼴 조합 이름
 
 

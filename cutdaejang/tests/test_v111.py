@@ -65,6 +65,10 @@ def test_ass_contains_distinct_manual_scene_templates(tmp_path):
         for i, name in enumerate(labels)
     ]
     spec.duration_us = 8_000_000
+    # v1.22부터 기본은 영상마다 룩이 변하는 시드 — 이 테스트는 "8종 템플릿이
+    # 서로 다른 구조로 나온다"는 클래식 기준을 검사하므로 클래식(-1)으로 고정.
+    from dataclasses import replace as _rp
+    spec.style = _rp(spec.style, card_seed=-1)
     out = tmp_path / "v111.ass"
     write_ass(spec, out)
     ass = out.read_text(encoding="utf-8")

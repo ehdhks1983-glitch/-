@@ -272,6 +272,64 @@ def pick_card_plan(
     return sorted(picked, key=lambda c: c.index)
 
 
+# ── 🎨 카드 룩 다양화 (v1.22, 목록 32) ─────────────────────────────
+# 문제: 종류는 8개여도 색·라벨·배치가 하드코딩이라 **모든 영상·모든 회원이
+# 똑같은 카드**를 얻었다 ("판매하면 100명이 같은 구조" — 회원님 지적).
+# 해법: 영상마다 시드로 (팔레트 × 레이아웃 변형 × 라벨 문구)를 정한다.
+# 같은 대본을 다시 렌더하면 같은 룩(재현 가능), 다른 영상은 다른 룩.
+CARD_PALETTES = [
+    # name, accent(강조), panel(밝은 패널), panel_ink(패널 글자), bar(띠), label(라벨색)
+    {"name": "블루", "accent": "#4D8DFF", "panel": "#EAF2FF", "panel_ink": "#101826",
+     "bar": "#FF375F", "label": "#FFB700"},
+    {"name": "민트", "accent": "#31E1C4", "panel": "#E9FFF6", "panel_ink": "#0E211B",
+     "bar": "#0FBF9F", "label": "#FFD166"},
+    {"name": "코랄", "accent": "#FF6B6B", "panel": "#FFF1EC", "panel_ink": "#26120E",
+     "bar": "#FF8E3C", "label": "#4D8DFF"},
+    {"name": "골드", "accent": "#FFC53D", "panel": "#FFF8E1", "panel_ink": "#221A08",
+     "bar": "#E5A400", "label": "#FF5D8F"},
+    {"name": "퍼플", "accent": "#B983FF", "panel": "#F4EDFF", "panel_ink": "#1B1226",
+     "bar": "#7C4DFF", "label": "#3EE0B8"},
+    {"name": "라임", "accent": "#B4E85C", "panel": "#F4FFE1", "panel_ink": "#17210A",
+     "bar": "#79C232", "label": "#FF9F4D"},
+]
+CARD_LABELS = {
+    "number": ["KEY NUMBER", "핵심 숫자", "숫자로 보면", "POINT"],
+    "checklist": ["CHECK", "체크 포인트", "이것만 확인", "POINT"],
+    "review": ["REVIEW  ★★★★★", "실사용 후기  ★★★★★", "리얼 후기", "별점 ★★★★★"],
+    "search": ["SEARCH", "궁금하다면", "검색해 보세요", "Q."],
+    "steps": ["STEP", "순서", "이렇게", "NEXT"],
+    "cta": ["지금 확인", "놓치지 마세요", "오늘만", "바로 가기"],
+}
+_CLASSIC_PALETTE = CARD_PALETTES[0]
+
+
+def card_theme(seed: int) -> dict:
+    """시드 → 이 영상의 카드 테마 {palette, variant(0~2), labels}.
+
+    seed -1(클래식)·0은 기본 팔레트/기존 배치/기존 라벨 — 옛 결과와 동일.
+    양수 시드는 표준 라이브러리 random.Random으로 결정적으로 뽑는다.
+    """
+    if seed is None or int(seed) <= 0:
+        return {"palette": _CLASSIC_PALETTE, "variant": 0,
+                "labels": {k: v[0] for k, v in CARD_LABELS.items()},
+                "name": "클래식"}
+    import random  # noqa: PLC0415 — 표준 라이브러리, 시드 고정이라 재현 가능
+
+    rnd = random.Random(int(seed))
+    pal = rnd.choice(CARD_PALETTES)
+    return {"palette": pal, "variant": rnd.randrange(3),
+            "labels": {k: rnd.choice(v) for k, v in CARD_LABELS.items()},
+            "name": pal["name"]}
+
+
+def derive_card_seed(texts) -> int:
+    """자막 문장들 → 영상 고유 시드 (같은 대본 재렌더 = 같은 룩)."""
+    import zlib  # noqa: PLC0415
+
+    blob = "\n".join(str(t or "") for t in (texts or []))
+    return (zlib.crc32(blob.encode("utf-8")) or 1) & 0x7FFFFFFF or 1
+
+
 def accent_spans(text: str):
     """카드 글에서 강조색으로 칠할 (시작, 끝) 문자 범위 — 숫자·% 덩어리."""
     return [(m.start(), m.end()) for m in _BIG_NUM_RE.finditer(text or "")]

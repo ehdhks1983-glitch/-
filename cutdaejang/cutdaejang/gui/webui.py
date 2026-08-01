@@ -4899,7 +4899,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.21.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.22.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6575,6 +6575,7 @@ body.easy #easyBar { display: block; }
         </span>
       </div>
       <div class="chk" style="margin-top:6px"><input type="checkbox" id="setTextCards"><span>🅰 다양한 텍스트 장면 <span class="hint">— 숫자·비교·후기·검색·목록·단계·CTA를 대본에 맞게 자동 선택</span></span></div>
+      <div class="chk" style="margin-top:2px"><input type="checkbox" id="setCardVariety"><span>🎨 카드 룩 자동 변화 <span class="hint">— 영상마다 색·배치·라벨이 달라져요 (같은 대본 재렌더는 동일). 끄면 예전 고정 디자인</span></span></div>
       <div class="chk" style="gap:8px;margin-top:8px;flex-wrap:wrap">
         <span>영상 성격</span>
         <select id="setCardPack" style="width:auto;padding:6px 8px">
@@ -9367,6 +9368,7 @@ function fillSettings(s){
   $('setSubAnim').value = s.subtitle.anim || 'none';
   $('setFade').checked = !!s.subtitle.fade;
   $('setTextCards').checked = s.subtitle.text_cards !== false;   // 🅰 v1.07 (기본 켬)
+  $('setCardVariety').checked = s.subtitle.card_variety !== false; // 🎨 v1.22 (기본 켬)
   $('setCardPack').value = s.subtitle.card_pack || 'auto';
   $('setCardDensity').value = s.subtitle.card_density || 'auto';
   $('setFontPack').value = s.subtitle.font_pack || 'auto';
@@ -9479,6 +9481,7 @@ async function saveSettings(){
                hook_band: $('setHookBand').checked, band: $('setBand').checked,
                wrap_chars: +$('setWrapChars').value, anim: $('setSubAnim').value,
                text_cards: $('setTextCards').checked,
+               card_variety: $('setCardVariety').checked,
                card_pack: $('setCardPack').value, card_density: $('setCardDensity').value,
                font_pack: $('setFontPack').value},
     bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,

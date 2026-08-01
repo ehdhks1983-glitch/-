@@ -138,6 +138,9 @@ def build_style(settings: dict, orientation: str = "shorts") -> Style:
         card_accent=sub.get("card_accent", "#4D8DFF"),
         card_pack=sub.get("card_pack", "auto"),
         card_density=sub.get("card_density", "auto"),
+        # 🎨 v1.22 (목록 32): 기본은 영상마다 룩이 달라지는 자동 시드(0).
+        # 끄면(-1) 예전 고정 룩 — "모든 영상이 같은 카드"가 싫다는 지적의 해법.
+        card_seed=(-1 if sub.get("card_variety") is False else 0),
         font_pack=font_pack,
     )
 

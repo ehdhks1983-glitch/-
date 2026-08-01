@@ -530,7 +530,8 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
     # 🅰 의미 기반 텍스트 카드 장면 (v1.11) — 숫자·펀치·목록·비교·후기·
     # 검색·단계·CTA 8종. 오버레이 방식이라 길이·내레이션·자막 싱크는 그대로다.
     from ..text_cards import (  # noqa: PLC0415
-        accent_spans, classify_card, is_marked, marked_kind, pick_card_plan,
+        accent_spans, card_theme, classify_card, derive_card_seed, is_marked,
+        marked_kind, pick_card_plan,
         strip_mark)
 
     card_plan = {}
@@ -552,9 +553,23 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             card_plan[_mi] = (marked_kind(_mt)
                               or classify_card(_mt, getattr(style, "card_pack", "auto")))
 
+    # 🎨 카드 룩 다양화 (v1.22, 목록 32) — 영상마다 팔레트·라벨·배치 변형이
+    # 달라진다. 시드: style.card_seed>0 고정, 0=대본에서 자동 유도(재렌더 동일),
+    # -1=클래식(예전 하드코딩 룩 그대로 — 옛 프로젝트·취향 보존).
+    _cseed = int(getattr(style, "card_seed", 0) or 0)
+    if _cseed == 0:
+        _cseed = derive_card_seed(_card_texts)
+    elif _cseed < 0:
+        _cseed = 0
+    _theme = card_theme(_cseed)
+    _pal, _cvar, _clabels = _theme["palette"], _theme["variant"], _theme["labels"]
+
     def _card_lines(sub, kind: str) -> list:
         txt = re.sub(r"\[[/가-힣A-Za-z]*\]", "", strip_mark(sub.text)).strip()
-        acc = _inline_color(getattr(style, "card_accent", "#4D8DFF") or "#4D8DFF")
+        _acc_src = getattr(style, "card_accent", "#4D8DFF") or "#4D8DFF"
+        if _acc_src.upper() == "#4D8DFF":     # 직접 고른 색이 아니면 팔레트를 따른다
+            _acc_src = _pal["accent"]
+        acc = _inline_color(_acc_src)
         # 2줄 줄바꿈 — 가운데에서 가장 가까운 공백
         parts = [txt]
         if len(txt) > 14 and " " in txt:
@@ -599,55 +614,85 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         ml = round(w * 0.09)
 
         if kind == "number":
-            body = ("{\\an5\\pos(" + str(cx) + "," + str(cy) + ")"
+            lab_c = "\\c" + _inline_color(_pal["label"])
+            if _cvar == 1:                      # 좌정렬 + 세로 어센트 바
+                bar = _rect(6, _pal["bar"], "00", ml - sc(26), round(h * .38),
+                            ml - sc(8), round(h * .58))
+                body = ("{\\an4\\pos(" + str(ml) + "," + str(cy) + ")"
+                        + "\\fscx80\\fscy80\\t(0,170,\\fscx100\\fscy100)"
+                        + "\\fad(150,170)}" + body_txt)
+                return [dim, bar,
+                        f"Dialogue: 7,{st},{en},Card,,0,0,0,,{body}",
+                        _label(8, _clabels["number"],
+                               f"\\an7\\pos({ml},{round(h * .33)})\\fs{sc(27)}"
+                               + lab_c + "\\fsp5\\fad(110,150)")]
+            lab_y = round(h * (.63 if _cvar == 2 else .32))
+            body_y = round(h * (.43 if _cvar == 2 else .47))
+            body = ("{\\an5\\pos(" + str(cx) + "," + str(body_y) + ")"
                     + "\\fscx80\\fscy80\\t(0,170,\\fscx100\\fscy100)"
                     + "\\fad(150,170)}" + body_txt)
             return [
                 dim,
                 f"Dialogue: 6,{st},{en},Card,,0,0,0,,{body}",
-                _label(7, "KEY NUMBER",
-                       f"\\an5\\pos({cx},{round(h * .32)})\\fs{sc(27)}"
-                       "\\c&H00B7FF&\\fsp5\\fad(110,150)"),
+                _label(7, _clabels["number"],
+                       f"\\an5\\pos({cx},{lab_y})\\fs{sc(27)}"
+                       + lab_c + "\\fsp5\\fad(110,150)"),
             ]
 
         if kind == "punch":
-            bar_y = round(h * .66)
-            return [
-                dim,
-                _rect(6, "#FF375F", "00", ml, bar_y, w - ml, bar_y + sc(10)),
+            if _cvar == 2:                      # 좌우 세로 괄호형 바
+                b_top, b_bot = round(h * .38), round(h * .58)
+                bars = [_rect(6, _pal["bar"], "00", ml, b_top, ml + sc(10), b_bot),
+                        _rect(6, _pal["bar"], "00", w - ml - sc(10), b_top,
+                              w - ml, b_bot)]
+            else:                               # 상단(변형1)/하단(기본) 가로 바
+                bar_y = round(h * (.30 if _cvar == 1 else .66))
+                bars = [_rect(6, _pal["bar"], "00", ml, bar_y, w - ml,
+                              bar_y + sc(10))]
+            body_y = round(h * (.52 if _cvar == 1 else .47))
+            return [dim] + bars + [
                 _label(7, body_txt,
-                       f"\\an5\\pos({cx},{round(h * .47)})"
+                       f"\\an5\\pos({cx},{body_y})"
                        "\\fscx58\\fscy58\\t(0,130,\\fscx108\\fscy108)"
                        "\\t(130,220,\\fscx100\\fscy100)\\fad(80,150)"),
             ]
 
         if kind == "checklist":
             panel_top, panel_bot = round(h * .29), round(h * .69)
-            black = _inline_color("#102018")
-            text = "\\N".join(_accentize(p, black) for p in parts if p)
+            ink = _inline_color(_pal["panel_ink"])
+            text = "\\N".join(_accentize(p, ink) for p in parts if p)
             return [
                 dim,
-                _rect(6, "#E9FFF1", "05", ml, panel_top, w - ml, panel_bot),
-                _rect(7, "#34C759", "00", ml, panel_top, ml + sc(18), panel_bot),
-                _label(8, "CHECK",
+                _rect(6, _pal["panel"], "05", ml, panel_top, w - ml, panel_bot),
+                _rect(7, _pal["bar"], "00", ml, panel_top, ml + sc(18), panel_bot),
+                _label(8, _clabels["checklist"],
                        f"\\an7\\pos({ml + sc(42)},{panel_top + sc(45)})"
-                       f"\\fs{sc(30)}\\c&H59C734&\\fsp4\\fad(120,140)"),
+                       f"\\fs{sc(30)}\\c" + _inline_color(_pal["bar"])
+                       + "\\fsp4\\fad(120,140)"),
                 _label(9, text,
                        f"\\an4\\pos({ml + sc(45)},{round(h * .51)})"
-                       "\\c&H182010&\\bord0\\shad0\\fscx92\\fscy92"
+                       "\\c" + ink + "\\bord0\\shad0\\fscx92\\fscy92"
                        "\\t(0,180,\\fscx100\\fscy100)\\fad(120,150)"),
             ]
 
         if kind == "compare":
+            if _cvar == 1:                      # 상하 분할 (기본은 좌우)
+                halves = [_rect(6, _pal["bar"], "18", 0, 0, w, cy),
+                          _rect(7, _pal["accent"], "18", 0, cy, w, h)]
+                pos_a = (cx, round(h * .18))
+                pos_b = (cx, round(h * .80))
+            else:
+                halves = [_rect(6, _pal["bar"], "18", 0, 0, cx, h),
+                          _rect(7, _pal["accent"], "18", cx, 0, w, h)]
+                pos_a = (round(w * .25), round(h * .28))
+                pos_b = (round(w * .75), round(h * .28))
             return [
-                dim,
-                _rect(6, "#FF5B62", "18", 0, 0, cx, h),
-                _rect(7, "#326BFF", "18", cx, 0, w, h),
+                dim] + halves + [
                 _label(8, "A",
-                       f"\\an5\\pos({round(w * .25)},{round(h * .28)})"
+                       f"\\an5\\pos({pos_a[0]},{pos_a[1]})"
                        f"\\fs{sc(35)}\\c&HFFFFFF&\\fad(90,140)"),
                 _label(8, "B",
-                       f"\\an5\\pos({round(w * .75)},{round(h * .28)})"
+                       f"\\an5\\pos({pos_b[0]},{pos_b[1]})"
                        f"\\fs{sc(35)}\\c&HFFFFFF&\\fad(90,140)"),
                 _label(9, body_txt,
                        f"\\an5\\pos({cx},{round(h * .52)})"
@@ -657,34 +702,36 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
 
         if kind == "review":
             panel_top, panel_bot = round(h * .28), round(h * .71)
-            black = _inline_color("#211A12")
+            black = _inline_color(_pal["panel_ink"])
             text = "\\N".join(_accentize(p, black) for p in parts if p)
             return [
                 dim,
-                _rect(6, "#FFF8E7", "00", ml, panel_top, w - ml, panel_bot),
-                _label(7, "REVIEW  ★★★★★",
+                _rect(6, _pal["panel"], "00", ml, panel_top, w - ml, panel_bot),
+                _label(7, _clabels["review"],
                        f"\\an8\\pos({cx},{panel_top + sc(48)})"
-                       f"\\fs{sc(27)}\\c&H00B9FF&\\bord0\\fsp2\\fad(110,150)"),
+                       f"\\fs{sc(27)}\\c" + _inline_color(_pal["label"])
+                       + "\\bord0\\fsp2\\fad(110,150)"),
                 _label(8, text,
                        f"\\an5\\pos({cx},{round(h * .51)})"
-                       "\\c&H121A21&\\bord0\\shad0\\fscx90\\fscy90"
+                       "\\c" + black + "\\bord0\\shad0\\fscx90\\fscy90"
                        "\\t(0,170,\\fscx100\\fscy100)\\fad(120,160)"),
             ]
 
         if kind == "search":
             top, bot = round(h * .39), round(h * .58)
-            black = _inline_color("#171717")
-            text = "\\N".join(_accentize(p, black) for p in parts if p)
+            ink = _inline_color(_pal["panel_ink"])
+            text = "\\N".join(_accentize(p, ink) for p in parts if p)
             return [
                 dim,
-                _rect(6, "#FFFFFF", "00", ml, top, w - ml, bot),
-                _rect(7, "#4D8DFF", "00", ml, bot - sc(9), w - ml, bot),
-                _label(8, "SEARCH",
+                _rect(6, _pal["panel"], "00", ml, top, w - ml, bot),
+                _rect(7, _pal["accent"], "00", ml, bot - sc(9), w - ml, bot),
+                _label(8, _clabels["search"],
                        f"\\an7\\pos({ml + sc(36)},{top - sc(54)})"
-                       f"\\fs{sc(26)}\\c&HFFB06B&\\fsp5\\fad(100,140)"),
+                       f"\\fs{sc(26)}\\c" + _inline_color(_pal["label"])
+                       + "\\fsp5\\fad(100,140)"),
                 _label(9, text,
                        f"\\an4\\pos({ml + sc(35)},{round((top + bot) / 2)})"
-                       "\\c&H171717&\\bord0\\shad0\\fscx92\\fscy92"
+                       "\\c" + ink + "\\bord0\\shad0\\fscx92\\fscy92"
                        "\\t(0,190,\\fscx100\\fscy100)\\fad(110,150)"),
             ]
 
@@ -697,11 +744,25 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
                 k = min((abs(j - mid), j) for j, ch in enumerate(txt) if ch == " ")[1]
                 step_parts = [txt[:k].strip(), txt[k + 1:].strip()]
             step_text = "\\N".join(_accentize(p) for p in step_parts if p)
+            if _cvar == 1:                  # 배지를 오른쪽에 (본문은 왼쪽)
+                badge_x1, badge_x2 = w - ml - round(w * .23), w - ml
+                return [
+                    dim,
+                    _rect(6, _pal["accent"], "00", badge_x1, top, badge_x2, bot),
+                    _rect(7, "#12151F", "04", ml, top, badge_x1, bot),
+                    _label(8, _clabels["steps"],
+                           f"\\an5\\pos({round((badge_x1 + badge_x2) / 2)},{round((top + bot) / 2)})"
+                           f"\\fs{sc(31)}\\c&HFFFFFF&\\fsp2\\fad(80,150)"),
+                    _label(9, step_text,
+                           f"\\an4\\pos({ml + sc(35)},{round((top + bot) / 2)})"
+                           "\\fscx68\\fscy68\\t(0,180,\\fscx82\\fscy82)"
+                           "\\fad(100,150)"),
+                ]
             return [
                 dim,
-                _rect(6, "#4D8DFF", "00", badge_x1, top, badge_x2, bot),
+                _rect(6, _pal["accent"], "00", badge_x1, top, badge_x2, bot),
                 _rect(7, "#12151F", "04", badge_x2, top, w - ml, bot),
-                _label(8, "STEP",
+                _label(8, _clabels["steps"],
                        f"\\an5\\pos({round((badge_x1 + badge_x2) / 2)},{round((top + bot) / 2)})"
                        f"\\fs{sc(31)}\\c&HFFFFFF&\\fsp2\\fad(80,150)"),
                 _label(9, step_text,
@@ -715,8 +776,8 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         panel_top, panel_bot = round(h * .38), round(h * .69)
         return [
             dim,
-            _rect(6, "#FF375F", "05", ml, panel_top, w - ml, panel_bot),
-            _label(7, "지금 확인",
+            _rect(6, _pal["bar"], "05", ml, panel_top, w - ml, panel_bot),
+            _label(7, _clabels["cta"],
                    f"\\an8\\pos({cx},{panel_top + sc(50)})"
                    f"\\fs{sc(32)}\\c&HFFFFFF&\\fsp3\\fad(80,130)"),
             _label(8, body_txt,

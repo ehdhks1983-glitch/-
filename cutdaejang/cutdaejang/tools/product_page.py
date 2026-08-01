@@ -903,6 +903,8 @@ def download_images(urls: List[str], dest_dir, limit: int = 12,
     dest.mkdir(parents=True, exist_ok=True)
     saved: List[str] = []
     skipped = 0
+    rescue: List[tuple] = []      # 🖼 v1.22: 기준 미달이지만 '전멸' 대비 보관 (큰 순)
+    MIN_SIDE = 480                # 이보다 작으면 세로 캔버스에서 크게 흐려진다
     for u in list(dict.fromkeys([x for x in urls if str(x or "").startswith("http")]))[:limit]:
         cands = [c for c in (coupang_api.hi_res_image(u),
                              naver_shop_api.hi_res_image(u)) if c != u] + [u]
@@ -915,11 +917,56 @@ def download_images(urls: List[str], dest_dir, limit: int = 12,
             ext = fetch_web.sniff_image_ext(raw) or ""
             if ext not in ("jpg", "jpeg", "png", "webp", "bmp") or len(raw) < min_bytes:
                 continue                       # 고화질 변환 URL 실패면 원본 후보도 시도
+            # 🖼 v1.22 (목록 31): 기준 미달(너무 작은) 사진은 수집하지 않는다 —
+            # "좋은지 나쁜지 판단이 안 되는" 저화질이 영상에서 크게 흐려지던 문제.
+            w0, h0 = fetch_web.image_dims(raw)
+            if w0 and h0 and min(w0, h0) < MIN_SIDE:
+                rescue.append((w0 * h0, raw, ext, w0, h0))
+                continue                       # 다음 후보(더 큰 판)도 마저 시도
             p = dest / f"img_{len(saved) + 1:02d}.{ext}"
             p.write_bytes(raw)
-            saved.append(str(p))
+            saved.append(str(_upscale_if_small(p, w0, h0)))
             ok = True
             break
         if not ok:
             skipped += 1
+    if not saved and rescue:
+        # 전부 기준 미달이면 없는 것보단 큰 순으로 최대 3장 — 업스케일로 보정
+        for _area, raw, ext, w0, h0 in sorted(rescue, key=lambda r: r[0],
+                                              reverse=True)[:3]:
+            p = dest / f"img_{len(saved) + 1:02d}.{ext}"
+            p.write_bytes(raw)
+            saved.append(str(_upscale_if_small(p, w0, h0)))
+            skipped = max(0, skipped - 1)
     return saved, skipped
+
+
+def _upscale_if_small(path: Path, w: int, h: int, target: int = 1080) -> Path:
+    """🖼 화질 스케일업 (v1.22, 목록 31 — '간략히') — FFmpeg 란초스 + 가벼운 선명화.
+
+    AI 업스케일은 아니고, 렌더 때 뭉개지며 커지는 대신 미리 좋은 보간으로 키워
+    둔다(최대 2.2배 — 그 이상은 오히려 물러짐). 결과는 jpg로 저장되며 **실제
+    파일의 최종 경로를 반환**한다. FFmpeg가 없거나 실패하면 원본 그대로.
+    """
+    try:
+        if not (w and h) or min(w, h) >= 1000:
+            return path
+        scale = min(2.2, float(target) / float(min(w, h)))
+        if scale < 1.15:
+            return path
+        from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+        out = path.with_name(path.stem + "_up.jpg")
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(path),
+                "-vf", f"scale=round(iw*{scale:.3f}/2)*2:round(ih*{scale:.3f}/2)*2:"
+                       "flags=lanczos,unsharp=5:5:0.4:5:5:0.0",
+                "-q:v", "2", str(out)])
+        if out.is_file() and out.stat().st_size > 5_000:
+            final = path.with_suffix(".jpg")
+            path.unlink(missing_ok=True)
+            out.replace(final)
+            return final
+        out.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001 — 업스케일 실패는 원본 유지
+        return path
+    return path
