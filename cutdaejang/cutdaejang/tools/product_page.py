@@ -54,6 +54,40 @@ _IMG_RE = re.compile(
 _JUNK_IMG = ("logo", "icon", "sprite", "banner", "btn_", "/common/", "blank.",
              "storep-phinf.", "gfmarket-phinf.", "ssl.pstatic.net")
 
+# 🖼 v1.20.1 (1·2번 7차): 쿠팡은 **메인 썸네일 갤러리만** 긁는다.
+# 페이지 전체를 긁으면 아래쪽 광고 배너·"함께 본 상품" 추천 이미지(다른 상품!)까지
+# 섞인다 — 회원님 스크린샷: 섬유유연제를 수집했는데 단백질·베개·폰이 딸려 옴.
+# 갤러리는 레일 48x48ex / 본이미지 492x492ex 크기 세그먼트를 쓰고, 추천 위젯은
+# 230x230ex 등 다른 크기, 광고는 /image/ads/ 경로라 크기·경로로 구분된다.
+_COUPANG_GALLERY_RE = re.compile(
+    r"(?:https?:)?//thumbnail\d*\.coupangcdn\.com/thumbnails/remote/"
+    r"(?:48x48|492x492|500x500)(?:ex)?/([^\s\"'<>\\)]+?\.(?:jpg|jpeg|png|webp))",
+    re.I)
+_COUPANG_CANON = "https://thumbnail1.coupangcdn.com/thumbnails/remote/492x492ex/"
+
+
+def _coupang_canon(url: str) -> str:
+    """쿠팡 갤러리 사진 주소를 한 형태로 — 레일(48px)과 본이미지가 같은 사진이면
+    같은 주소가 되게 해서 중복을 없앤다. 갤러리 패턴이 아니면 그대로."""
+    m = _COUPANG_GALLERY_RE.search(url or "")
+    return (_COUPANG_CANON + m.group(1)) if m else (url or "")
+
+
+def _coupang_gallery(html: str) -> List[str]:
+    """상품 갤러리(썸네일 레일·본이미지) 사진만 순서대로 — 광고·추천 상품 제외."""
+    out: List[str] = []
+    seen = set()
+    for m in _COUPANG_GALLERY_RE.finditer(html or ""):
+        tail = m.group(1)
+        low = tail.lower()
+        if "/ads/" in low or any(j in low for j in _JUNK_IMG):
+            continue
+        if tail in seen:
+            continue
+        seen.add(tail)
+        out.append(_COUPANG_CANON + tail)
+    return out
+
 
 class ShopBlockedError(ValueError):
     """상품 페이지가 프로그램 접속을 차단 — 화면에서 복사→붙여넣기 안내용."""
@@ -641,6 +675,13 @@ def extract_image_urls(html: str, limit: int = 12, base_url: str = "") -> List[s
     html = _html.unescape(
         ((html or "").replace("\\/", "/")
          .replace("\\u002F", "/").replace("\\u002f", "/")))
+    # 🖼 v1.20.1: 쿠팡 상품 페이지는 갤러리를 확실히 찾았으면 **그것만** 쓴다 —
+    # 아래 일반 수집은 페이지 전체를 훑어 광고·추천 상품까지 섞이기 때문.
+    # (갤러리를 못 찾으면 예전 방식 그대로 — 없던 것보다 나빠지지 않게)
+    if _host_in(_host_of(base_url), ("coupang.com",)):
+        gal = _coupang_gallery(html)
+        if len(gal) >= 2:
+            return gal[:limit]
     out: List[str] = []
     seen = set()
 
@@ -713,6 +754,9 @@ def parse_product(html: str, base_url: str = "") -> dict:
     if og_img.startswith("http"):
         # 대표 사진은 태그/JSON 수집 중 이미 발견됐더라도 항상 첫 장으로 보낸다.
         # lazy 원본 우선 수집으로 순서가 바뀐 뒤 og:image가 중간에 남는 회귀 방지.
+        # v1.20.1: 쿠팡은 갤러리와 같은 형태로 맞춰 같은 사진이 두 번 안 들어가게.
+        if _host_in(_host_of(base_url), ("coupang.com",)):
+            og_img = _coupang_canon(og_img)
         imgs = [u for u in imgs if u != og_img]
         imgs.insert(0, og_img)
     price = ""
