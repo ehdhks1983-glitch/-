@@ -1672,6 +1672,39 @@ def _resolve_random_bgm(params: dict) -> None:
         pass
 
 
+def tidy_naver_tags(title: str, tags, limit: int = 7) -> list:
+    """🟢 네이버 클립 태그 정리 (v1.26, 조회수 진단 1번).
+
+    AI가 규칙을 어겨도 화면에 나가기 전에 걸러낸다:
+      ① 제목에 이미 있는 단어는 뺀다 — 같은 말을 반복하면 검색 범위가 안 넓어진다
+      ② 서로 겹치는 태그(한쪽이 다른 쪽에 통째로 들어감)는 긴 쪽만 남긴다
+      ③ 최대 limit개까지 (과다 태그는 주제 신호를 흐린다)
+    ①②로 너무 많이 빠지면 원래 태그로 뒤를 채워 최소 3개는 유지한다.
+    """
+    seen, kept, dropped = set(), [], []
+    tnorm = "".join(str(title or "").split()).lower()
+    for raw in (tags or []):
+        t = str(raw or "").lstrip("#").strip()
+        if not t or t.lower() in seen:
+            continue
+        seen.add(t.lower())
+        flat = "".join(t.split()).lower()
+        if flat and flat in tnorm:                      # ① 제목과 중복
+            dropped.append(t)
+            continue
+        if any(flat and flat in "".join(k.split()).lower() for k in kept):  # ② 포함 관계
+            dropped.append(t)
+            continue
+        kept = [k for k in kept if "".join(k.split()).lower() not in flat] + [t]
+    if len(kept) < 3:                                   # 너무 깎였으면 되살린다
+        for t in dropped:
+            if len(kept) >= 3:
+                break
+            if t not in kept:
+                kept.append(t)
+    return kept[:limit]
+
+
 def _bgm_credit(bgm_name: str) -> str:
     """쓴 BGM의 저작자표시(CC BY) 문구 — 무료 음원이면 자동으로 설명란용 크레딧 생성."""
     if not bgm_name or bgm_name == "random":
@@ -1723,7 +1756,7 @@ def _kit_text(kit: dict, title: str) -> str:
     nc = kit.get("naver_clip") or {}
     if nc.get("title"):
         lines += ["", "【네이버 클립】 올리기 → https://clipcreators.naver.com",
-                  "(검색형 제목 + 태그 10~12개)",
+                  "(제목은 「검색어 + 붙잡는 한마디」 · 태그 5~7개 · 제목과 안 겹치게)",
                   f"제목: {nc['title']}",
                   "태그: " + " ".join(f"#{t}" for t in nc.get("tags", []))]
     th = kit.get("threads") or {}
@@ -4329,6 +4362,11 @@ class _Handler(BaseHTTPRequestHandler):
             kit = sg.suggest_upload_kit_stub(transcript, hook or title,
                                              is_shorts=is_shorts)
             stub = True
+        # 🟢 네이버 클립 태그 정리 (v1.26) — 제목과 겹치는 태그·과다 태그 제거
+        _nc = kit.get("naver_clip") or {}
+        if _nc.get("tags"):
+            _nc["tags"] = tidy_naver_tags(_nc.get("title") or "", _nc["tags"])
+            kit["naver_clip"] = _nc
         # BGM 크레딧 자동 삽입 — 어떤 곡을 썼는지 컷대장이 아니까 (CC BY 표기 의무)
         credit = _bgm_credit((ep.get("bgm") or jp.get("bgm") or "").strip())
         if credit:
@@ -4969,7 +5007,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.25.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.26.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
