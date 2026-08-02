@@ -1018,10 +1018,39 @@ def spread_ranges(total_us: int, target_us: int, piece_us: int = 3_500_000) -> L
 
 _SENT_END = ".?!…~"
 
+# 🔗 v1.27: 마침표가 찍혀 있어도 **뒷말로 이어져야 하는** 종결 (회원님 실제 대본에서 확인)
+#   "…궁금증이 커지고 있고요."  "…고척돔에 등장했는데요."  "…세금을 냈지만요."
+#   "특히 밴쿠버전에서는요."
+# 이런 줄 뒤에 침묵이 들어가면 문장 한가운데가 끊긴 것처럼 들린다. 마침표를 떼고
+# 마지막 두세 글자를 봐서 연결 어미면 다음 줄과 한 호흡으로 묶는다.
+_CONNECTIVE_END = (
+    # 존댓말 연결형 (…해요체로 이어지는 말)
+    "고요", "구요", "는데요", "은데요", "인데요", "지만요", "거든요",
+    "라서요", "어서요", "아서요", "해서요", "니까요", "으니까요", "면서요",
+    # 조사로 끝나 뒷말을 기다리는 형태
+    "에서는요", "에는요", "부터요", "까지요", "으로요", "로요", "에게요",
+    # 반말·평서 연결형
+    "는데", "은데", "지만", "라서", "어서", "아서", "니까", "면서", "이고",
+)
+
+
+def _ends_connective(t: str) -> bool:
+    """마침표를 떼고 봤을 때 뒷말로 이어지는 어미로 끝나나 (v1.27)."""
+    s = (t or "").strip().rstrip("\"'\u201d\u2019\u300d\u300f)]")
+    s = s.rstrip(_SENT_END).strip()
+    if len(s) < 3:
+        return False
+    return any(s.endswith(suf) for suf in _CONNECTIVE_END)
+
 
 def _ends_sentence(t: str) -> bool:
-    t = (t or "").strip().rstrip("\"'\u201d\u2019\u300d\u300f)]")
-    return bool(t) and t[-1] in _SENT_END
+    """이 줄에서 문장이 끝나나 — 마침표가 있어도 연결 어미면 아직 안 끝난 것."""
+    s = (t or "").strip().rstrip("\"'\u201d\u2019\u300d\u300f)]")
+    if not s:
+        return False
+    if _ends_connective(t):
+        return False
+    return s[-1] in _SENT_END
 
 
 def group_sentence_units(texts) -> list:
@@ -1110,7 +1139,8 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
 
     if fit in ("freeze", "loop"):
         # 영상 쪽을 늘려 다 담는다 → 속도 올림·생략 없이 순차 배치
-        natural_gap = 350_000 if gap_us is None else max(60_000, int(gap_us))
+        # v1.27: 기본 350ms는 문장 사이 쉼으로 길어 뚝뚝 끊겨 들렸다 → 300ms
+        natural_gap = 300_000 if gap_us is None else max(60_000, int(gap_us))
         out_subs, out_clips, cursor = [], [], lead_us
         for i, (clip, dur, sub) in enumerate(zip(clips, durs, subtitles)):
             sub.start_us = cursor
@@ -1146,7 +1176,7 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
         gap = max(min_gap, min(900_000, (total_us - lead_us - sum(durs)) // (n - 1)))
 
     out_subs, out_clips, cursor, dropped = [], [], lead_us, 0
-    for clip, dur, sub in zip(clips, durs, subtitles):
+    for _i, (clip, dur, sub) in enumerate(zip(clips, durs, subtitles)):
         if cursor + dur > total_us + 300_000 and out_subs:  # ③ 시작해도 못 끝내면 생략
             dropped += 1
             continue
@@ -1154,7 +1184,10 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
         sub.end_us = min(cursor + dur, total_us)
         out_subs.append(sub)
         out_clips.append(clip)
-        cursor = sub.start_us + dur + gap
+        # v1.27: 같은 문장을 쪼갠 줄 사이는 붙인다 — v1.24에서 freeze 경로에만
+        # 넣어 두어, 영상 길이에 맞추는 이 경로에서는 문장 중간이 계속 끊겼다.
+        cursor = sub.start_us + dur + (
+            0 if (joins and _i < len(joins) and joins[_i]) else gap)
     if dropped:
         extra = f"영상이 짧아 마지막 {dropped}문장은 생략했어요"
         note = f"{note} · {extra}" if note else extra

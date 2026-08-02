@@ -834,6 +834,22 @@ def _pick_sentence_boundaries(duration_us: int, texts: List[str],
 # ─────────────────────────── 전처리 (지시서 PATCH 2) ───────────────────────────
 
 
+def _speed_filter(speed) -> str:
+    """말 속도 배수 → atempo 필터 문자열 (1.0이면 빈 문자열).
+
+    atempo는 0.5~2.0만 받으므로 범위 밖은 곱해서 나눈다. 음높이는 그대로 두고
+    속도만 바뀐다(피치 시프트 아님) — 목소리가 이상해지지 않는다.
+    """
+    try:
+        s = float(speed or 1.0)
+    except (TypeError, ValueError):
+        return ""
+    s = max(0.5, min(2.0, s))
+    if abs(s - 1.0) < 0.01:
+        return ""
+    return f"atempo={s:.3f},"
+
+
 def postprocess_clip(raw_path: str, out_wav: str, audio_cfg: dict) -> Tuple[int, int]:
     """앞뒤 무음 트림 → 10ms 에지 페이드 → -16 LUFS → 30ms 패드 → 48kHz 스테레오 wav.
 
@@ -846,10 +862,13 @@ def postprocess_clip(raw_path: str, out_wav: str, audio_cfg: dict) -> Tuple[int,
     pad_s = pad_ms / 1000.0
     lufs = audio_cfg.get("lufs", -16)
     raw_us = ff.probe_duration_us(str(raw_path))
+    # 🏃 말 속도 (v1.27) — 일레븐랩스·제미나이 등 제공자를 가리지 않고 여기서 한 번에.
+    # 회원님 리포트: "목소리 톤 같은 게 너무 느려" — 지금까지 조절 수단이 아예 없었다.
+    speed = _speed_filter(audio_cfg.get("speech_speed", 1.0))
 
     sr = f"silenceremove=start_periods=1:start_threshold={threshold}dB"
     filters = (
-        f"{sr},areverse,{sr},"
+        f"{speed}{sr},areverse,{sr},"
         "afade=t=in:d=0.02,areverse,afade=t=in:d=0.02,"   # 양끝 20ms 페이드 (클릭 방지)
         f"loudnorm=I={lufs}:TP=-1.5:LRA=11,"
         "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo,"
@@ -898,6 +917,9 @@ class TTSEngine:
         extra = getattr(self.provider, "cache_extra", "")
         if extra:
             raw += f"|{extra}"
+        sp = self.settings["audio"].get("speech_speed", 1.0)   # 🏃 v1.27
+        if abs(float(sp or 1.0) - 1.0) >= 0.01:
+            raw += f"|sp:{float(sp):.2f}"
         if ctx:  # 이어읽기 문맥이 다르면 다른 소리 (v0.83)
             raw += f"|ctx:{ctx}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()

@@ -51,6 +51,8 @@ DEFAULTS: dict = {
         "gap_ms": 220,                # 문장 간격
         "trim_threshold_db": -45,     # 무음 트림 임계값
         "edge_pad_ms": 30,            # 트림 후 앞뒤 무음 재부여
+        "speech_speed": 1.0,          # 🏃 말 속도 배수 (v1.27) — 0.8 느리게 ~ 1.3 빠르게
+        "sentence_gap_ms": 300,       # 문장 사이 쉼 (v1.27, 예전 350ms는 길어서 끊겨 들렸음)
         "lufs": -16,
     },
     "watermark": {                    # 워터마크(로고) — 편집 폼에서 넣으면 기억됨

@@ -498,7 +498,8 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
     )
 
 
-def _record_history(workdir: str, result, opts: JobOptions) -> None:
+def _record_history(workdir: str, result, opts: JobOptions,
+                    params: Optional[dict] = None) -> None:
     try:
         from ..db.jobs import JobStore  # noqa: PLC0415
 
@@ -506,6 +507,12 @@ def _record_history(workdir: str, result, opts: JobOptions) -> None:
         spec_json = None
         if result.spec_path and Path(result.spec_path).exists():
             spec_json = Path(result.spec_path).read_text(encoding="utf-8")
+        # ✏ v1.27: 부분 수정(목소리만 다시)은 만들 때 쓴 입력값이 있어야 한다.
+        # 지금까지 AI 생성 경로만 이걸 안 남겨, 프로그램을 껐다 켜면 부분 수정이
+        # 막혔다. API 키는 빼고 저장한다(_record_simple_history와 같은 규칙).
+        safe = None
+        if params is not None:
+            safe = {k: v for k, v in params.items() if k not in _PARAM_SECRET_KEYS}
         store.upsert(
             result.job_id,
             title=result.title,
@@ -517,6 +524,8 @@ def _record_history(workdir: str, result, opts: JobOptions) -> None:
             out_mp4=result.mp4.out_path if result.mp4 else None,
             error="; ".join(result.errors) or None,
             tts_provider=result.tts_provider or None,
+            params_json=(json.dumps(safe, ensure_ascii=False)
+                         if safe is not None else None),
         )
         store.close()
     except Exception:
@@ -610,6 +619,12 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
             pass
     if "punch_in" in params:  # 👊 펀치인 줌 켬/끔 기억 (v0.55)
         over["punch_in"] = bool(params.get("punch_in"))
+    over_audio = {}
+    if params.get("narr_speed"):        # 🏃 말 속도 (v1.27) — 제공자 무관 공통 적용
+        try:
+            over_audio["speech_speed"] = max(0.5, min(2.0, float(params["narr_speed"])))
+        except (TypeError, ValueError):
+            pass
     from ..core.render_engine.ffmpeg_composer import TONE_PRESETS  # noqa: PLC0415
     if str(params.get("tone") or "") in TONE_PRESETS:  # 🎨 화면 톤 기억 (v0.56)
         over["tone"] = params["tone"]
@@ -640,7 +655,7 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
         over_ui["gen_eleven_voice"] = str(params["voice"]).strip()[:80]  # 🎙 지난 성우 기억 (v0.67)
     if "hook_voice" in params:  # 🎙 후킹 보이스 선택 기억 (v0.75)
         over_ui["gen_hook_voice"] = bool(params.get("hook_voice"))
-    if not over and not over_sub and not over_sfx and not over_ui:
+    if not over and not over_sub and not over_sfx and not over_ui and not over_audio:
         return settings
     save = {}
     if over and any(settings["bg"].get(k) != v for k, v in over.items()):
@@ -649,6 +664,9 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
         save["subtitle"] = over_sub
     if over_sfx and any((settings.get("sfx") or {}).get(k) != v for k, v in over_sfx.items()):
         save["sfx"] = over_sfx
+    if over_audio and any((settings.get("audio") or {}).get(k) != v
+                          for k, v in over_audio.items()):
+        save["audio"] = over_audio          # 🏃 말 속도 기억 (v1.27)
     if over_ui and any((settings.get("ui") or {}).get(k) != v for k, v in over_ui.items()):
         save["ui"] = over_ui
     if save:
@@ -656,7 +674,8 @@ def _apply_bg_style(params: dict, settings: dict) -> dict:
             config.save_settings(save)
         except OSError:
             pass
-    return config.deep_merge(settings, {"bg": over, "subtitle": over_sub, "sfx": over_sfx})
+    return config.deep_merge(settings, {"bg": over, "subtitle": over_sub,
+                                       "sfx": over_sfx, "audio": over_audio})
 
 
 def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str,
@@ -694,12 +713,103 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str,
             fallback_note=result.fallback_note,
             errors=result.errors,
         )
-        _record_history(workdir, result, opts)
+        _record_history(workdir, result, opts, params)
     except Exception as e:
         import traceback  # noqa: PLC0415
 
         logging.getLogger("cutdaejang").error("작업 실패 %s\n%s", job_id, traceback.format_exc())
         _set_job(job_id, status="failed", errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
+
+
+# ✏ 부분 수정 (v1.27) — 화면에서 새로 고를 수 있는 값만 덮어쓴다
+_RETOUCH_VOICE_KEYS = ("narr_speed", "tts_provider", "voice", "tts_style")
+_RETOUCH_DECO_KEYS = ("sub_style", "tone", "sub_font", "hook_style",
+                      "hook_font", "hook_tilt", "sub_anim")
+
+
+def _saved_job_params(job_id: str, job: dict, workdir: str):
+    """이 영상을 만들 때 쓴 입력값 — 진행 중 메모리 우선, 없으면 히스토리."""
+    row = None
+    try:
+        from ..db.jobs import JobStore  # noqa: PLC0415
+
+        store = JobStore(Path(workdir) / "history.db")
+        row = store.get(job_id)
+        store.close()
+    except Exception:  # noqa: BLE001 — 히스토리를 못 읽어도 메모리 값으로 진행
+        row = None
+    saved = dict(job.get("params") or {})
+    if not saved and row and row.get("params_json"):
+        try:
+            saved = json.loads(row["params_json"]) or {}
+        except (TypeError, ValueError):
+            saved = {}
+    return saved, row
+
+
+def _reuse_scene_images(job_dir: Path, n: int):
+    """이미 만들어 둔 장면 그림 재사용 목록 (없는 자리는 None → 이웃 그림).
+
+    부분 수정에서 그림을 다시 만들면 돈이 또 나간다. 원본 작업 폴더의 그림을
+    그대로 넘겨 AI 이미지 값을 0원으로 만든다.
+    """
+    scenes = job_dir / "scenes"
+    imgs = [None] * max(0, n)
+    if not scenes.is_dir():
+        return imgs
+    for i in range(len(imgs)):
+        p = scenes / f"scene_{i + 1:02d}.png"
+        if p.is_file():
+            imgs[i] = str(p)
+    return imgs
+
+
+def _run_restyle(job_id: str, title: str, spec, params: dict, workdir: str) -> None:
+    """🎨 꾸미기만 다시 (v1.27) — 저장된 설계에서 자막·색감만 갈아 끼워 재렌더.
+
+    소리 클립과 자막 시각(start/end)은 한 글자도 건드리지 않으므로 목소리와
+    자막이 어긋날 위험이 없다. 장면 그림·BGM도 그대로 재사용해 빠르고 값은 0원.
+    """
+    try:
+        from ..core import render_engine  # noqa: PLC0415
+        from ..core.orchestrator import safe_filename  # noqa: PLC0415
+
+        settings = _apply_bg_style(params, config.load_settings())
+        orientation = (params.get("orientation")
+                       if params.get("orientation") in ("wide", "reels") else "shorts")
+        style = orchestrator.build_style(settings, orientation)
+        # 화면 배치에 관한 값은 원본 설계를 지킨다 — 가로/세로·글씨 크기가
+        # 뒤바뀌면 "꾸미기만 바꿨는데 영상이 딴판"이 된다.
+        style = dataclasses.replace(
+            style, size=spec.style.size, position=spec.style.position,
+            margin_v=spec.style.margin_v, hook_scale=spec.style.hook_scale,
+            wrap_chars=spec.style.wrap_chars)
+        spec2 = dataclasses.replace(spec, style=style)
+        job_dir = Path(workdir) / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        spec2.save(job_dir / "spec.json")     # 이 결과도 다시 부분 수정할 수 있게
+        out = job_dir / (safe_filename(title or job_id)[:60] + ".mp4")
+        result = render_engine.render(
+            spec2, job_dir / "render", out_path=str(out),
+            progress_cb=lambda f: _set_job(job_id, stage="render", frac=f))
+        if result.ok:
+            _set_job(job_id, status="ok", stage="done", frac=1.0,
+                     job_dir=str(job_dir), mp4=result.out_path,
+                     note="🎨 꾸미기만 다시 입혔어요 — 목소리·타이밍은 그대로예요")
+        else:
+            _set_job(job_id, status="failed",
+                     errors=result.errors or ["다시 입히기에 실패했어요"])
+        _record_simple_history(workdir, job_id, title=title, mode="retouch",
+                               status="ok" if result.ok else "failed",
+                               mp4=result.out_path if result.ok else None,
+                               params=params, duration_us=spec2.duration_us)
+    except Exception as e:  # noqa: BLE001
+        import traceback  # noqa: PLC0415
+
+        logging.getLogger("cutdaejang").error(
+            "꾸미기 다시 입히기 실패 %s\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="failed",
+                 errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1200:]}"])
 
 
 def _edit_summary(analysis) -> str:
@@ -2699,7 +2809,8 @@ def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
                     _attach_branding(job_id, result.mp4.out_path, Path(result.job_dir))
                     outs.append(result.mp4.out_path)
                 errors += [f"[{topic}] {e}" for e in result.errors]
-                _record_history(workdir, result, opts)  # 개별 영상은 히스토리에서 재생
+                # v1.27: 배치로 만든 영상도 부분 수정이 되게 입력값을 남긴다
+                _record_history(workdir, result, opts, params)
             except Exception as te:  # noqa: BLE001 — 한 주제 실패는 다음 주제로
                 logging.getLogger("cutdaejang").warning("배치 항목 실패 (%s): %s", topic, te)
                 errors.append(f"[{topic}] {te}")
@@ -4217,6 +4328,8 @@ class _Handler(BaseHTTPRequestHandler):
                                  "fail": r["fail"], "fonts": ffonts.installed()})
             except Exception as e:  # noqa: BLE001
                 self._send_json({"error": f"글씨체 받기 실패: {str(e)[:200]}"}, 500)
+        elif path == "/api/retouch":     # ✏ 부분 수정 (v1.27)
+            self._retouch(params, workdir)
         elif path == "/api/regenerate":
             self._regenerate(params, workdir)
         elif path == "/api/diagnostic":
@@ -4225,6 +4338,98 @@ class _Handler(BaseHTTPRequestHandler):
             self._open_folder(params, workdir)
         else:
             self._send_json({"error": "not found"}, 404)
+
+    # ---------- ✏ 부분 수정 (v1.27) — 목소리·속도 / 꾸미기만 ----------
+
+    def _retouch(self, params: dict, workdir: str) -> None:
+        """처음부터 다시 만들지 않고 마음에 안 드는 것만 갈아 끼운다.
+
+        회원님 리포트: "목소리 톤 같은 게 너무 느려. 그래서 편집을 누르면 다시
+        다 넣어야 하는데 부분 편집 기능이 있어야 할 것 같아."
+
+        · what="voice" — 대본·장면 그림은 그대로 두고 목소리만 새로 읽힌다.
+          검증된 파이프라인을 다시 태우므로 새 목소리 길이에 맞춘 자막 재배치가
+          자동으로 따라온다 (spec을 손으로 기우면 목소리·자막이 어긋난다).
+        · what="deco"  — 저장된 설계의 자막 디자인·화면 톤만 바꿔 다시 굽는다.
+          소리·타이밍을 안 건드려 가장 빠르고 안전하다.
+        """
+        what = str(params.get("what") or "voice")
+        if what not in ("voice", "deco"):
+            self._send_json({"error": "무엇을 고칠지 알 수 없어요"}, 400)
+            return
+        src_id = str(params.get("job_id") or "")
+        job = _get_job(src_id) or {}
+        old_params, row = _saved_job_params(src_id, job, workdir)
+        title = job.get("title") or (row or {}).get("title") or src_id
+        job_dir = Path(workdir) / src_id
+        _apply_keys(params)
+        new_id = f"{src_id}-{'v' if what == 'voice' else 'd'}{_dt_stamp()}"
+
+        if what == "voice":
+            sj = job_dir / "script.json"
+            if not sj.is_file() or not old_params:
+                self._send_json(
+                    {"error": "이 영상은 «목소리만 다시»를 지원하지 않아요 — AI로 만든 "
+                              "영상에서만 가능해요 (편집·구간 영상은 [✂ 이 영상 편집]을 "
+                              "써주세요)"}, 404)
+                return
+            try:
+                script = Script.from_json_text(sj.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                self._send_json({"error": "대본 파일을 읽을 수 없어요"}, 500)
+                return
+            imgs = _reuse_scene_images(job_dir, len(script.sentences))
+            kept = sum(1 for p in imgs if p)
+            new_params = dict(old_params)
+            for k in _RETOUCH_VOICE_KEYS:
+                v = params.get(k)
+                if str(v or "").strip():
+                    new_params[k] = v
+            new_params["auto"] = True        # 대본은 이미 확정 — 검토 없이 바로
+            new_params["script_text"] = ""   # 대본은 script.json 그대로 쓴다
+            note = "🎙 대본·그림은 그대로 두고 목소리만 새로 읽는 중…"
+            if kept:
+                note += f" (그림 {kept}장 재사용 — 그림 값 0원)"
+            _set_job(new_id, status="running", stage="tts", frac=0.0,
+                     title=f"{title} (✏ 목소리 다시)", params=new_params, note=note,
+                     # 완료 화면 문구 — 진짜 목소리 경고가 생기면 그쪽이 우선한다
+                     tts_warn="✏ 목소리만 다시 만들었어요 — 대본·장면 그림은 그대로예요")
+            _queue_job(new_id, _run_pipeline, new_id, script, new_params, workdir,
+                       imgs if kept else None)
+            self._send_json({"job_id": new_id})
+            return
+
+        spec_txt = ""
+        sp = job_dir / "spec.json"
+        if sp.is_file():
+            spec_txt = sp.read_text(encoding="utf-8")
+        elif row and row.get("spec_json"):
+            spec_txt = row["spec_json"]
+        if not spec_txt:
+            self._send_json({"error": "이 영상은 «꾸미기만 다시»를 지원하지 않아요 "
+                                      "— 설계가 저장되지 않은 옛 작업이에요"}, 404)
+            return
+        from ..spec import TimelineSpec  # noqa: PLC0415
+        try:
+            spec = TimelineSpec.from_json(spec_txt)
+        except Exception:  # noqa: BLE001
+            self._send_json({"error": "저장된 설계를 읽을 수 없어요"}, 500)
+            return
+        missing = spec.missing_files()
+        if missing:
+            self._send_json({"error": "원본 소재가 지워져 다시 입힐 수 없어요: "
+                                      + ", ".join(missing[:3])}, 409)
+            return
+        deco = dict(old_params)
+        for k in _RETOUCH_DECO_KEYS:
+            v = params.get(k)
+            if str(v or "").strip():
+                deco[k] = v
+        _set_job(new_id, status="running", stage="render", frac=0.0,
+                 title=f"{title} (✏ 꾸미기 다시)", params=deco,
+                 note="🎨 소리·타이밍은 그대로 두고 자막·색감만 다시 입히는 중…")
+        _queue_job(new_id, _run_restyle, new_id, title, spec, deco, workdir)
+        self._send_json({"job_id": new_id})
 
     # ---------- 재생성 (히스토리 → 저장된 spec 재렌더) ----------
 
@@ -5007,7 +5212,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.26.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.27.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5296,6 +5501,10 @@ body.easy #easyBar { display: block; }
         <div>
           <label>말투 스타일</label>
           <select id="narrStyleSel"></select>
+        </div>
+        <div>
+          <label>말 속도</label>
+          <select id="narrSpeedSel" title="목소리가 느리거나 빠를 때 — 음높이는 그대로, 속도만 바뀝니다"><option value="0.85">🐢 느리게</option><option value="1" selected>보통</option><option value="1.12">🐇 빠르게</option><option value="1.25">⚡ 아주 빠르게</option></select>
         </div>
         <div style="display:flex;align-items:flex-end;gap:6px">
           <button class="ghost" style="margin-bottom:1px" onclick="previewNarrVoice(event)">🔊 미리듣기</button>
@@ -5703,6 +5912,11 @@ body.easy #easyBar { display: block; }
       <label id="provMineLabel" class="hidden"><input type="radio" name="prov" value="elevenlabs" id="provMine"><span>🎤 내 목소리</span></label>
       <label id="provElevenLabel"><input type="radio" name="prov" value="eleven_voice" id="provEleven" onclick="checkElevenProv(event)"><span>🎙 일레븐랩스 성우</span></label>
       <label id="provSovitsLabel" class="hidden"><input type="radio" name="prov" value="sovits" id="provSovits"><span>🎤 내 목소리 (무료·내 PC)</span></label>
+    </div>
+    <div class="chk" style="gap:8px;margin-top:8px">
+        <span>말 속도</span>
+        <select id="genSpeedSel" style="width:auto" title="목소리가 느리거나 빠를 때 — 음높이는 그대로, 속도만 바뀝니다"><option value="0.85">🐢 느리게</option><option value="1" selected>보통</option><option value="1.12">🐇 빠르게</option><option value="1.25">⚡ 아주 빠르게</option></select>
+      <span class="hint">— 완성본이 느리게 들리면 «빠르게»로</span>
     </div>
     <div class="hint">여기서는 <b>목소리만</b> 골라요 — 대본·자막·배경은 뭘 고르든 컷대장이 알아서 만듭니다.</div>
     <div class="chk" style="gap:8px">
@@ -6497,7 +6711,58 @@ body.easy #easyBar { display: block; }
       <button class="ghost" style="margin-top:10px" onclick="shrinkVideo(event)" title="용량이 커서 업로드가 안 될 때 — 화질 거의 그대로 파일 크기를 크게 줄인 업로드용 mp4를 하나 더 만들어요 (원본은 그대로)">📦 용량 줄이기 (업로드용)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'mix')" title="완성 영상의 소리(목소리+BGM+효과음)를 mp3로 저장">🔊 소리 저장(mp3)</button>
       <button class="ghost" style="margin-top:10px" onclick="extractAudio(event,'voice')" title="BGM·원본 소리 없이 내레이션 목소리만 mp3로 저장 — 다른 편집기·팟캐스트에 재사용">🎙 목소리만(mp3)</button>
+      <button class="ghost" style="margin-top:10px;border-color:#4266d5" onclick="toggleRetouch(event)" title="처음부터 다시 만들지 않고, 마음에 안 드는 것만 골라 다시 만들어요">✏ 부분 수정 (말 속도·목소리·꾸미기)</button>
       <button class="ghost" style="margin-top:10px" onclick="toggleKit(event)">📦 업로드 키트 (제목·태그·설명 자동)</button>
+      <div id="retouchBox" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px dashed #4266d5;border-radius:10px">
+        <div style="font-weight:700;font-size:14px">✏ 부분 수정 <span class="hint">— 대본·장면 그림은 그대로 두고 마음에 안 드는 것만</span></div>
+        <div class="hint" style="margin-top:4px">처음부터 다시 만들 필요 없어요. <b>바꿀 것만</b> 고르고 아래 버튼을 누르면, 나머지는 그대로 재사용해 훨씬 빠르고 <b>AI 그림 값도 안 나가요</b>.</div>
+        <div style="margin-top:10px;padding:8px 10px;border:1px solid #3a4157;border-radius:8px">
+          <div style="font-weight:700;font-size:13px">🎙 목소리·말 속도만 다시</div>
+          <div class="chk" style="gap:8px;margin-top:6px;flex-wrap:wrap">
+            <span>말 속도</span>
+            <select id="rtSpeedSel" style="width:auto" title="음높이는 그대로, 속도만 바뀝니다">
+              <option value="">그대로</option>
+              <option value="0.85">🐢 느리게</option>
+              <option value="1">보통</option>
+              <option value="1.12">🐇 빠르게</option>
+              <option value="1.25">⚡ 아주 빠르게</option>
+            </select>
+            <span>목소리</span>
+            <select id="rtVoiceSel" style="width:auto;max-width:220px" title="위 폼에 채워진 목소리 목록에서 고릅니다">
+              <option value="">그대로</option>
+            </select>
+          </div>
+          <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="retouch(event,'voice')" title="대본과 장면 그림은 그대로 두고 목소리만 새로 읽혀요 — 자막 타이밍은 새 목소리 길이에 맞춰 자동으로 다시 맞춰집니다">🎙 목소리만 다시 만들기</button>
+          <div class="hint" style="margin-top:4px">자막이 나오는 시각도 새 목소리 길이에 맞춰 <b>자동으로 다시 맞춰져요</b>.</div>
+        </div>
+        <div style="margin-top:8px;padding:8px 10px;border:1px solid #3a4157;border-radius:8px">
+          <div style="font-weight:700;font-size:13px">🎨 꾸미기만 다시 (자막 디자인·화면 톤)</div>
+          <div class="chk" style="gap:8px;margin-top:6px;flex-wrap:wrap">
+            <span>자막 디자인</span>
+            <select id="rtSubStyleSel" style="width:auto;max-width:220px">
+              <option value="">그대로</option>
+              <option value="기본">기본 (흰 글자+검정 테두리)</option>
+              <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
+              <option value="말풍선 띠">말풍선 띠 (흰 띠+검정 글자)</option>
+              <option value="네온">네온 (민트 글로우)</option>
+              <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
+              <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
+            </select>
+            <span>화면 톤</span>
+            <select id="rtToneSel" style="width:auto;max-width:200px">
+              <option value="">그대로</option>
+              <option value="기본">기본 (보정 없음)</option>
+              <option value="시네마틱">시네마틱 (영화 느낌)</option>
+              <option value="화사">화사 (밝고 쨍하게)</option>
+              <option value="선명">선명 (대비·채도 업)</option>
+              <option value="흑백">흑백 (드라마틱)</option>
+            </select>
+          </div>
+          <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="retouch(event,'deco')" title="소리와 타이밍은 손대지 않고 자막·색감만 다시 입혀요 — 가장 빠릅니다">🎨 꾸미기만 다시 입히기</button>
+          <div class="hint" style="margin-top:4px">소리·타이밍은 <b>손대지 않아</b> 가장 빨라요 (목소리를 다시 만들지 않습니다).</div>
+        </div>
+        <div class="hint" style="margin-top:8px">💡 사진·장면 그림을 바꾸고 싶으면 세부 설정을 <b>「검토」</b>로 두고 만들어 보세요 — 장면 그림을 하나씩 다시 만들거나 내 사진으로 바꿀 수 있어요.</div>
+      </div>
       <button class="ghost" style="margin-top:10px" onclick="toggleThumb(event)">🖼️ 유튜브 썸네일 만들기 (16:9)</button>
       <div class="hint" style="margin-top:10px;padding:8px 12px;border:1px dashed #3a4157;border-radius:10px">🎯 <b>다음엔 이것도 해보세요</b> —
         ① [🖼️ 썸네일 만들기]로 업로드용 썸네일까지 30초 ·
@@ -7540,6 +7805,7 @@ async function startEdit(){
     narr_file: narrFileVal,
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_voice: nv, narr_style: ($('narrStyleSel')||{}).value||'',
+    narr_speed: ($('narrSpeedSel')||{}).value||'',   // 🏃 말 속도 (v1.27)
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
     transition: (($('transSel')||{}).value)||'none',
     orig_audio: $('origAudioSel').value,
@@ -8336,6 +8602,7 @@ async function generate(){
     script_text: (($('genScript')||{}).value)||'',                 // v0.61 내 대본
     sub_style: (($('genSubStyleSel')||{}).value)||'기본',          // v0.54 자막 프리셋
     theme: (($('genThemeSel')||{}).value)||'',                    // 🎲 배치 랜덤 판단 (v1.24)
+    narr_speed: (($('genSpeedSel')||{}).value)||'',              // 🏃 말 속도 (v1.27)
     sub_anim: (window._themeAnim||{}).gen || '',                  // 🎨 감성 테마 자막 등장 (v0.86)
     sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
     punch_in: !!(($('genPunchChk')||{}).checked),                  // v0.55 펀치 줌
@@ -9599,6 +9866,7 @@ function collectTplParams(){
     sub_style: (($('editSubStyleSel')||{}).value)||'기본',
     tone: (($('editToneSel')||{}).value)||'기본',
     narr_voice: (($('narrVoiceSel')||{}).value)||'', narr_style: (($('narrStyleSel')||{}).value)||'',
+    narr_speed: (($('narrSpeedSel')||{}).value)||'',   // 🏃 말 속도 (v1.27)
     narr_subs_only: (($('narrSubsOnly')||{}).checked)||false,
     narr_fit: (($('narrFitSel')||{}).value)||'freeze',
     transition: (($('transSel')||{}).value)||'none',
@@ -9675,6 +9943,67 @@ async function saveSettings(){
   }};
   const data = await (await fetch('/api/settings', {method:'POST', body: JSON.stringify(body)})).json();
   alert(data.ok ? '저장했습니다. 다음 작업부터 적용됩니다.' : ('저장 실패: ' + data.error));
+}
+
+// ── ✏ 부분 수정 (v1.27) — 목소리·말 속도만 / 꾸미기만 다시 ──
+function toggleRetouch(ev){
+  if(ev) ev.preventDefault();
+  const b = $('retouchBox');
+  if(!b) return;
+  const opening = b.classList.contains('hidden');
+  b.classList.toggle('hidden');
+  if(opening) fillRetouchVoices();
+}
+function fillRetouchVoices(){
+  // 목소리 목록은 위 폼이 이미 채워 뒀다 — 그대로 복제해 온다 (중복 채움 방지)
+  const sel = $('rtVoiceSel');
+  if(!sel || sel.options.length > 1) return;
+  const add = (mark, srcId, prov) => {
+    const s = $(srcId);
+    if(!s) return;
+    Array.prototype.forEach.call(s.options, o => {
+      if(!o.value) return;
+      const op = document.createElement('option');
+      op.value = prov + ':' + o.value;
+      op.textContent = mark + ' ' + o.textContent;
+      sel.appendChild(op);
+    });
+  };
+  add('🤖', 'voiceSel', 'gemini');
+  add('🎙', 'elevenVoiceSel', 'elevenlabs');
+}
+async function retouch(ev, what){
+  if(ev) ev.preventDefault();
+  if(!currentJob){ alert('먼저 영상을 하나 만들어 주세요'); return; }
+  const body = {job_id: currentJob, what: what};
+  if(what === 'voice'){
+    body.narr_speed = (($('rtSpeedSel')||{}).value)||'';
+    const v = (($('rtVoiceSel')||{}).value)||'';
+    if(v){
+      const i = v.indexOf(':');
+      body.tts_provider = v.slice(0, i);
+      body.voice = v.slice(i + 1);
+    }
+    if(!body.narr_speed && !v){ alert('바꿀 «말 속도»나 «목소리»를 골라주세요'); return; }
+  } else {
+    body.sub_style = (($('rtSubStyleSel')||{}).value)||'';
+    body.tone = (($('rtToneSel')||{}).value)||'';
+    if(!body.sub_style && !body.tone){ alert('바꿀 «자막 디자인»이나 «화면 톤»을 골라주세요'); return; }
+  }
+  const btn = ev && ev.target ? ev.target : null;
+  if(btn) btn.disabled = true;
+  let data;
+  try {
+    data = await (await fetch('/api/retouch', {method:'POST', body: JSON.stringify(body)})).json();
+  } catch(e){ data = {error: '요청을 보내지 못했어요: ' + e}; }
+  if(btn) btn.disabled = false;
+  if(data.error){ alert(data.error); return; }
+  currentJob = data.job_id;
+  window._jobMode = 'gen';
+  $('statusCard').classList.remove('hidden');
+  $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
+  $('reviewBox').classList.add('hidden'); $('retouchBox').classList.add('hidden');
+  if(!timer) timer = setInterval(poll, 900);
 }
 
 async function regen(id){
