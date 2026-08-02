@@ -77,6 +77,11 @@ def probe_duration_us(path: str) -> int:
         raise FFmpegError(f"길이를 읽을 수 없음({dur!r}): {path}") from e
 
 
+# 이보다 짧은 «무음»은 패딩이 아니라 파형의 자연스러운 시작점이다.
+# (순수 사인파는 0에서 시작해 첫 몇 샘플이 조용하다 — 실측 22μs)
+_EDGE_MIN_US = 10_000
+
+
 def edge_silence_us(path: str, thresh: int = 96) -> tuple:
     """클립 **앞뒤에 붙어 있는 «완전 무음»** 길이 (μs, 앞·뒤).
 
@@ -120,7 +125,10 @@ def edge_silence_us(path: str, thresh: int = 96) -> tuple:
             break
         tail += 1
     per = ch * sr
-    return (int(head * 1_000_000 / per), int(tail * 1_000_000 / per))
+    lead, trail = int(head * 1_000_000 / per), int(tail * 1_000_000 / per)
+    # 몇 샘플짜리는 패딩이 아니다 — 멀쩡한 간격을 괜히 갉아먹지 않게
+    return (lead if lead >= _EDGE_MIN_US else 0,
+            trail if trail >= _EDGE_MIN_US else 0)
 
 
 def probe_video_size(path: str) -> tuple:

@@ -204,3 +204,72 @@ def test_the_users_clip_gap_would_now_be_shorter():
     heard = fixed + 50_000 + 50_000            # 회원님 귀에 들릴 정적
     assert heard == 250_000
     assert heard < 410_000, "고치기 전보다 짧아야 한다"
+
+
+# ── 🔴 v1.30에서 실제로 두 번 낸 사고를 막는 그물 ────────────────
+def test_extracted_helpers_can_actually_find_every_name_they_use():
+    """함수를 밖으로 빼면서 «안에 있던 것»을 두고 오면 실행 순간 죽는다.
+
+    v1.30에서 이걸 두 번 했다 — `_tts_clean`(중첩 함수)과 `edit_mode`(지역 import)를
+    두고 나와서, 내레이션이 들어가는 렌더가 통째로 NameError로 죽었다.
+    py_compile도 통과하고 구조 시험도 통과한다 — **실행해야만** 드러난다.
+    그래서 정적으로 잡는 그물을 둔다.
+    """
+    import ast
+    import builtins
+
+    src = (Path(__file__).resolve().parents[1]
+           / "cutdaejang/gui/webui.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    def module_names(body):
+        """모듈 **바로 그 자리**에서 생기는 이름만 — 중첩 함수·지역 import는 빼야 한다.
+
+        (여기서 ast.walk로 통째로 훑으면 «함수 안의 이름»까지 전역으로 세어
+         정작 이 시험이 잡아야 할 사고를 못 잡는다 — 만들면서 실제로 그랬다.)
+        """
+        out = set()
+        for node in body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for a in node.names:
+                    out.add(a.asname or a.name.split(".")[0])
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                out.add(node.name)
+            elif isinstance(node, ast.Assign):
+                out.update(x.id for x in node.targets if isinstance(x, ast.Name))
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                out.add(node.target.id)
+            elif isinstance(node, (ast.If, ast.Try, ast.For, ast.While, ast.With)):
+                blocks = [getattr(node, k, []) for k in ("body", "orelse", "finalbody")]
+                blocks += [h.body for h in getattr(node, "handlers", [])]
+                for b in blocks:
+                    out |= module_names(b)
+        return out
+
+    top = set(dir(builtins)) | module_names(tree.body)
+    for node in ast.walk(tree):        # global로 선언된 것도 전역이다
+        if isinstance(node, ast.Global):
+            top.update(node.names)
+
+    bad = []
+    for fn in tree.body:               # 최상단 함수만 (중첩은 바깥 변수를 쓴다)
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        local = set()
+        for x in ast.walk(fn):
+            if isinstance(x, ast.arg):
+                local.add(x.arg)
+            elif isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store):
+                local.add(x.id)
+            elif isinstance(x, (ast.Import, ast.ImportFrom)):
+                for a in x.names:
+                    local.add(a.asname or a.name.split(".")[0])
+            elif isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                local.add(x.name)
+            elif isinstance(x, ast.ExceptHandler) and x.name:
+                local.add(x.name)
+        miss = {x.id for x in ast.walk(fn)
+                if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load)} - local - top
+        if miss:
+            bad.append(f"{fn.name}: {sorted(miss)}")
+    assert not bad, "이름을 못 찾는 함수 — 실행하면 NameError로 죽는다:\n  " + "\n  ".join(bad)

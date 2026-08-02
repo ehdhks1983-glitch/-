@@ -11,6 +11,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -1381,6 +1382,17 @@ def _narr_tts_pref(ep: dict, settings: dict) -> tuple:
     return chain, voice
 
 
+def _tts_clean(t: str) -> str:
+    """색 마크업·강조 표기는 목소리에서 제거 ([노랑]…[/] , "본문|메모").
+
+    🔴 v1.30에서 합성 블록을 함수로 빼면서 이 도우미를 «안에» 두고 나왔다.
+    `_do_edit_render` 안의 중첩 함수였기 때문에 바깥에서는 이름이 없어
+    내레이션 렌더가 통째로 NameError로 죽었다 (E2E 시험이 잡았다).
+    """
+    t = re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", t)
+    return (t.rsplit("|", 1)[0] if "|" in t else t).strip()
+
+
 def _synth_narration_clips(job_id: str, subs: list, ep: dict, settings: dict,
                            workdir: str) -> tuple:
     """자막 문장들 → 목소리 클립 (문장 단위 한 호흡 합성 → 줄별 분할).
@@ -1389,6 +1401,8 @@ def _synth_narration_clips(job_id: str, subs: list, ep: dict, settings: dict,
     만든 영상과 소리 결이 같다 — 그래서 한 곳으로 뺐다.
     반환: (클립들, 붙일 자리, 쓴 제공자, 사유)
     """
+    from ..core import edit_mode, tts_engine  # noqa: PLC0415
+
     chain, voice = _narr_tts_pref(ep, settings)  # 보이스 선택 → 체인 (v0.75 공용화)
     texts = [_tts_clean(s2.text) or "네" for s2 in subs]
     # 🗣 v1.24 (목록 44): 한 문장이 자막 여러 줄로 쪼개진 대본은 문장 단위로
@@ -1435,7 +1449,7 @@ def _fast_revoice(job_id: str, src_id: str, params: dict, workdir: str) -> str:
 
     못 하는 경우엔 사유를 돌려준다 — 부르는 쪽이 조용히 «화면부터 다시»로 넘어간다.
     """
-    from ..core import tts_engine  # noqa: PLC0415
+    from ..core import edit_mode  # noqa: PLC0415
     from ..utils import ffmpeg as ff  # noqa: PLC0415
 
     srcj = _get_job(src_id) or {}
@@ -1642,12 +1656,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     "-af", f"apad,atrim=0:{cut_us / 1e6:.3f}",
                     "-ar", "44100", "-ac", "2", narration_wav])
         elif ep.get("narration") and subs:
-            import re as _re  # noqa: PLC0415
             from ..core import tts_engine  # noqa: PLC0415
-
-            def _tts_clean(t: str) -> str:  # 색 마크업·강조 표기는 TTS에서 제거
-                t = _re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", t)
-                return (t.rsplit("|", 1)[0] if "|" in t else t).strip()
 
             _set_job(job_id, stage="tts", frac=0.0, note="AI 목소리 만드는 중…")
             narr_voice = ep.get("narr_voice") or ""

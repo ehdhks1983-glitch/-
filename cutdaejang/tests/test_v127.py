@@ -171,10 +171,16 @@ def test_build_spec_zero_gap_where_joined(tmp_path):
 
 
 def test_sentence_gap_default_is_300ms():
-    """문장 사이 기본 쉼 — 350ms는 뚝뚝 끊겨 들려 300ms로 줄였다."""
+    """문장 사이 기본 쉼.
+
+    v1.27에서 350ms → 300ms로 줄였는데, v1.31에서 그 300ms가 «장부상의 값»이지
+    «들리는 값»이 아니었다는 게 드러났다(클립 앞뒤 50ms씩이 더해져 실제 400ms).
+    이제 진짜로 들리는 값이라 AI 생성 경로와 같은 250ms로 맞췄다 — 목록 61.
+    """
     src = (ROOT / "cutdaejang/core/edit_mode.py").read_text(encoding="utf-8")
-    assert "natural_gap = 300_000 if gap_us is None" in src
+    assert "natural_gap = 250_000 if gap_us is None" in src
     assert "natural_gap = 350_000" not in src
+    assert "natural_gap = 300_000" not in src
     # 설정 파일에 안 쓰이는 값을 만들지 않았는지 — 읽는 코드가 없으면 없어야 한다
     assert "sentence_gap_ms" not in config.DEFAULTS["audio"]
 
