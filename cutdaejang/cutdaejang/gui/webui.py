@@ -3219,13 +3219,17 @@ class _Handler(BaseHTTPRequestHandler):
             logging.getLogger("cutdaejang").error(
                 "API 처리 오류 %s\n%s", self.path, traceback.format_exc())
             msg = f"서버 내부 오류: {e} — 하단 🪵 로그 참고"
-            s = str(e)
-            if "429" in s and ("credit" in s.lower() or "RESOURCE_EXHAUSTED" in s
-                               or "quota" in s.lower()):
-                # 사용자 스크린샷: 원문 JSON이 그대로 떠서 무슨 말인지 알 수 없었음 (v0.51)
-                msg = ("Gemini 한도·크레딧이 소진돼 요청이 실패했어요 — 무료 한도는 내일 "
-                       "오후 4~5시쯤(한국시간) 풀리고, 유료 크레딧은 ai.studio → 결제에서 "
-                       "충전할 수 있어요. ✍ 그림은 '내가 넣기' 방식이면 비용 없이 계속 가능!")
+            # 🩺 v1.28.1 (목록 52): 예전엔 429를 통째로 «한도·크레딧 소진»이라고만 했다.
+            #   회원님은 «충전은 다 되어 있는데 왜?»를 여러 번 물으셨는데, 화면 글이
+            #   ①1분만 기다리면 될 일 ②내일이면 풀릴 일 ③결제를 봐야 할 일을 구분해 주지
+            #   않아 판단할 근거가 없었다. 이제 갈라서 «지금 뭘 하면 되는지»까지 적는다.
+            from ..core import gemini_models as _gm  # noqa: PLC0415
+
+            explained = _gm.error_text(str(e))
+            if explained:
+                msg = explained
+                if _gm.classify_error(str(e)) in ("quota_day", "credits"):
+                    msg += "\n✍ 그림은 '내가 넣기' 방식이면 비용 없이 계속 만들 수 있어요."
             try:
                 self._send_json({"error": msg}, 500)
             except Exception:  # noqa: BLE001 — 이미 응답을 보낸 경우 등
@@ -4636,7 +4640,7 @@ class _Handler(BaseHTTPRequestHandler):
             frames = edit_mode.extract_frames_b64(mp4, n=4)
         except Exception:
             frames = []
-        stub = False
+        stub, stub_reason = False, ""
         try:
             if os.environ.get("GEMINI_API_KEY"):
                 kit = sg.suggest_upload_kit(
@@ -4651,8 +4655,16 @@ class _Handler(BaseHTTPRequestHandler):
                 kit = sg.suggest_upload_kit_stub(transcript, hook or title,
                                                  is_shorts=is_shorts)
                 stub = True
-        except sg.ScriptError as e:
-            logging.getLogger("cutdaejang").warning("업로드 키트 AI 실패 → 예시로 대체: %s", e)
+        # 🛟 v1.28.1 (목록 56): 예전엔 ScriptError만 받아 냈다. 모델을 바꾸면 응답
+        #   «모양»이 달라지는데 (목록 53의 자동 교체가 실제로 그렇게 만든다) 그때 나는
+        #   AttributeError·TypeError는 아무도 안 받아 화면엔 «서버 내부 오류»만 떴다.
+        #   AI가 어떤 식으로 실패하든 최소한 예시 키트는 나와야 한다.
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("cutdaejang").warning(
+                "업로드 키트 AI 실패 → 예시로 대체: %s: %s", type(e).__name__, e)
+            from ..core import gemini_models as _gm  # noqa: PLC0415
+
+            stub_reason = _gm.error_text(str(e)) or f"AI 생성이 실패했어요 ({type(e).__name__})"
             kit = sg.suggest_upload_kit_stub(transcript, hook or title,
                                              is_shorts=is_shorts)
             stub = True
@@ -4694,7 +4706,8 @@ class _Handler(BaseHTTPRequestHandler):
             pass
         logging.getLogger("cutdaejang").info(
             "업로드 키트 생성: %s (AI=%s, 쇼츠=%s)", title or job_id, not stub, is_shorts)
-        self._send_json({"kit": kit, "stub": stub, "path": kit_path})
+        self._send_json({"kit": kit, "stub": stub, "path": kit_path,
+                         "stub_reason": stub_reason})
 
     # ---------- 진단 리포트 / 폴더 열기 ----------
 
@@ -5326,7 +5339,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.28.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.28.1)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -9200,9 +9213,14 @@ async function makeKit(ev){
 }
 function renderKit(data){
   const kit = data.kit || {};
-  $('kitStatus').textContent = data.stub
-    ? '⚠ 제미나이 키가 없어 예시 문구입니다 — 키를 넣으면 영상 내용으로 만들어져요.'
-    : '✅ 완성! 항목마다 복사해서 유튜브 스튜디오에 붙여넣으세요.';
+  // 🩺 v1.28.1: 예전엔 실패하면 무조건 «키가 없어 예시»라고 떴다. 키가 멀쩡한데
+  //   한도에 걸린 회원님은 키를 몇 번씩 다시 넣어 보게 된다 — 실제 이유를 그대로 쓴다.
+  $('kitStatus').textContent = !data.stub
+    ? '✅ 완성! 항목마다 복사해서 유튜브 스튜디오에 붙여넣으세요.'
+    : (data.stub_reason
+       ? '⚠ 아래는 예시 문구예요 (영상 내용으로 만들지 못했어요)\\n' + data.stub_reason
+       : '⚠ 제미나이 키가 없어 예시 문구입니다 — 키를 넣으면 영상 내용으로 만들어져요.');
+  $('kitStatus').style.whiteSpace = 'pre-line';
   const tb = $('kitTitles'); tb.innerHTML = '';
   // v0.47: 제목 옆에 붙는 해시태그 2~3개 — 유튜브 관행대로 "제목 #태그 #태그"를 통째 복사
   const ttags = (kit.title_tags || []).map(t => '#' + t).join(' ');

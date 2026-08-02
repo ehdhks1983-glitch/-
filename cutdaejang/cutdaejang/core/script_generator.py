@@ -1232,34 +1232,69 @@ def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: in
 def _norm_words(lst, n: int, each: int = 30) -> list:
     """해시태그/태그 목록 정규화 — ＃ 제거·공백 정리·개수 제한."""
     out = []
-    for x in (lst or []):
+    for x in _as_list(lst, True):        # v1.28.1: 문자열이 와도 글자로 안 쪼개지게
         s = str(x).lstrip("#").strip()
         if s:
             out.append(s[:each])
     return out[:n]
 
 
+def _as_section(v, main_key: str) -> dict:
+    """모델이 «객체» 대신 «문자열»로 답해도 받아준다 (v1.28.1).
+
+    회원님 22차 이후 실측: 모델을 바꾸면 답하는 모양이 미묘하게 달라진다.
+    `"tiktok": "캡션 문자열"`처럼 오면 예전 코드는 `.get()`에서 통째로 터져
+    (AttributeError) 업로드 키트가 아예 안 나왔다 — API 호출은 성공했는데도.
+    """
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v.strip():
+        return {main_key: v.strip()}
+    return {}
+
+
+def _as_list(v, split_commas: bool = False) -> list:
+    """«목록» 자리에 문자열이 오면 글자 단위로 쪼개지던 것을 막는다 (v1.28.1).
+
+    예전엔 `"tags": "태그,둘,셋"`이 `['태','그',',','둘',…]`로 조용히 망가졌다.
+    제목은 쉼표를 품을 수 있어 쉼표로 자르지 않고, 태그·키워드만 잘라 준다.
+    """
+    if isinstance(v, list):
+        return v
+    if not isinstance(v, str) or not v.strip():
+        return []
+    parts = [x.strip() for x in v.splitlines() if x.strip()]
+    if len(parts) <= 1 and split_commas:
+        parts = [x.strip() for x in v.split(",") if x.strip()]
+    return parts or [v.strip()]
+
+
 def normalize_kit(out: dict) -> dict:
-    """모델 응답을 안전한 키트 구조로 정규화 (v0.47 플랫폼별 섹션 포함)."""
+    """모델 응답을 안전한 키트 구조로 정규화 (v0.47 플랫폼별 섹션 포함).
+
+    ⚠ 모델이 바뀌면 응답 «모양»이 달라진다 — 여기서 다 흡수해야 화면이 안 죽는다.
+    """
+    if not isinstance(out, dict):
+        out = {}
     cat = str(out.get("category", "")).strip()
     if cat not in YT_CATEGORIES:  # 목록 밖이면 기본값으로 (붙여넣기 실패 방지)
         cat = "인물/블로그"
-    tk = out.get("tiktok") or {}
-    ig = out.get("instagram") or {}
-    nc = out.get("naver_clip") or {}
-    th = out.get("threads") or {}
+    tk = _as_section(out.get("tiktok"), "caption")
+    ig = _as_section(out.get("instagram"), "caption")
+    nc = _as_section(out.get("naver_clip"), "title")
+    th = _as_section(out.get("threads"), "post")
     return {
         # 🎯 v1.12: 4개→8개, 서로 다른 공식으로 강제 배분 (제목이 다 비슷하던 문제)
-        "titles": [str(x)[:60] for x in out.get("titles", [])][:8],
+        "titles": [str(x)[:60] for x in _as_list(out.get("titles"))][:8],
         "title_kinds": [str(x).strip()[:6]
-                        for x in out.get("title_kinds", []) if str(x).strip()][:8],
+                        for x in _as_list(out.get("title_kinds"), True) if str(x).strip()][:8],
         "title_tags": _norm_words(out.get("title_tags"), 3, each=12),  # 제목 옆 2~3개
         "description": str(out.get("description", ""))[:1200],
-        "tags": [str(x).strip()[:30] for x in out.get("tags", []) if str(x).strip()][:20],
-        "keywords": [str(x).strip() for x in out.get("keywords", []) if str(x).strip()][:10],
+        "tags": [str(x).strip()[:30] for x in _as_list(out.get("tags"), True) if str(x).strip()][:20],
+        "keywords": [str(x).strip() for x in _as_list(out.get("keywords"), True) if str(x).strip()][:10],
         # 🎯 틈새 롱테일 검색어 + 📌 고정 댓글 (v1.02 — 작은 채널 노출 전략)
         "niche_keywords": [str(x).strip()[:40]
-                           for x in out.get("niche_keywords", []) if str(x).strip()][:8],
+                           for x in _as_list(out.get("niche_keywords"), True) if str(x).strip()][:8],
         "pinned_comment": str(out.get("pinned_comment", "")).strip()[:200],
         "hashtags": _norm_words(out.get("hashtags"), 3),
         "category": cat,

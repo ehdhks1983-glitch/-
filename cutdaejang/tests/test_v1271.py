@@ -22,7 +22,7 @@ HTML = webui._apply_links(webui._HTML)
 
 
 def test_version():
-    assert __version__ == "1.28.0"
+    assert __version__ == "1.28.1"
 
 
 # ── 🏠 따라오는 되돌아가기 바 ──────────────────────────────────
@@ -173,7 +173,7 @@ def test_html_is_still_well_formed():
     for tag in ("div", "details", "select", "button"):
         assert len(re.findall(rf"<{tag}[\s>]", HTML)) == len(
             re.findall(rf"</{tag}>", HTML)), f"<{tag}> 짝이 안 맞음"
-    assert "(v1.28.0)" in HTML
+    assert f"(v{__version__})" in HTML   # 판이 올라가도 안 깨지게
 
 
 # ══ 53번: 구글이 모델을 퇴역시켜도 안 멈추게 ═══════════════════════
