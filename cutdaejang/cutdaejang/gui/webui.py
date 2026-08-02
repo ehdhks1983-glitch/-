@@ -161,9 +161,101 @@ def _attach_branding(job_id: str, mp4: str, job_dir: Path, tag: str = "") -> str
     return mp4
 
 
+# ⏱ v1.32 (목록 57): 어느 단계에서 몇 분을 썼는지 아무 데도 안 남았다.
+#   그래서 회원님이 "40분 걸렸다"고 하셨을 때 나는 로그를 보고도 원인을 못 가리고
+#   «4K 때문»이라고 찍었고, 회원님이 두 번이나 바로잡아 주셔야 했다.
+#   이제 단계가 바뀔 때마다 시각을 남긴다 — 부르는 쪽은 아무것도 안 바꿔도 된다.
+_STAGE_KO = {
+    "cut": "화면 준비", "analyze": "영상 살펴보기", "stt": "음성 인식",
+    "script": "대본 쓰기", "tts": "목소리 만들기", "background": "장면 그림",
+    "render": "영상 굽기",
+}
+# 프로그램이 «일한» 시간이 아닌 것 — 회원님이 검토하느라 자리를 비운 시간까지
+# 합계에 넣으면 보고가 쓸모없어진다
+_STAGE_SKIP = ("review", "queued", "done", "cancelled")
+_STAGE_MARKS: dict = {}
+
+
+def dur_ko(sec: float) -> str:
+    """초 → "45초" / "3분 40초" / "1시간 5분"."""
+    s = max(0, int(round(sec)))
+    if s < 60:
+        return f"{s}초"
+    if s < 3600:
+        return f"{s // 60}분" + (f" {s % 60}초" if s % 60 else "")
+    return f"{s // 3600}시간" + (f" {(s % 3600) // 60}분" if (s % 3600) // 60 else "")
+
+
+def _mark_stage(job_id: str, stage: str) -> None:
+    with _LOCK:
+        marks = _STAGE_MARKS.setdefault(job_id, [])
+        if marks and marks[-1][0] == stage:
+            return                      # 같은 단계 안에서의 진행률 갱신은 무시
+        marks.append((stage, time.monotonic()))
+        if len(_STAGE_MARKS) > 60:      # 오래된 작업 기록은 버린다
+            for k in list(_STAGE_MARKS)[:-40]:
+                _STAGE_MARKS.pop(k, None)
+
+
+def stage_report(job_id: str) -> str:
+    """⏱ 목소리 만들기 3분 40초 · 영상 굽기 18분 (합계 22분)"""
+    with _LOCK:
+        marks = list(_STAGE_MARKS.get(job_id) or [])
+    if len(marks) < 2:
+        return ""
+    spans: dict = {}
+    for (st, t0), (_nx, t1) in zip(marks, marks[1:]):
+        if st in _STAGE_SKIP:
+            continue
+        spans[st] = spans.get(st, 0.0) + max(0.0, t1 - t0)
+    parts = [f"{_STAGE_KO.get(k, k)} {dur_ko(v)}" for k, v in spans.items() if v >= 1.0]
+    if not parts:
+        return ""
+    return "⏱ " + " · ".join(parts) + f" (합계 {dur_ko(sum(spans.values()))})"
+
+
+def _learn_render_speed(job_id: str, quality: str, mp4: str) -> None:
+    """이 PC가 «영상 1초를 굽는 데 몇 초» 걸리는지 배워 둔다 (v1.32, 목록 57).
+
+    내 컴퓨터에서 잰 값은 회원님 PC에서 안 맞는다. 그래서 숫자를 박아 두지 않고
+    **회원님 PC에서 실제로 걸린 시간**으로 배운다 — 그래야 «예상 시간»이 맞는다.
+    """
+    try:
+        from ..utils import ffmpeg as _ff  # noqa: PLC0415
+
+        with _LOCK:
+            marks = list(_STAGE_MARKS.get(job_id) or [])
+        secs = sum(t1 - t0 for (st, t0), (_n, t1) in zip(marks, marks[1:])
+                   if st == "render")
+        out_s = _ff.probe_duration_us(mp4) / 1e6
+        if secs < 3 or out_s < 3:
+            return                       # 너무 짧으면 표본으로 못 쓴다
+        ratio = max(0.2, min(60.0, secs / out_s))
+        cur = (config.load_settings().get("ui") or {}).get("render_speed") or {}
+        old = cur.get(quality)
+        # 최근 값에 무게를 더 주되 한 번의 이상치로 튀지 않게 (7:3)
+        cur[quality] = round(ratio if not old else old * 0.3 + ratio * 0.7, 3)
+        config.save_settings({"ui": {"render_speed": cur}})
+    except Exception:  # noqa: BLE001 — 배우기 실패는 작업에 영향 없음
+        pass
+
+
 def _set_job(job_id: str, **fields) -> None:
+    st = fields.get("stage")
+    if st:
+        _mark_stage(job_id, str(st))
     with _LOCK:
         _JOBS.setdefault(job_id, {"id": job_id}).update(fields)
+    if fields.get("status") in ("ok", "partial", "failed"):
+        rep = stage_report(job_id)
+        if rep:
+            logging.getLogger("cutdaejang").info("%s — %s", rep, job_id)
+            with _LOCK:
+                _JOBS.setdefault(job_id, {"id": job_id})["stage_report"] = rep
+        mp4 = fields.get("mp4") or (_get_job(job_id) or {}).get("mp4")
+        if fields.get("status") == "ok" and mp4 and Path(str(mp4)).is_file():
+            params = (_get_job(job_id) or {}).get("params") or {}
+            _learn_render_speed(job_id, str(params.get("quality") or "standard"), str(mp4))
 
 
 def _get_job(job_id: str) -> Optional[dict]:

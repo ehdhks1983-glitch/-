@@ -984,6 +984,11 @@ class TTSEngine:
         tts_cfg = self.settings["tts"]
         max_retries = tts_cfg["max_retries"]
         wait_cap = tts_cfg["retry_wait_cap_s"]
+        # ⏱ v1.32 (목록 57): 여태 wait_cap은 «재시도 사이 잠자는 시간»만 셌다.
+        #   서버가 응답 없이 매달리면 요청 하나가 타임아웃(120초)까지 가는데 그건
+        #   예산에 안 들어가, 문장 하나에 (5+1)×120초 = 12분이 들어가도 상한에
+        #   안 걸렸다. 이제 **문장에 쓴 벽시계 시간 전체**를 센다.
+        t_started = time.monotonic()
         total_wait = 0.0
         last: Optional[Exception] = None
 
@@ -1017,10 +1022,11 @@ class TTSEngine:
                 if delay is None:
                     delay = min(4 * (2**attempt), 32)  # 4→8→16→32
                 delay += random.uniform(1.0, 2.0)  # 지터
-                if total_wait + delay > wait_cap:
+                if time.monotonic() - t_started + delay > wait_cap:
                     raise TTSExhausted(
-                        f"{self.provider.name} TTS 대기 상한({wait_cap}s) 초과", raw=e.text
-                    ) from e
+                        f"{self.provider.name} TTS 대기 상한({wait_cap}s) 초과 "
+                        f"— 이 문장에 {time.monotonic() - t_started:.0f}초를 썼어요",
+                        raw=e.text) from e
                 total_wait += delay
                 label = (
                     f"{self.provider.name} 분당 한도 초과 — 자동 재시도 ({attempt + 1}/{max_retries})"
@@ -1032,6 +1038,12 @@ class TTSEngine:
                 last = e
                 if attempt >= max_retries:
                     break
+                # 🌐 응답 없이 매달리다 타임아웃 난 경우가 여기로 온다 — 이것도 예산 안이다
+                if time.monotonic() - t_started >= wait_cap:   # 딱 상한에서 끊는다
+                    raise TTSExhausted(
+                        f"{self.provider.name} 응답이 너무 느려 {wait_cap}초를 넘겼어요 "
+                        "— 다음 목소리로 넘어갑니다",
+                        raw=getattr(e, "text", "") or str(e)) from e
                 self._wait(2.0, f"{self.provider.name} 오류 — 재시도 ({attempt + 1}/{max_retries})")
 
         raw = getattr(last, "text", "") or str(last)
