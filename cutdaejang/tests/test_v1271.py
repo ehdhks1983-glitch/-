@@ -1,4 +1,4 @@
-"""v1.27.1 — 목록 50번: [처음으로]가 안 보이고 [초기화]가 없다.
+"""v1.27.1 — 목록 50번(되돌아가기·초기화) + 51번(4K가 오래 걸리는 걸 미리 알리기).
 
 회원님 22차(2026-08-02, 블로그 카드 스샷):
 > "처음으로 버튼이 너무 눈에 안 들어와 찾기가 힘들어. 초기화 버튼도 안 보이고"
@@ -120,6 +120,50 @@ def test_nav_reset_dispatches_to_the_current_card():
     body = src[src.index("function resetCurrentCard"):src.index("function openMode")]
     assert "NAV_INFO[window._view]" in body
     assert "typeof window[fn] === 'function'" in body   # 없는 함수면 조용히 넘어감
+
+
+# ── 🐢 51번: 4K 시간 대가 · 남은 시간 ──────────────────────────
+# 회원님 확인: 40분 좀 지나 **완성됐다** → 멈춘 게 아니라 느린 것이었다.
+# 실측(개발 서버 4코어, 같은 설정): 표준 0.92배속 / 4K 5.30배속 = 5.7배.
+def test_ultra_quality_warns_about_time():
+    src = (ROOT / "cutdaejang/gui/webui.py").read_text(encoding="utf-8")
+    assert "ULTRA_WARN" in src
+    assert "5배 이상 오래 걸려요" in src
+    assert "표준(1080p)" in src               # 대안을 같이 알려준다
+    body = src[src.index("function markUltraCost"):src.index("function sweepUltraCost")]
+    assert "sel.value !== 'ultra'" in body    # 4K일 때만 뜬다
+    assert "w.remove()" in body               # 되돌리면 사라진다
+    # 고를 때마다 + 화면이 처음 뜰 때(기억된 값) 둘 다 걸린다
+    assert "document.addEventListener('change'" in src
+    assert "sweepUltraCost();" in src
+
+
+def test_ultra_warning_survives_easy_mode():
+    """🔰 쉬운 모드에서는 화질 줄이 숨는다 — 4K가 기억돼 있으면 왜 오래 걸리는지
+    알 길이 없다. 4K인 동안만 그 줄을 도로 보이게 해 고칠 수 있어야 한다."""
+    src = (ROOT / "cutdaejang/gui/webui.py").read_text(encoding="utf-8")
+    body = src[src.index("function markUltraCost"):src.index("function sweepUltraCost")]
+    assert "box.classList.contains('easy-hide')" in body
+    assert "box.classList.remove('easy-hide')" in body
+    assert "box.classList.add('easy-hide')" in body    # 표준으로 되돌리면 다시 숨김
+
+
+def test_progress_shows_remaining_time():
+    """경과만 보이면 «언제 끝나는지»를 알 수 없어 멈춘 줄 안다 (40분 사례)."""
+    src = (ROOT / "cutdaejang/gui/webui.py").read_text(encoding="utf-8")
+    assert "남은 시간 약 " in src
+    seg = src[src.index("let elaTxt = ''"):src.index("let elaTxt = ''") + 900]
+    assert "es * (1 - frac) / frac" in seg      # 지금까지 속도로 남은 시간 어림
+    assert "frac > 0.05" in seg                 # 진행률이 너무 낮으면 추정이 엉터리
+    assert "es >= 30" in seg                    # 너무 이르면 표시 안 함
+
+
+def test_fmtdur_reads_naturally():
+    """초 → 사람이 읽는 말. 초보자용이라 «3900초» 같은 건 안 된다."""
+    src = (ROOT / "cutdaejang/gui/webui.py").read_text(encoding="utf-8")
+    body = src[src.index("function fmtDur"):src.index("function qualityHint")]
+    assert "'초'" in body and "'분'" in body and "시간 " in body
+    assert "sec < 60" in body and "m < 60" in body
 
 
 # ── 화면 무결성 ────────────────────────────────────────────────

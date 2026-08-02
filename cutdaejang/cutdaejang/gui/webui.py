@@ -8412,6 +8412,51 @@ function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return
 function togglePlay(ev){ if(ev&&ev.preventDefault)ev.preventDefault(); const p=$('cutPlayer'); if(!p||!p.src) return; if(p.paused) p.play(); else p.pause(); }
 function pauseCut(){ const p=$('cutPlayer'); if(p && !p.paused) p.pause(); }  // 자막 편집 시작하면 자동 정지
 function setPlayRate(){ const p=$('cutPlayer'); if(p) p.playbackRate=parseFloat($('playRate').value||'1'); }
+// 🐢 v1.27.1 (목록 51) — 회원님 블로그 영상이 40분 걸렸다. 원인은 「초고화질(4K)」.
+// 실측(개발 서버 4코어): 같은 영상이 표준 0.7분 / 4K 3.9분 = **5.7배**.
+// 코어가 적은 가정용 PC에서는 20~40분대가 나온다 → 고르는 순간 알려준다.
+const ULTRA_WARN = '🐢 4K는 표준보다 5배 이상 오래 걸려요 — 1분짜리가 PC에 따라 20~40분. '
+                 + '급하면 「표준(1080p)」을 쓰세요 (유튜브 업로드는 이걸로도 충분해요)';
+function markUltraCost(sel){
+  if(!sel || !sel.parentElement) return;
+  const box = sel.parentElement;
+  let w = box.querySelector('.ultrawarn');
+  if(sel.value !== 'ultra'){
+    if(w) w.remove();
+    if(box.dataset.ultraShown){ box.classList.add('easy-hide'); delete box.dataset.ultraShown; }
+    return;
+  }
+  // 🔰 쉬운 모드에서는 화질 줄이 숨어 있다 — 4K가 기억돼 있으면 왜 오래 걸리는지
+  // 알 길이 없다. 4K인 동안만 그 줄을 도로 보이게 해 고칠 수 있게 한다.
+  if(box.classList.contains('easy-hide')){
+    box.classList.remove('easy-hide');
+    box.dataset.ultraShown = '1';
+  }
+  if(!w){
+    w = document.createElement('span');
+    w.className = 'hint ultrawarn';
+    w.style.cssText = 'color:#ffd97a;flex-basis:100%;margin-top:2px';
+    box.appendChild(w);
+  }
+  w.textContent = ULTRA_WARN;
+}
+function sweepUltraCost(){
+  document.querySelectorAll('select').forEach(function(s){
+    if((s.id || '').indexOf('Quality') >= 0) markUltraCost(s);
+  });
+}
+document.addEventListener('change', function(e){
+  const t = e.target;
+  if(t && t.tagName === 'SELECT' && (t.id || '').indexOf('Quality') >= 0) markUltraCost(t);
+});
+
+function fmtDur(sec){            // 초 → "45초" / "3분" / "1시간 5분" (v1.27.1)
+  sec = Math.max(0, Math.round(sec));
+  if(sec < 60) return sec + '초';
+  const m = Math.round(sec / 60);
+  if(m < 60) return m + '분';
+  return Math.floor(m / 60) + '시간 ' + (m % 60) + '분';
+}
 function qualityHint(){
   const v=($('outQuality')||{}).value, h=$('qualityHint'); if(!h) return;
   h.textContent = v==='ultra' ? '유튜브가 더 좋은 코덱으로 처리 → 체감 화질↑ (원본 화소는 안 늘어요)'
@@ -11862,7 +11907,13 @@ async function poll(){
   let elaTxt = '';                     // ⏱ 오래 걸릴 때 최소한 경과라도 보이게 (v0.90)
   if(job.status === 'running' && job.t_start){
     const es = Math.max(0, Math.floor(Date.now() / 1000 - job.t_start));
-    if(es >= 60) elaTxt = ' · ⏱ ' + Math.floor(es / 60) + '분 경과';
+    if(es >= 60) elaTxt = ' · ⏱ ' + fmtDur(es) + ' 경과';
+    // ⏳ v1.27.1 (목록 51): 경과만 보이면 "언제 끝나는지"를 알 수 없어 멈춘 줄 안다.
+    // 지금까지 걸린 시간과 진행률로 남은 시간을 어림해 같이 보여준다.
+    if(es >= 30 && frac > 0.05 && frac < 0.99){
+      const left = Math.round(es * (1 - frac) / frac);
+      if(left >= 30) elaTxt += ' · 남은 시간 약 ' + fmtDur(left);
+    }
   }
   $('stageText').textContent = (STAGE_KO[job.stage] || job.stage || '') +
       (job.status==='running' && job.stage!=='review' ? ` — ${Math.round(frac*100)}%` : '') + elaTxt;
@@ -12118,6 +12169,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 injectFontFaces([]);  // 🔤 번들 프리텐다드 즉시 등록 — 받은 글씨체는 poll의 fillFontSels가 추가 (v0.68)
+sweepUltraCost();                       // 🐢 기억된 값이 4K면 바로 알림 (v1.27.1)
 poll(); setInterval(()=>{ if(!currentJob) poll(); }, 5000);
 </script>
 </body>
