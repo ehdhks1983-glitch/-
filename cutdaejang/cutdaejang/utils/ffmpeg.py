@@ -77,6 +77,52 @@ def probe_duration_us(path: str) -> int:
         raise FFmpegError(f"길이를 읽을 수 없음({dur!r}): {path}") from e
 
 
+def edge_silence_us(path: str, thresh: int = 96) -> tuple:
+    """클립 **앞뒤에 붙어 있는 «완전 무음»** 길이 (μs, 앞·뒤).
+
+    🔴 회원님 25차: "목소리는 잘 바꿔졌는데 조금씩 끊켜"
+    파형을 재 보니 문장 사이에 **진폭 0인 정적이 0.41~0.46초** 들어 있었다.
+    코드가 넣는 간격은 0.30초인데 왜 0.42초인가 —
+
+        TTS 다듬기(`postprocess_clip`)가 클릭 방지·숨결 보호로 클립 앞뒤에
+        50ms씩 붙인다(v0.46.1). 그걸 모르고 문장 사이에 300ms를 **더** 넣으니
+        실제로 들리는 정적은 50+300+50 = **400ms**가 된다.
+
+    그래서 «넣을 간격»을 정할 때 이미 붙어 있는 무음을 빼야 한다. 제공자마다
+    패딩이 다를 수 있으니 설정값을 믿지 않고 **파형을 직접 잰다.**
+    잴 수 없는 형식이면 (0, 0) — 예전과 똑같이 동작한다.
+    """
+    import array  # noqa: PLC0415
+    import wave  # noqa: PLC0415
+
+    try:
+        with wave.open(str(path), "rb") as wf:
+            if wf.getsampwidth() != 2:
+                return (0, 0)
+            n, sr, ch = wf.getnframes(), wf.getframerate(), wf.getnchannels()
+            if n <= 0 or sr <= 0 or ch <= 0:
+                return (0, 0)
+            data = array.array("h")
+            data.frombytes(wf.readframes(n))
+    except (OSError, wave.Error, EOFError, ValueError):
+        return (0, 0)
+    if not data:
+        return (0, 0)
+    head = tail = 0
+    for v in data:
+        if abs(v) > thresh:
+            break
+        head += 1
+    if head >= len(data):          # 통째로 무음인 클립
+        return (0, 0)
+    for v in reversed(data):
+        if abs(v) > thresh:
+            break
+        tail += 1
+    per = ch * sr
+    return (int(head * 1_000_000 / per), int(tail * 1_000_000 / per))
+
+
 def probe_video_size(path: str) -> tuple:
     for s in probe(path).get("streams", []):
         if s.get("codec_type") == "video":

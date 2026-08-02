@@ -1156,11 +1156,20 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
     clips, subtitles = [str(c) for c in clips[:n]], list(subtitles[:n])
     durs = [ff.probe_duration_us(c) for c in clips]
     note = ""
+    # 🔇 v1.31 (목록 61): 클립 앞뒤에 이미 붙어 있는 무음 — 이걸 빼야 «들리는» 간격이
+    #   우리가 정한 값이 된다. 안 빼면 0.30초로 적어 놓고 0.40초가 들린다.
+    edges = [ff.edge_silence_us(c) for c in clips]
+
+    def _pad(i: int) -> int:
+        """i번과 i+1번 사이에 **이미 들어 있는** 무음 (뒤쪽 + 다음 앞쪽)."""
+        return edges[i][1] + (edges[i + 1][0] if i + 1 < n else 0)
 
     if fit in ("freeze", "loop"):
         # 영상 쪽을 늘려 다 담는다 → 속도 올림·생략 없이 순차 배치
         # v1.27: 기본 350ms는 문장 사이 쉼으로 길어 뚝뚝 끊겨 들렸다 → 300ms
-        natural_gap = 300_000 if gap_us is None else max(60_000, int(gap_us))
+        # v1.31: 그런데 그 300ms는 «넣는 값»이지 «들리는 값»이 아니었다(위 _pad 참고).
+        #        이제 진짜로 들리는 값이므로 AI 생성 경로와 같은 250ms로 맞춘다.
+        natural_gap = 250_000 if gap_us is None else max(60_000, int(gap_us))
         out_subs, out_clips, cursor = [], [], lead_us
         for i, (clip, dur, sub) in enumerate(zip(clips, durs, subtitles)):
             sub.start_us = cursor
@@ -1169,7 +1178,8 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
             out_clips.append(clip)
             # 같은 문장을 쪼갠 줄 사이는 간격 0 — 이어 붙이면 원래 소리 그대로 (v1.24)
             joined = bool(joins and i < len(joins) and joins[i])
-            cursor = sub.end_us + (0 if joined else natural_gap)
+            cursor = sub.end_us + (
+                0 if joined else max(MIN_HEARD_GAP_US, natural_gap - _pad(i)))
         return out_subs, out_clips, ""
 
     min_gap = 120_000
@@ -1206,6 +1216,9 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
         out_clips.append(clip)
         # v1.27: 같은 문장을 쪼갠 줄 사이는 붙인다 — v1.24에서 freeze 경로에만
         # 넣어 두어, 영상 길이에 맞추는 이 경로에서는 문장 중간이 계속 끊겼다.
+        # ⚠ v1.31: 여기서는 패딩을 빼지 않는다. 이 경로의 gap은 «정해 둔 값»이 아니라
+        #   **남는 시간을 문장 사이에 고르게 나눈 값**이다 (영상 길이에 맞추는 게 목적).
+        #   빼면 그만큼이 문장 사이가 아니라 **영상 끝의 정적**으로 몰릴 뿐이다.
         cursor = sub.start_us + dur + (
             0 if (joins and _i < len(joins) and joins[_i]) else gap)
     if dropped:
@@ -1213,6 +1226,9 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
         note = f"{note} · {extra}" if note else extra
     return out_subs, out_clips, note
 
+
+# 아무리 줄여도 문장 사이에 이만큼은 남긴다 — 붙여 놓으면 숨 넘어가듯 들린다
+MIN_HEARD_GAP_US = 90_000
 
 _BED_CHUNK = 40
 

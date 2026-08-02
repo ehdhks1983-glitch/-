@@ -19,7 +19,10 @@ from ..spec import (
     Subtitle,
     TimelineSpec,
 )
-from ..utils.ffmpeg import probe_duration_us
+from ..utils.ffmpeg import edge_silence_us, probe_duration_us
+
+# 아무리 줄여도 문장 사이에 이만큼은 남긴다 (edit_mode와 같은 값)
+MIN_HEARD_GAP_US = 90_000
 
 
 @dataclass
@@ -71,6 +74,13 @@ def build_spec(
         extra = opts.pace_to_us - raw
         if extra > 0:
             gap_us = opts.gap_us + min(2_500_000, extra // gaps_n)
+    # 🔇 v1.31 (목록 61): 클립 앞뒤에 이미 붙어 있는 무음을 빼야 «들리는» 간격이
+    #   우리가 정한 값이 된다. 안 빼면 250ms로 적어 놓고 350ms가 들린다.
+    edges = [edge_silence_us(str(Path(pp))) for pp in audio_paths]
+
+    def pad(i: int) -> int:
+        return edges[i][1] + (edges[i + 1][0] if i + 1 < len(edges) else 0)
+
     t = opts.lead_in_us
     last_gap = 0
     for i, (text, path) in enumerate(zip(sentences, audio_paths)):
@@ -84,7 +94,10 @@ def build_spec(
                 highlight=highlights[i] if i < len(highlights) else "",
             )
         )
-        last_gap = 0 if joined(i) else gap_us
+        # ⚠ 목표 길이 맞추기(pace_to_us)로 간격을 일부러 늘린 경우엔 빼지 않는다 —
+        #    그 간격은 «들리는 쉼»이 아니라 «영상 길이를 채우는 수단»이다.
+        last_gap = 0 if joined(i) else (
+            gap_us if opts.pace_to_us else max(MIN_HEARD_GAP_US, gap_us - pad(i)))
         t += dur + last_gap
 
     duration_us = (t - last_gap) + opts.tail_us if audio else opts.lead_in_us + opts.tail_us
