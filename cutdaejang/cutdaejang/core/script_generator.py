@@ -93,6 +93,9 @@ class Script:
             data = json.loads(cleaned)
         except json.JSONDecodeError as e:
             raise ScriptParseError(f"대본 JSON 파싱 실패: {e}\n원문 앞부분: {cleaned[:200]}") from e
+        if not isinstance(data, dict):   # v1.28.1: 목록·문자열로 답해도 «형식 오류»로 (터지지 않게)
+            raise ScriptParseError(
+                f"대본이 «항목 묶음» 모양이 아닙니다\n원문 앞부분: {cleaned[:200]}")
         raw = data.get("sentences")
         if not isinstance(raw, list) or not raw:
             raise ScriptParseError(f"sentences 형식 오류: {raw!r}")
@@ -516,10 +519,11 @@ def split_script_sections_ai(text: str, model: str = "gemini-2.5-flash",
         "generationConfig": {"responseMimeType": "application/json"}}
     data = _post_ai(url, payload, key)
     try:
-        out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
+        out = _as_dict(json.loads(data["candidates"][0]["content"]["parts"][0]["text"]))
         secs = [{"title": str(s.get("title") or "")[:60],
                  "narration": str(s.get("narration") or "").strip()[:2000]}
-                for s in (out.get("sections") or []) if str(s.get("narration") or "").strip()]
+                for s in (out.get("sections") or [])
+                if isinstance(s, dict) and str(s.get("narration") or "").strip()]
     except (KeyError, IndexError, json.JSONDecodeError, AttributeError) as e:
         raise ScriptError(f"AI 구간 나누기 응답 예상 밖: {str(e)[:120]}") from e
     if not secs:
@@ -583,7 +587,7 @@ def summarize_product(text: str, model: str = "gemini-2.5-flash", api_key=None) 
         "generationConfig": {"responseMimeType": "application/json"}}
     data = _post_ai(url, payload, key)
     try:
-        out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
+        out = _as_dict(json.loads(data["candidates"][0]["content"]["parts"][0]["text"]))
     except (KeyError, IndexError, json.JSONDecodeError) as e:
         raise ScriptError(f"AI 정리 응답 예상 밖: {str(e)[:120]}") from e
     return {k: str(out.get(k) or "")[:500]
@@ -630,8 +634,8 @@ def summarize_article(title: str, text: str, target_sec: int = 45,
                "generationConfig": {"responseMimeType": "application/json"}}
     data = _post_ai(url, payload, key)
     try:
-        out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
-        sents = [str(s).strip() for s in out.get("sentences") or [] if str(s).strip()]
+        out = _as_dict(json.loads(data["candidates"][0]["content"]["parts"][0]["text"]))
+        sents = [str(s).strip() for s in _as_list(out.get("sentences")) if str(s).strip()]
     except (KeyError, IndexError, json.JSONDecodeError) as e:
         raise ScriptError(f"AI 대본 응답 예상 밖: {str(e)[:120]}") from e
     if not sents:
@@ -639,7 +643,7 @@ def summarize_article(title: str, text: str, target_sec: int = 45,
     return {"title": str(out.get("title") or title or "")[:100],
             "hook": str(out.get("hook") or "")[:60],
             "sentences": sents[:24],
-            "hashtags": [str(h)[:30] for h in (out.get("hashtags") or [])[:10] if h]}
+            "hashtags": [str(h)[:30] for h in _as_list(out.get("hashtags"), True)[:10] if h]}
 
 
 _KO_SENT_RE = re.compile(r"[^.!?…\n]*(?:다\.|요\.|[.!?…]|\n)")
@@ -751,8 +755,16 @@ def suggest_highlights(subs: list, target_sec: int = 30,
     except (KeyError, IndexError) as e:
         raise ScriptError(f"핵심 추천 응답 형식 예상 밖: {json.dumps(data)[:200]}") from e
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-    obj = json.loads(cleaned)
-    keep = sorted({int(i) for i in obj.get("keep", []) if 0 <= int(i) < len(subs)})
+    obj = _as_dict(json.loads(cleaned))
+    def _idx(v):
+        """번호가 3, "3", 3.0 어느 모양으로 와도 받고, 글자면 버린다 (v1.28.1)."""
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+
+    keep = sorted({n for n in (_idx(i) for i in _as_list(obj.get("keep")))
+                   if n is not None and 0 <= n < len(subs)})
     # 게으른 선택 가드: 영상이 목표보다 충분히 긴데 '0부터 연속 번호'거나 전부
     # 앞 40%에 몰려 있으면 실패 취급 → 호출측이 후킹 점수 방식으로 폴백한다.
     if keep and len(subs) >= 6:
@@ -817,8 +829,8 @@ def refine_subtitles(texts: list, context: str = "",
     except (KeyError, IndexError) as e:
         raise ScriptError(f"대본 다듬기 응답 형식 예상 밖: {json.dumps(data)[:200]}") from e
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-    obj = json.loads(cleaned)
-    lines = obj.get("lines") or []
+    obj = _as_dict(json.loads(cleaned))
+    lines = _as_list(obj.get("lines"))
     # 줄 수가 어긋나면 있는 만큼만 교체, 나머지는 원문 유지
     out = []
     for i, orig in enumerate(src):
@@ -1059,15 +1071,16 @@ def suggest_from_video(frames_b64: list, transcript: str = "", topic: str = "",
     data = _post_ai(url, payload, key)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
-        out = json.loads(text)
+        out = _as_dict(json.loads(text))
     except (KeyError, IndexError, json.JSONDecodeError) as e:
         raise ScriptError(f"영상 분석 응답 형식 예상 밖: {json.dumps(data)[:250]}") from e
     return {
         "summary": str(out.get("summary", "")),
-        "titles": [str(x) for x in out.get("titles", [])][:5],
-        "hooks": [str(x) for x in out.get("hooks", [])][:5],
-        "script": [str(x) for x in out.get("script", [])][:80],  # 원본 길이 walkthrough 허용 (v0.71)
-        "hashtags": [str(x) for x in out.get("hashtags", [])][:8],
+        "titles": [str(x) for x in _as_list(out.get("titles"))][:5],
+        "hooks": [str(x) for x in _as_list(out.get("hooks"))][:5],
+        # 원본 길이 walkthrough 허용 (v0.71)
+        "script": [str(x) for x in _as_list(out.get("script"))][:80],
+        "hashtags": [str(x) for x in _as_list(out.get("hashtags"), True)][:8],
     }
 
 
@@ -1237,6 +1250,17 @@ def _norm_words(lst, n: int, each: int = 30) -> list:
         if s:
             out.append(s[:each])
     return out[:n]
+
+
+def _as_dict(v) -> dict:
+    """모델이 «객체»로 답할 자리에 목록·문자열을 줘도 화면이 안 죽게 (v1.28.1).
+
+    목록 56에서 업로드 키트만 고쳤더니 **같은 결함이 AI 기능 다섯 곳에 더** 있었다.
+    전부 `json.loads(...)` 결과를 곧바로 `.get()`으로 까는 자리다. 모델을 바꾸면
+    응답 모양이 달라지는데(목록 53의 자동 교체가 실제로 그렇게 만든다) 그때
+    `AttributeError`가 나고, 그건 어느 except에도 안 걸려 «서버 내부 오류»로 튄다.
+    """
+    return v if isinstance(v, dict) else {}
 
 
 def _as_section(v, main_key: str) -> dict:

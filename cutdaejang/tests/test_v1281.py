@@ -238,3 +238,56 @@ def test_html_is_still_well_formed():
         assert len(re.findall(rf"<{tag}[\s>]", HTML)) == len(
             re.findall(rf"</{tag}>", HTML)), f"<{tag}> 짝이 안 맞음"
     assert f"(v{__version__})" in HTML
+
+
+# ── 목록 56-b: 같은 결함이 AI 기능 다섯 곳에 더 있었다 ──────────
+def _reply(monkeypatch, obj):
+    monkeypatch.setattr(
+        sg, "_http_post_json",
+        lambda url, payload, headers, **kw: {"candidates": [{"content": {"parts": [
+            {"text": json.dumps(obj, ensure_ascii=False)}]}}]})
+
+
+SUBS = [{"text": f"문장{i}", "start_us": i * 1_000_000, "end_us": (i + 1) * 1_000_000}
+        for i in range(10)]
+K = "k" * 20
+
+# 업로드 키트만 고치면 회원님은 «다음 기능»에서 똑같이 막힌다 — 전부 확인한다.
+AI_CALLS = [
+    ("구간 나누기", lambda: sg.split_script_sections_ai("본문 " * 80, api_key=K)),
+    ("제품 정리", lambda: sg.summarize_product("설명 " * 30, api_key=K)),
+    ("블로그→대본", lambda: sg.summarize_article("제목", "본문 " * 80, api_key=K)),
+    ("핵심 선별", lambda: sg.suggest_highlights(SUBS, 20, api_key=K)),
+    ("대본 다듬기", lambda: sg.refine_subtitles([s["text"] for s in SUBS], api_key=K)),
+    ("영상 분석", lambda: sg.suggest_from_video([], "대사", api_key=K)),
+    ("훅 추천", lambda: sg.suggest_hooks("맥락", api_key=K)),
+    ("썸네일 문구", lambda: sg.suggest_thumbnail_copy("맥락", api_key=K)),
+]
+
+
+@pytest.mark.parametrize("name,call", AI_CALLS, ids=[n for n, _ in AI_CALLS])
+@pytest.mark.parametrize("shape", [["a", "b"], "그냥 글", 7], ids=["목록", "문자열", "숫자"])
+def test_every_ai_call_survives_a_wrong_shaped_reply(monkeypatch, name, call, shape):
+    """🔴 직전 커밋본에서 여섯 곳 중 다섯이 AttributeError로 터졌다 (실측).
+
+    터지면 화면엔 «서버 내부 오류»만 남아 회원님은 뭘 해야 할지 알 수 없다.
+    한국어 안내(ScriptError)로 나오든 빈 결과로 나오든, **터지지만 않으면** 된다.
+    """
+    _reply(monkeypatch, shape)
+    try:
+        call()
+    except sg.ScriptError:
+        pass                                   # 이유를 말해 주는 실패는 정상
+    except Exception as e:                     # noqa: BLE001
+        pytest.fail(f"{name}: {type(e).__name__} — 화면엔 «서버 내부 오류»만 뜬다: {e}")
+
+
+def test_highlight_indices_accept_numbers_in_any_shape(monkeypatch):
+    """번호를 3 / "3" / 3.0 어느 모양으로 줘도 받는다 — 예전엔 3.0에서 ValueError."""
+    _reply(monkeypatch, {"keep": [0, "2", 4.0, "글자", None, 999]})
+    assert sg.suggest_highlights(SUBS, 20, api_key=K)["keep"] == [0, 2, 4]
+
+
+def test_script_json_that_is_not_an_object_is_a_clean_error():
+    with pytest.raises(sg.ScriptParseError):
+        sg.Script.from_json_text('["문장1", "문장2"]')
