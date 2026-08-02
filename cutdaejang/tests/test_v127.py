@@ -436,4 +436,4 @@ def test_html_is_still_well_formed():
     for tag in ("div", "details", "select", "button"):
         assert len(re.findall(rf"<{tag}[\s>]", html)) == len(
             re.findall(rf"</{tag}>", html)), f"<{tag}> 짝이 안 맞음"
-    assert "(v1.27.0)" in html
+    assert "(v1.27." in html          # 버전은 v1.27.1에서 올랐다
