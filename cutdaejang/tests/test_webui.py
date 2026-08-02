@@ -169,7 +169,8 @@ def test_upload_kit_stub_and_file(server, tmp_path):
     assert 2 <= len(kit["title_tags"]) <= 3
     assert kit["tiktok"]["caption"] and 3 <= len(kit["tiktok"]["hashtags"]) <= 5
     assert kit["instagram"]["caption"] and kit["naver_clip"]["title"]
-    assert len(kit["naver_clip"]["tags"]) >= 8 and kit["threads"]["post"]
+    # v1.26: 네이버 태그는 5~7개로 제한하고 제목과 겹치는 것을 뺀다 (목록 47-1)
+    assert 3 <= len(kit["naver_clip"]["tags"]) <= 7 and kit["threads"]["post"]
     assert kit["threads"]["topic"]  # 스레드는 토픽 태그 1개
     # 파일 저장 확인 (플랫폼 섹션 포함)
     assert kit_res["path"].endswith("업로드킷.txt")

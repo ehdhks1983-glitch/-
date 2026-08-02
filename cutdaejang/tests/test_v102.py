@@ -17,7 +17,8 @@ def test_kit_prompt_encodes_algorithm_strategy():
     for tok in ("틈새", "롱테일", "범용 단어만으로 된 제목·태그 금지",
                 "niche_keywords", "pinned_comment", "앞 20자",
                 "검색에 그대로 인덱싱", "인스타 검색에 인덱싱",
-                "네이버에 검색할 법한 명사구", "시의성"):
+                # v1.26: 네이버 제목이 명사 나열이던 것을 '검색어 + 붙잡는 한마디'로 교체
+                "네이버 검색창에 칠 법한 명사구", "시의성"):
         assert tok in pr, tok
     # 채널 단계 3종 — 단계별 키워드 배합 지시
     assert set(sg.KIT_STAGE_NOTES) == {"신규", "성장", "정착"}
