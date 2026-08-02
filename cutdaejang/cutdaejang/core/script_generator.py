@@ -45,7 +45,7 @@ PROMPT_TEMPLATE = """\
 - 모든 문장은 완결된 구어체 어미로 끝낼 것 ("~요"·"~예요"·"~하세요"·"~합니다") —
   "확인 필수"·"설치 완료"·"주의" 같은 명사형(개조식) 종결 절대 금지. 글자수를 맞추려고
   어미를 자르지 말고, 길면 두 문장으로 나눌 것
-- 구어체. 숫자·영어 약어는 한글 발음으로 표기 (TTS 오독 방지. 예: "2026년"→"이천이십육년", "AI"→"에이아이")
+- 구어체. 숫자·단위·영어는 쓰인 그대로 (예: "23,800원", "4.8점", "AI") — 자막에 그대로 보이고, 낭독은 프로그램이 자동으로 한글 발음 처리
 - highlight: 각 문장에서 시청자가 기억해야 할 단어 1개 (문장에 그대로 포함된 단어, 없으면 빈 문자열)
 - scene: 그 문장이 나올 때 화면에 보여줄 장면 묘사 1줄 (한국어, 그림 생성용. 인물·사물·배경·분위기를
   구체적으로. 글자·문자·로고는 절대 넣지 말 것)
@@ -588,7 +588,7 @@ ARTICLE_SCRIPT_PROMPT = """\
   (그래서·근데·특히·이때 등), 서로 안 이어지는 나열식·뚝뚝 끊기는 문장 금지
 - 모든 문장은 완결된 구어체 어미로 끝낼 것 ("~요"·"~예요"·"~하세요") — "확인 필수"·
   "설치 완료" 같은 명사형(개조식) 종결 절대 금지. 길면 어미를 자르지 말고 두 문장으로
-- 구어체. 숫자·영어 약어는 한글 발음으로 표기 (예: "50%"→"오십 퍼센트", "AI"→"에이아이")
+- 구어체. 숫자·단위·영어는 쓰인 그대로 (예: "50%", "23,800원", "AI") — 자막에 그대로 보이고, 낭독은 프로그램이 자동으로 한글 발음 처리
 - 글에 있는 사실만 사용할 것 — 여기 없는 기능·가격·수치·효능은 절대 지어내지 말 것
 - hook: 영상 상단에 붙일 제목 1줄 (15자 안팎, 시선 잡기)
 출력(JSON만): {{"title":"","hook":"","sentences":["",...],"hashtags":["",...]}}
@@ -731,7 +731,7 @@ def suggest_highlights(subs: list, target_sec: int = 30,
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _http_post_json(url, payload, {"x-goog-api-key": key}, timeout=45.0)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as e:
@@ -797,7 +797,7 @@ def refine_subtitles(texts: list, context: str = "",
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _http_post_json(url, payload, {"x-goog-api-key": key}, timeout=45.0)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as e:

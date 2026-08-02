@@ -583,6 +583,15 @@ def _bg_display(image_provider, bg_skip: str, src: str) -> str:
     return "기본 그라데이션"
 
 
+THEMES_SRV = {  # 🎲 배치 랜덤 테마 — 화면 THEMES와 같은 조합 (자막 스타일, 화면 톤)
+    "📸 인스타 감성": ("다색 팝", "화사"), "🎵 틱톡 감성": ("블랙 박스", "선명"),
+    "▶ 유튜브 예능": ("예능 노랑", "선명"), "🎬 시네마틱": ("기본", "시네마틱"),
+    "📰 뉴스 정보": ("블랙 박스", "기본"), "🕹 레트로 네온": ("네온", "시네마틱"),
+    "☕ 아늑 브이로그": ("말풍선 띠", "화사"), "🧸 키즈 팝": ("다색 팝", "선명"),
+    "💎 럭셔리": ("기본", "시네마틱"), "🎞 흑백 다큐": ("기본", "흑백"),
+}
+
+
 def _apply_bg_style(params: dict, settings: dict) -> dict:
     """생성 폼에서 고른 장면 그림체·마스코트·그림 방식을 설정에 반영(기억)하고 병합
     (v0.45/0.50/0.51)."""
@@ -1279,12 +1288,35 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             narr_voice = ep.get("narr_voice") or ""
             chain, voice = _narr_tts_pref(ep, settings)  # 보이스 선택 → 체인 (v0.75 공용화)
             texts = [_tts_clean(s2.text) or "네" for s2 in subs]
-            clips, used, note = tts_engine.synth_with_fallback(
-                texts, chain, Path(workdir) / "cache" / "tts", settings,
+            # 🗣 v1.24 (목록 44): 한 문장이 자막 여러 줄로 쪼개진 대본은 문장 단위로
+            # 묶어 한 호흡으로 합성한 뒤, 소리를 글자수 비례로 줄별 분할한다.
+            units = edit_mode.group_sentence_units(texts)
+            unit_texts = [" ".join(texts[i] for i in u) for u in units]
+            clips_u, used, note = tts_engine.synth_with_fallback(
+                unit_texts, chain, Path(workdir) / "cache" / "tts", settings,
                 voice=voice,
                 on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
                 continuity=True,
             )
+            clips, joins = [], []
+            for u, uc in zip(units, clips_u):
+                parts = (edit_mode.split_clip_by_chars(
+                    uc, [len(texts[i]) for i in u],
+                    Path(workdir) / job_id / "narr_split") if len(u) > 1 else [])
+                if len(u) > 1 and len(parts) == len(u):
+                    clips.extend(parts)
+                    joins.extend([True] * (len(u) - 1) + [False])
+                else:  # 분할 실패 → 그 문장만 기존 줄별 재합성으로 폴백
+                    if len(u) > 1:
+                        fb, _fu, _fn = tts_engine.synth_with_fallback(
+                            [texts[i] for i in u], chain,
+                            Path(workdir) / "cache" / "tts", settings, voice=voice)
+                        clips.extend(fb)
+                    else:
+                        clips.append(uc)
+                    joins.extend([False] * len(u))
+            if joins:
+                joins = joins[:max(0, len(clips) - 1)]
             # 고른 보이스가 반영 안 되는 폴백이면 이유를 사용자에게 알림
             want = {"__mine__": "elevenlabs", "__sovits__": "sovits"}.get(narr_voice)
             if narr_voice.startswith("el:"):
@@ -1315,7 +1347,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             narr_fit = ep.get("narr_fit") or "freeze"
             # 목소리 실제 길이에 맞춰 자막 재배치 → 자막·목소리 싱크 보장
             subs, clips, sync_note = edit_mode.retime_narration(
-                clips, subs, cut_us, Path(workdir) / job_id, fit=narr_fit)
+                clips, subs, cut_us, Path(workdir) / job_id, fit=narr_fit,
+                joins=joins)
             if sync_note:
                 note = f"{note} · {sync_note}" if note else sync_note
             narr_end_us = subs[-1].end_us + 700_000 if subs else cut_us
@@ -2566,6 +2599,14 @@ def _run_batch(job_id: str, items: list, params: dict, workdir: str) -> None:
         import re as _re  # noqa: PLC0415
         for i, item in enumerate(items):
             base = i / total
+            if str(params.get("theme") or "") == "rand":   # 🎲 영상마다 다른 테마 (v1.24)
+                import random as _rnd  # noqa: PLC0415
+
+                _nm, (_ss, _tn) = _rnd.choice(list(THEMES_SRV.items()))
+                _p = {**params, "sub_style": _ss, "tone": _tn}
+                settings = _apply_bg_style(_p, config.load_settings())
+                opts = _job_options(_p, settings)
+                logging.getLogger("cutdaejang").info("배치 %d번째 감성 테마: %s", i + 1, _nm)
             sc_text = (item.get("script_text") or "").strip()
             if sc_text:  # 📝 대본 벌 — AI 대본 생략, 첫 줄이 제목 (v0.62)
                 lines, tc_end = _parse_script_lines(sc_text)  # ⏱ 타임코드 정리 (v0.63)
@@ -3643,7 +3684,7 @@ class _Handler(BaseHTTPRequestHandler):
             sub = patch.get("subtitle") or {}
             if isinstance(sub.get("font_size"), (int, float)):
                 safe.setdefault("subtitle", {})["font_size"] = int(
-                    max(40, min(120, sub["font_size"])))
+                    max(40, min(128, sub["font_size"])))
             if isinstance(sub.get("text_cards"), bool):
                 safe.setdefault("subtitle", {})["text_cards"] = sub["text_cards"]
             bgm_p = patch.get("bgm") or {}
@@ -4376,6 +4417,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _open_folder(self, params: dict, workdir: str) -> None:
         job = _get_job(params.get("job_id", ""))
         target = Path(job["job_dir"]) if job and job.get("job_dir") else Path(workdir)
+        if (not (job and job.get("job_dir"))) and params.get("job_id"):
+            cand = Path(workdir) / str(params["job_id"])   # 서버 재시작 후 히스토리 (v1.24)
+            if cand.is_dir():
+                target = cand
         if not target.is_dir():
             self._send_json({"error": "폴더 없음"}, 404)
             return
@@ -4796,6 +4841,7 @@ _HTML = """<!doctype html>
   .hint { font-size:12px; color:#9aa4bb; margin-top:4px; }  /* v1.22.1: 대비 상향 — 안내 글씨가 안 보인다는 지적 */
   .banner { background:#3a1520; border:1px solid #ff7b8a; color:#ffb3bd; border-radius:10px;
             padding:12px 14px; margin-top:14px; font-size:13px; }
+  .banner.ok { background:#12301e; border-color:#43c273; color:#a9e8bf; }
   .hookcands { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
   .hookcands button { width:100%; text-align:left; background:#12305a; border:1px solid #2c4a7a;
     color:#dfe7f5; border-radius:8px; padding:9px 12px; font-size:14px; cursor:pointer; margin:0; }
@@ -4899,7 +4945,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.23.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.24.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5308,6 +5354,7 @@ body.easy #easyBar { display: block; }
         <span>🎨 감성 테마</span>
         <select id="editThemeSel" style="width:auto;padding:6px 8px" onchange="applyTheme('edit')">
           <option value="">직접 고르기</option>
+          <option value="rand">🎲 랜덤 (영상마다 다르게)</option>
           <option value="insta">📸 인스타 감성</option>
           <option value="tiktok">🎵 틱톡 감성</option>
           <option value="youtube">▶ 유튜브 예능</option>
@@ -5739,6 +5786,7 @@ body.easy #easyBar { display: block; }
         <span>🎨 <b>감성 테마</b></span>
         <select id="genThemeSel" style="width:auto;padding:6px 8px" onchange="applyTheme('gen')">
           <option value="">직접 고르기</option>
+          <option value="rand">🎲 랜덤 (영상마다 다르게)</option>
           <option value="insta">📸 인스타 감성 (타자기 자막+타닥+화사, 자막 가운데)</option>
           <option value="tiktok">🎵 틱톡 감성 (단어 하이라이트+블랙 박스+쨍한 색)</option>
           <option value="youtube">▶ 유튜브 예능 (노랑 자막 팝+선명)</option>
@@ -5937,6 +5985,7 @@ body.easy #easyBar { display: block; }
           <span>🎨 감성 테마</span>
           <select id="wlThemeSel" style="width:auto" onchange="applyTheme('wl')">
             <option value="">직접 고르기</option>
+            <option value="rand">🎲 랜덤 (영상마다 다르게)</option>
             <option value="insta">📸 인스타 감성</option>
             <option value="tiktok">🎵 틱톡 감성</option>
             <option value="youtube">▶ 유튜브 예능</option>
@@ -6054,6 +6103,7 @@ body.easy #easyBar { display: block; }
         <span>🎨 감성 테마</span>
         <select id="secThemeSel" style="width:auto" onchange="applyTheme('sec')">
           <option value="">직접 고르기</option>
+          <option value="rand">🎲 랜덤 (영상마다 다르게)</option>
           <option value="insta">📸 인스타 감성</option>
           <option value="tiktok">🎵 틱톡 감성</option>
           <option value="youtube">▶ 유튜브 예능</option>
@@ -6098,12 +6148,11 @@ body.easy #easyBar { display: block; }
         <span class="hint" id="shopLoginState">로그인 상태 확인 중…</span>
         <button class="ghost" style="padding:2px 8px" onclick="refreshShopLogin(event)">↻ 다시 확인</button>
       </div>
-      <div class="hint" style="margin-top:5px">🔐 쿠팡·네이버는 <b>로그인한 브라우저</b>에게만 사진이 든
-        전체 페이지를 보여줘요. <b>[창 열기] → 그 창에서 본인 아이디로 로그인(쿠팡파트너스/쇼핑커넥트)
-        → 창을 켜 둔 채 ②로.</b> 로그인은 처음 한 번(또는 로그아웃됐을 때)만 —
-        다음부터는 위가 ✅ 연결됨인지 확인만 하면 됩니다. 수집은 그 창에 탭을 잠깐
-        열어 읽고 바로 닫으며, 창이 꺼져 있으면 수집이 시작되지 않고 이 순서를 다시
-        안내합니다. (로그인 정보는 이 PC의 컷대장 전용 폴더에만 남고 어디로도 전송되지 않습니다)</div>
+      <div class="hint" style="margin-top:6px;line-height:1.8">
+        ① <b>[창 열기]</b>를 누르고 그 창에서 <b>본인 아이디로 로그인</b> (처음 한 번만)<br>
+        ② 창은 <b>켜 둔 채</b> 아래 ②에 상품 링크를 붙여넣고 [사진·대본 자동 수집]<br>
+        ③ 다음부터는 위가 <b>✅ 연결됨</b>인지 확인만 하면 끝
+        <span style="color:#8b93a7">— 로그인 정보는 이 PC에만 남고 어디로도 전송되지 않아요</span></div>
     </div>
     <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>상품 링크 붙여넣기 <span class="hint">— 추천 · 쿠팡·네이버·11번가·지마켓 등</span></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
@@ -6112,7 +6161,7 @@ body.easy #easyBar { display: block; }
     </div>
     <div class="hint" style="margin-top:4px">수집이 막히면 상품 페이지의 사진·설명 부분을 복사해 아래 결과 칸에 붙여넣으면 됩니다.</div>
     <details class="home-more" id="shopSearchTools">
-      <summary>다른 방법: 상품 검색으로 고르기 <span class="hint">— 파트너스·쇼핑커넥트 API를 쓰는 분만</span></summary>
+      <summary>다른 방법: 상품 검색으로 고르기 <span class="hint">— API 키를 넣으면 파트너스 사이트에 안 가도 검색으로 수익 링크까지 자동 (선택 기능 — 안 쓰셔도 됩니다)</span></summary>
     <details class="opt">
       <summary>🛒 쿠팡 파트너스 <span class="hint" id="cpKeyState">— API 키를 저장하면 상품 검색·파트너스 링크 자동</span>
         <a href="https://partners.coupang.com" target="_blank" rel="noopener" class="ghost" style="padding:2px 8px;text-decoration:none;margin-left:6px" onclick="event.stopPropagation()">↗ 파트너스 열기</a></summary>
@@ -6170,7 +6219,7 @@ body.easy #easyBar { display: block; }
     </div>
     <div id="shopHookCands" class="hookcands"></div>
     <div id="shopPreview" class="hidden">
-      <div class="steplabel" style="margin-top:10px"><span class="stepnum">3</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄. AI 목소리가 읽어요</span></div>
+      <div class="steplabel" style="margin-top:10px"><span class="stepnum">4</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄. AI 목소리가 읽어요</span></div>
       <textarea id="shopScript" style="min-height:110px"></textarea>
       <div class="chk" style="gap:10px;flex-wrap:wrap;margin-top:4px">
         <span>목소리</span><select id="shopVoiceSel" style="width:auto;min-width:180px"></select>
@@ -6198,6 +6247,7 @@ body.easy #easyBar { display: block; }
           <span>🎨 감성 테마</span>
           <select id="shopThemeSel" style="width:auto" onchange="applyTheme('shop')">
             <option value="">직접 고르기</option>
+            <option value="rand">🎲 랜덤 (영상마다 다르게)</option>
             <option value="insta">📸 인스타 감성</option>
             <option value="tiktok">🎵 틱톡 감성</option>
             <option value="youtube">▶ 유튜브 예능</option>
@@ -6604,7 +6654,7 @@ body.easy #easyBar { display: block; }
       <div class="chk" style="gap:8px;margin-top:8px;flex-wrap:wrap">
         <span>자막 글씨</span>
         <span class="ezchips" data-target="setFontSize" data-vals="64,84,104">
-          <button class="ghost ezchip" data-v="64">작게</button><button class="ghost ezchip" data-v="84">보통</button><button class="ghost ezchip" data-v="104">크게</button>
+          <button class="ghost ezchip" data-v="64">작게</button><button class="ghost ezchip" data-v="84">보통</button><button class="ghost ezchip" data-v="104">크게</button><button class="ghost ezchip" data-v="124">특대</button>
         </span>
         <span style="margin-left:10px">배경음악 소리</span>
         <span class="ezchips" data-target="setBgmVol" data-vals="-22,-16,-9">
@@ -7353,6 +7403,7 @@ function onNarrModeChange(){
 }
 
 async function startEdit(){
+  rollRandomTheme('edit');
   const kind = window._editKind || 'edit';
   const video = kind === 'photo' ? '' : $('editVideo').value.trim();
   const photos = kind === 'photo' ? (($('photoPath')||{}).value||'').trim() : '';
@@ -8156,7 +8207,9 @@ function onBatchChange(){
 function uiBanner(msg){
   try{
     const b = $('envBanner');
+    const okMark = ['✅','🎉','🧹','📋','💾','♻','🖼','🎲','ℹ'].some(m => (msg||'').startsWith(m));
     if(b){ b.textContent = msg; b.classList.remove('hidden');
+           b.classList.toggle('ok', okMark);
            b.scrollIntoView({behavior:'smooth', block:'center'}); }
   }catch(_e){}
 }
@@ -8172,6 +8225,7 @@ async function generateSafe(){ try{ await generate(); }catch(e){ reportUiError('
 async function startEditSafe(){ try{ await startEdit(); }catch(e){ reportUiError('만들기 시작', e); } }
 
 async function generate(){
+  rollRandomTheme('gen');
   const prov = pick('prov');
   if(prov === 'eleven_voice' && !(($('elevenVoiceSel')||{}).value)){
     alert('일레븐랩스 보이스 목록을 아직 못 불러왔어요 — 잠시 후 다시 시도하거나 키를 확인하세요'); return;
@@ -8219,6 +8273,7 @@ async function generate(){
     target_sec: genTargetSec(),                                    // v0.61 영상 길이 (직접 입력 v0.68)
     script_text: (($('genScript')||{}).value)||'',                 // v0.61 내 대본
     sub_style: (($('genSubStyleSel')||{}).value)||'기본',          // v0.54 자막 프리셋
+    theme: (($('genThemeSel')||{}).value)||'',                    // 🎲 배치 랜덤 판단 (v1.24)
     sub_anim: (window._themeAnim||{}).gen || '',                  // 🎨 감성 테마 자막 등장 (v0.86)
     sfx_auto: !!(($('genSfxChk')||{}).checked),                    // v0.53 효과음
     punch_in: !!(($('genPunchChk')||{}).checked),                  // v0.55 펀치 줌
@@ -9384,7 +9439,7 @@ function injectQuickDeco(){
     const d = document.createElement('div');
     d.className = 'chk'; d.style.cssText = 'gap:8px;flex-wrap:wrap;margin-top:6px';
     d.innerHTML = '<span>자막 글씨</span>'
-      + [['작게',64],['보통',84],['크게',104]].map(x =>
+      + [['작게',64],['보통',84],['크게',104],['특대',124]].map(x =>
           '<button class="ghost qd-size" data-v="' + x[1] + '" style="padding:4px 10px">' + x[0] + '</button>').join('')
       + '<label style="margin-left:10px;display:flex;align-items:center;gap:4px">'
       + '<input type="checkbox" class="qd-cards"><span>🅰 텍스트 카드</span></label>'
@@ -9803,9 +9858,18 @@ const THEMES = {
   docu:    {sub_style: '기본', tone: '흑백', anim: 'none', pos: ''},
 };
 window._themeAnim = window._themeAnim || {};
+function rollRandomTheme(prefix){   // 🎲 랜덤 테마 — 영상 만들기 시작 때마다 새로 뽑기 (v1.24)
+  const sel = $(prefix + 'ThemeSel'); if(!sel || sel.value !== 'rand') return;
+  const keys = Object.keys(THEMES);
+  const k = keys[Math.floor(Math.random() * keys.length)];
+  sel.value = k; applyTheme(prefix); sel.value = 'rand';
+  const o = sel.querySelector('option[value=' + JSON.stringify(k) + ']');
+  uiBanner('🎲 이번 영상 감성 테마: ' + (o ? o.textContent : k));
+}
 window._themePos = window._themePos || {};
 function applyTheme(prefix){
   const sel = $(prefix + 'ThemeSel'); if(!sel) return;
+  if(sel.value === 'rand') return;   // 🎲 실제 뽑기는 시작 시점(rollRandomTheme)
   const t = THEMES[sel.value];
   window._themeAnim[prefix] = t ? t.anim : '';
   window._themePos[prefix] = t ? (t.pos || '') : '';
@@ -10284,6 +10348,7 @@ function initShopCard(){
 }
 
 async function startShop(){
+  rollRandomTheme('shop');
   const imgs = window._shopPhotos || [];
   if(!imgs.length){ alert('상품 사진을 1장 이상 넣어주세요 — [🖼 상품 사진 고르기]'); return; }
   const NL = String.fromCharCode(10);
@@ -10475,6 +10540,7 @@ function applyWeblink(r){
 }
 
 async function startWeblink(){
+  rollRandomTheme('wl');
   const r = window._weblink || {};
   const all = r.images || [];
   const imgs = all.filter((_, i) => {
@@ -10989,6 +11055,7 @@ async function splitSections(ev){
 }
 
 async function startSections(){
+  rollRandomTheme('sec');
   const full = (pick('secSrcMode') || 'full') === 'full';        // 🎥 v0.84
   const fullPath = full ? (($('secFullPath')||{}).value || '').trim() : '';
   if(full && !fullPath){ alert('[🎥 풀영상 선택]으로 영상을 골라주세요 — 구간마다 클립을 따로 넣으려면 위에서 [🎬 구간마다 클립 따로]를 고르세요'); return; }
@@ -11513,12 +11580,19 @@ async function cancelQueued(id){
   } catch(e){ alert('취소 오류: ' + e); }
 }
 
+async function histFolder(id){   // 📂 히스토리 결과 폴더 열기 (v1.24, 목록 46)
+  try{
+    const d = await (await fetch('/api/open_folder', {method:'POST', body: JSON.stringify({job_id: id})})).json();
+    if(d.error) alert(d.error + (d.path ? ' — ' + d.path : ''));
+  }catch(e){ alert('폴더 열기 실패: ' + e); }
+}
 function renderHistory(rows){
   const tb = $('histTable').querySelector('tbody');
   tb.innerHTML = '';
   for(const r of rows || []){
     const tr = document.createElement('tr');
     const btns = [
+      `<button class="ghost" onclick="histFolder('${r.id}')" title="결과 폴더 열기">📂</button>`,
       r.has_mp4 ? `<button class="ghost" onclick="playHist('${r.id}')">▶ 재생</button>` : '',
       r.has_mp4 ? `<button class="ghost" onclick="kitHist('${r.id}')" title="유튜브 업로드 문구(제목·태그·설명) 만들기">📦 업로드 키트</button>` : '',
       r.has_spec ? `<button class="ghost" onclick="regen('${r.id}')" title="저장된 설계로 mp4 재렌더">♻ 재생성</button>` : '',

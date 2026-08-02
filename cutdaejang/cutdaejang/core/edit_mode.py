@@ -1016,9 +1016,80 @@ def spread_ranges(total_us: int, target_us: int, piece_us: int = 3_500_000) -> L
     return ranges
 
 
+_SENT_END = ".?!…~"
+
+
+def _ends_sentence(t: str) -> bool:
+    t = (t or "").strip().rstrip("\"'\u201d\u2019\u300d\u300f)]")
+    return bool(t) and t[-1] in _SENT_END
+
+
+def group_sentence_units(texts) -> list:
+    """자막 줄들을 '문장 단위'로 묶은 인덱스 그룹 (v1.24, 목록 44).
+
+    쇼핑 대본처럼 한 문장이 자막 두 줄로 쪼개져 있으면("리뷰 십오만 개 넘는" ↵
+    "섬유유연제가 있어요.") 줄마다 따로 합성할 때 문장 한가운데에 종결 억양과
+    0.35초 무음이 들어가 뚝뚝 끊긴다. 종결부호가 없는 줄은 다음 줄과 같은
+    문장으로 묶는다. 안전장치: 종결부호 있는 줄이 40% 미만이면(음성 인식 자막 등
+    구두점이 원래 없는 대본) 묶지 않고 기존 그대로 한 줄=한 단위.
+    """
+    texts = [str(t or "") for t in texts]
+    if not texts:
+        return []
+    enders = sum(1 for t in texts if _ends_sentence(t))
+    if enders < max(1, int(len(texts) * 0.4)):
+        return [[i] for i in range(len(texts))]
+    units, cur, chars = [], [], 0
+    for i, t in enumerate(texts):
+        cur.append(i)
+        chars += len(t)
+        if _ends_sentence(t) or len(cur) >= 3 or chars >= 90:
+            units.append(cur)
+            cur, chars = [], 0
+    if cur:
+        units.append(cur)
+    return units
+
+
+def split_clip_by_chars(clip, weights, out_dir) -> list:
+    """연속 합성된 한 문장 클립을 글자수 비례로 잘라 줄별 클립으로 (v1.24).
+
+    이어 붙이면(간격 0) 원래 소리가 그대로 복원되도록 무음 제거·페이드를 넣지
+    않는다. 실패하면 빈 리스트 — 호출자가 기존 방식으로 되돌아간다.
+    """
+    try:
+        total = ff.probe_duration_us(str(clip))
+        if total <= 0 or len(weights) < 2:
+            return []
+        wsum = float(sum(max(1, int(x)) for x in weights))
+        bounds = [0]
+        acc = 0.0
+        for x in weights[:-1]:
+            acc += max(1, int(x)) / wsum
+            bounds.append(int(total * acc))
+        bounds.append(total)
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        outs = []
+        for i in range(len(weights)):
+            o = out_dir / f"{Path(str(clip)).stem}_ln{i:02d}.wav"
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(clip), "-af",
+                    f"atrim=start={bounds[i] / 1e6:.6f}:end={bounds[i + 1] / 1e6:.6f},"
+                    "asetpts=PTS-STARTPTS,aresample=48000,"
+                    "aformat=sample_fmts=s16:channel_layouts=stereo",
+                    "-c:a", "pcm_s16le", str(o)])
+            if not o.is_file():
+                return []
+            outs.append(str(o))
+        return outs
+    except Exception:  # noqa: BLE001 — 분할 실패는 기존 방식으로 무해 폴백
+        return []
+
+
 def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_dir,
                      lead_us: int = 200_000, max_tempo: float = 1.25,
-                     fit: str = "drop", gap_us: Optional[int] = None) -> tuple:
+                     fit: str = "drop", gap_us: Optional[int] = None,
+                     joins: Optional[List[bool]] = None) -> tuple:
     """자막 타이밍을 TTS 클립 '실제 길이'에 맞춰 순차 재배치 → 목소리·자막 싱크 보장.
 
     글자 수 비례로 추정한 창은 실제 발화 길이와 어긋나 자막이 밀리고 목소리가
@@ -1041,12 +1112,14 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
         # 영상 쪽을 늘려 다 담는다 → 속도 올림·생략 없이 순차 배치
         natural_gap = 350_000 if gap_us is None else max(60_000, int(gap_us))
         out_subs, out_clips, cursor = [], [], lead_us
-        for clip, dur, sub in zip(clips, durs, subtitles):
+        for i, (clip, dur, sub) in enumerate(zip(clips, durs, subtitles)):
             sub.start_us = cursor
             sub.end_us = cursor + dur
             out_subs.append(sub)
             out_clips.append(clip)
-            cursor = sub.end_us + natural_gap
+            # 같은 문장을 쪼갠 줄 사이는 간격 0 — 이어 붙이면 원래 소리 그대로 (v1.24)
+            joined = bool(joins and i < len(joins) and joins[i])
+            cursor = sub.end_us + (0 if joined else natural_gap)
         return out_subs, out_clips, ""
 
     min_gap = 120_000
