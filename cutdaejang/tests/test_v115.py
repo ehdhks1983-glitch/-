@@ -180,7 +180,9 @@ def test_login_debug_reports_open_window(login_window):
 def test_ui_explains_window_flow():
     html = webui._apply_links(webui._HTML)
     assert "쿠팡·네이버 로그인 창 준비" in html                # v1.21 ①단계 (창 먼저)
-    assert "창을 켜 둔 채 ②로" in html
+    # v1.24: 6줄 벽글을 ①②③ 개조식으로 바꿨다 — 순서 자체는 그대로 설명한다
+    assert "① <b>[창 열기]</b>를 누르고" in html
+    assert "창은 <b>켜 둔 채</b>" in html
     assert "창 연결됨" in html                     # 상태줄의 성공 표시
     assert "창을 켜 둔 채 " in html                # 창을 열었을 때 안내(배너)
     src = open("cutdaejang/gui/webui.py", encoding="utf-8").read()
