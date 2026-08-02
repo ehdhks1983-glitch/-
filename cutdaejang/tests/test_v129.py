@@ -30,7 +30,7 @@ HTML = webui._apply_links(webui._HTML)
 
 
 def test_version():
-    assert __version__ == "1.29.0"
+    assert __version__ == "1.30.0"
 
 
 # ── 목록 59: 말 속도가 «뒤에서» 실제로 쓰이나 ───────────────────
@@ -174,7 +174,8 @@ def test_retouch_no_longer_refuses_script_made_edit_videos():
     """🔴 회원님이 보신 그 문구가 편집 경로에서 나오면 안 된다."""
     body = SRC.split("def _retouch(")[1].split("\n    def ")[0]
     assert "_edit_voice_params(job, old_params, params, job_dir)" in body
-    assert "_queue_job(new_id, _run_edit, new_id, new_params, workdir)" in body
+    # v1.30부터 «빠른 길 먼저» 재실행으로 바뀌었다 (목록 60)
+    assert "_queue_job(new_id, _run_revoice, new_id, src_id, new_params, workdir)" in body
     # 옛 문구는 통째로 사라져야 한다 (편집 경로 영상엔 거짓말이었다)
     assert "대본으로 만든 영상(AI 영상 만들기)에서만 가능해요" not in SRC
 

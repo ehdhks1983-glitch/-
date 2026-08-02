@@ -1381,6 +1381,142 @@ def _narr_tts_pref(ep: dict, settings: dict) -> tuple:
     return chain, voice
 
 
+def _synth_narration_clips(job_id: str, subs: list, ep: dict, settings: dict,
+                           workdir: str) -> tuple:
+    """자막 문장들 → 목소리 클립 (문장 단위 한 호흡 합성 → 줄별 분할).
+
+    v1.30: 「목소리만 다시」의 **빠른 길**도 같은 방식으로 만들어야 처음부터 다시
+    만든 영상과 소리 결이 같다 — 그래서 한 곳으로 뺐다.
+    반환: (클립들, 붙일 자리, 쓴 제공자, 사유)
+    """
+    chain, voice = _narr_tts_pref(ep, settings)  # 보이스 선택 → 체인 (v0.75 공용화)
+    texts = [_tts_clean(s2.text) or "네" for s2 in subs]
+    # 🗣 v1.24 (목록 44): 한 문장이 자막 여러 줄로 쪼개진 대본은 문장 단위로
+    # 묶어 한 호흡으로 합성한 뒤, 소리를 글자수 비례로 줄별 분할한다.
+    units = edit_mode.group_sentence_units(texts)
+    unit_texts = [" ".join(texts[i] for i in u) for u in units]
+    clips_u, used, note = tts_engine.synth_with_fallback(
+        unit_texts, chain, Path(workdir) / "cache" / "tts", settings,
+        voice=voice,
+        on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
+        continuity=True,
+    )
+    clips, joins = [], []
+    for u, uc in zip(units, clips_u):
+        parts = (edit_mode.split_clip_by_chars(
+            uc, [len(texts[i]) for i in u],
+            Path(workdir) / job_id / "narr_split") if len(u) > 1 else [])
+        if len(u) > 1 and len(parts) == len(u):
+            clips.extend(parts)
+            joins.extend([True] * (len(u) - 1) + [False])
+        else:  # 분할 실패 → 그 문장만 기존 줄별 재합성으로 폴백
+            if len(u) > 1:
+                fb, _fu, _fn = tts_engine.synth_with_fallback(
+                    [texts[i] for i in u], chain,
+                    Path(workdir) / "cache" / "tts", settings, voice=voice)
+                clips.extend(fb)
+            else:
+                clips.append(uc)
+            joins.extend([False] * len(u))
+    if joins:
+        joins = joins[:max(0, len(clips) - 1)]
+    return clips, joins, used, note
+
+
+def _fast_revoice(job_id: str, src_id: str, params: dict, workdir: str) -> str:
+    """🚀 화면은 한 프레임도 다시 굽지 않고 **소리만** 갈아 끼운다 (v1.30, 목록 60).
+
+    회원님 24차: "편집인데 나레이션 하나 바꾸는 게 오래 걸리면 다른 프로그램이랑
+    차별점을 떠나서 더 후져지는 건데"
+
+    맞는 말씀이다. 실측: 4K 2분짜리를 **처음부터 다시 굽기 535초 vs 소리만 6.5초
+    (82배)**. 자막은 화면에 이미 구워져 있으니 **자막 시각을 그대로 두는 한**
+    화면을 다시 만들 이유가 없다.
+
+    못 하는 경우엔 사유를 돌려준다 — 부르는 쪽이 조용히 «화면부터 다시»로 넘어간다.
+    """
+    from ..core import tts_engine  # noqa: PLC0415
+    from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+    srcj = _get_job(src_id) or {}
+    ep = srcj.get("edit_params") or {}
+    done = srcj.get("mp4") or ""
+    if not (done and Path(done).is_file()):
+        return "완성된 영상 파일이 없어요"
+    subs_d = srcj.get("subtitles") or []
+    if not subs_d:
+        return "자막 시각이 남아 있지 않아요"
+    if str(ep.get("orig_audio") or "mute") != "mute":
+        return "원본 소리를 함께 쓰는 영상이에요"
+    try:
+        if abs(float(params.get("speed") or 1.0) - 1.0) > 1e-6:
+            return "배속이 걸린 영상이에요"
+    except (TypeError, ValueError):
+        return "배속 값을 읽지 못했어요"
+
+    jd = Path(workdir) / job_id
+    jd.mkdir(parents=True, exist_ok=True)
+    settings = _speed_settings(config.load_settings(), params.get("narr_speed"))
+    subs = edit_mode.dicts_to_subtitles(subs_d)
+    total_us = ff.probe_duration_us(done)
+    _set_job(job_id, stage="tts", frac=0.0, note="🎙 새 목소리 만드는 중…")
+    clips, _joins, used, note = _synth_narration_clips(
+        job_id, subs, {**ep, "narr_voice": params.get("narr_voice") or ep.get("narr_voice")},
+        settings, workdir)
+
+    _set_job(job_id, stage="render", frac=0.6, note="🎧 화면은 그대로 두고 소리만 갈아 끼우는 중…")
+    fitted, why = edit_mode.fit_clips_to_slots(clips, subs, total_us, jd / "fit")
+    if why:
+        return why
+    narr = edit_mode.build_narration_wav(fitted, subs, total_us, str(jd / "narr.wav"))
+    bgm_path = None                      # 렌더와 같은 방식으로 곡을 찾는다
+    if ep.get("bgm"):
+        b = orchestrator.resolve_bgm(ep["bgm"], settings)
+        bgm_path = b.path if b else None
+    try:
+        bgm_db = float(ep.get("bgm_db"))
+    except (TypeError, ValueError):
+        bgm_db = float(settings["bgm"].get("volume_db", -16))
+    out = jd / "edited.mp4"
+    edit_mode.swap_narration(
+        done, str(out), narr, bgm_path=bgm_path, bgm_db=bgm_db,
+        bgm_duck=bool(settings["bgm"].get("duck", True)))
+    if not out.is_file():
+        return "소리를 갈아 끼우지 못했어요"
+
+    w = "🚀 화면은 그대로 두고 소리만 갈아 끼웠어요 — 처음부터 다시 굽지 않아 훨씬 빨라요"
+    if used in ("windows", "stub"):
+        w += " · ⚠ 고른 목소리가 아닌 내장 음성으로 만들어졌어요 (하단 🪵 로그 참고)"
+    _record_simple_history(workdir, job_id,
+                           title=(_get_job(job_id) or {}).get("title") or "🎙 목소리 다시",
+                           mode="edit", status="ok", mp4=str(out),
+                           params=(_get_job(job_id) or {}).get("params"),
+                           duration_us=total_us)
+    _set_job(job_id, status="ok", stage="done", frac=1.0, note=w, tts_warn=w,
+             job_dir=str(jd), mp4=str(out), subtitles=subs_d,
+             edit_params=dict(ep, narr_voice=params.get("narr_voice") or ep.get("narr_voice"),
+                              narr_speed=str(params.get("narr_speed") or "")))
+    logging.getLogger("cutdaejang").info(
+        "🚀 소리만 교체 완료: %s (%s, %.0f초 영상)", job_id, used, total_us / 1e6)
+    return ""
+
+
+def _run_revoice(job_id: str, src_id: str, params: dict, workdir: str) -> None:
+    """「목소리만 다시」 — 빠른 길을 먼저 보고, 안 되면 화면부터 다시 만든다."""
+    try:
+        why = _fast_revoice(job_id, src_id, params, workdir)
+        if not why:
+            return
+        logging.getLogger("cutdaejang").info(
+            "빠른 소리 교체 불가(%s) → 화면부터 다시 만듭니다", why)
+        _set_job(job_id, note=f"🐢 {why} — 화면부터 다시 만드는 중…")
+    except Exception as e:  # noqa: BLE001 — 빠른 길이 실패해도 결과는 나와야 한다
+        logging.getLogger("cutdaejang").warning(
+            "빠른 소리 교체 실패 → 화면부터 다시: %s: %s", type(e).__name__, e)
+        _set_job(job_id, note="🐢 화면부터 다시 만드는 중…")
+    _run_edit(job_id, params, workdir)
+
+
 def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                     cut_video: str, workdir: str, keep: Optional[list] = None,
                     speed: float = 1.0, speed_mode: str = "all",
@@ -1515,37 +1651,8 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
 
             _set_job(job_id, stage="tts", frac=0.0, note="AI 목소리 만드는 중…")
             narr_voice = ep.get("narr_voice") or ""
-            chain, voice = _narr_tts_pref(ep, settings)  # 보이스 선택 → 체인 (v0.75 공용화)
-            texts = [_tts_clean(s2.text) or "네" for s2 in subs]
-            # 🗣 v1.24 (목록 44): 한 문장이 자막 여러 줄로 쪼개진 대본은 문장 단위로
-            # 묶어 한 호흡으로 합성한 뒤, 소리를 글자수 비례로 줄별 분할한다.
-            units = edit_mode.group_sentence_units(texts)
-            unit_texts = [" ".join(texts[i] for i in u) for u in units]
-            clips_u, used, note = tts_engine.synth_with_fallback(
-                unit_texts, chain, Path(workdir) / "cache" / "tts", settings,
-                voice=voice,
-                on_progress=lambda i, n: _set_job(job_id, stage="tts", frac=i / n),
-                continuity=True,
-            )
-            clips, joins = [], []
-            for u, uc in zip(units, clips_u):
-                parts = (edit_mode.split_clip_by_chars(
-                    uc, [len(texts[i]) for i in u],
-                    Path(workdir) / job_id / "narr_split") if len(u) > 1 else [])
-                if len(u) > 1 and len(parts) == len(u):
-                    clips.extend(parts)
-                    joins.extend([True] * (len(u) - 1) + [False])
-                else:  # 분할 실패 → 그 문장만 기존 줄별 재합성으로 폴백
-                    if len(u) > 1:
-                        fb, _fu, _fn = tts_engine.synth_with_fallback(
-                            [texts[i] for i in u], chain,
-                            Path(workdir) / "cache" / "tts", settings, voice=voice)
-                        clips.extend(fb)
-                    else:
-                        clips.append(uc)
-                    joins.extend([False] * len(u))
-            if joins:
-                joins = joins[:max(0, len(clips) - 1)]
+            clips, joins, used, note = _synth_narration_clips(
+                job_id, subs, ep, settings, workdir)
             # 고른 보이스가 반영 안 되는 폴백이면 이유를 사용자에게 알림
             want = {"__mine__": "elevenlabs", "__sovits__": "sovits"}.get(narr_voice)
             if narr_voice.startswith("el:"):
@@ -4561,11 +4668,11 @@ class _Handler(BaseHTTPRequestHandler):
                 if why:
                     self._send_json({"error": why}, 404)
                     return
-                _set_job(new_id, status="running", stage="analyze", frac=0.0,
+                _set_job(new_id, status="running", stage="tts", frac=0.0,
                          title=f"{title} (✏ 목소리 다시)", params=new_params,
                          note="🎙 화면은 그대로 두고 목소리만 새로 읽는 중…",
                          tts_warn="✏ 목소리만 다시 만들었어요 — 화면·자막 글은 그대로예요")
-                _queue_job(new_id, _run_edit, new_id, new_params, workdir)
+                _queue_job(new_id, _run_revoice, new_id, src_id, new_params, workdir)
                 self._send_json({"job_id": new_id})
                 return
             if not old_params:
@@ -5448,7 +5555,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.29.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.30.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">

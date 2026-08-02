@@ -184,6 +184,18 @@ def _atempo_chain(speed: float) -> str:
     return ",".join(parts)
 
 
+# 🎵 BGM 소리를 만드는 식 — 렌더와 «소리만 갈아 끼우기»가 **같은 코드**를 써야 한다.
+#    따로 적으면 다시 만든 영상과 목소리만 바꾼 영상의 BGM 크기가 달라진다.
+_DUCK = "sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300"
+
+
+def _bgm_filter(idx: int, dur_s: float, bgm_db: float) -> str:
+    gain = 10 ** (bgm_db / 20)
+    fade_st = max(0.0, dur_s - 1.2)
+    return (f"[{idx}:a]volume={gain:.4f},atrim=0:{dur_s:.3f},"
+            f"afade=t=in:d=0.8,afade=t=out:st={fade_st:.3f}:d=1.2[abgm]")
+
+
 SPEED_MODES = ("all", "voice", "video")
 
 
@@ -438,11 +450,7 @@ def render_edited(
             streams.append("[anar]")
         if bgm_path:
             bgm_idx = nar_idx + (1 if narration_wav else 0)
-            gain = 10 ** (bgm_db / 20)
-            fade_st = max(0.0, dur_s - 1.2)
-            aparts.append(
-                f"[{bgm_idx}:a]volume={gain:.4f},atrim=0:{dur_s:.3f},"
-                f"afade=t=in:d=0.8,afade=t=out:st={fade_st:.3f}:d=1.2[abgm]")
+            aparts.append(_bgm_filter(bgm_idx, dur_s, bgm_db))
             if bgm_duck:
                 # 목소리(원본+내레이션)를 먼저 합치고 → BGM은 목소리가 나올 때
                 # 자동으로 줄어들게(sidechaincompress) 한 뒤 합성 (v0.44 덕킹)
@@ -453,8 +461,7 @@ def render_edited(
                 else:
                     aparts.append(f"{streams[0]}anull[avox]")
                 aparts.append("[avox]asplit[vmain][vside]")
-                aparts.append("[abgm][vside]sidechaincompress="
-                              "threshold=0.03:ratio=8:attack=20:release=300[abgmd]")
+                aparts.append(f"[abgm][vside]{_DUCK}[abgmd]")
                 streams = ["[vmain]", "[abgmd]"]
             else:
                 streams.append("[abgm]")
@@ -1208,6 +1215,85 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
 
 
 _BED_CHUNK = 40
+
+
+# 살짝 빠르게 해도 티가 안 나는 한계 — 이보다 더 줄여야 하면 화면을 다시 굽는 게 맞다
+FIT_MAX_STRETCH = 1.22
+
+
+def fit_clips_to_slots(clips: List, subtitles: List[Subtitle], total_us: int, tmp_dir,
+                       max_stretch: float = FIT_MAX_STRETCH) -> tuple:
+    """새 목소리를 **기존 자막 시각 그대로**에 밀어 넣는다 (v1.30, 목록 60).
+
+    회원님 24차: "편집인데 나레이션 하나 바꾸는 게 오래 걸리면 더 후져지는 건데"
+
+    맞다. 화면을 다시 굽지 않으면 4K 2분짜리가 **535초 → 6.5초**다(실측 82배).
+    그러려면 **자막이 뜨는 시각이 그대로**여야 한다 — 화면에 이미 구워져 있으니까.
+    그래서 새 목소리가 제 칸보다 길면 그 문장만 살짝 빠르게 줄여 넣는다.
+    그걸로도 안 될 만큼 길면 **못 맞춘다고 답한다** — 그때는 화면을 다시 굽는 게 맞다.
+    (억지로 1.5배씩 줄이면 말이 우스워진다. 빠른 게 목적이지 망치는 게 목적이 아니다.)
+
+    반환: (맞춘 클립들, 못 맞춘 사유). 사유가 있으면 클립은 None이다.
+    """
+    if not clips or len(clips) != len(subtitles):
+        return None, "문장 수가 달라 기존 자막 시각에 맞출 수 없어요"
+    tmp = Path(tmp_dir)
+    tmp.mkdir(parents=True, exist_ok=True)
+    starts = [max(0, s.start_us) for s in subtitles]
+    out: List = []
+    for i, clip in enumerate(clips):
+        slot = (starts[i + 1] if i + 1 < len(starts) else total_us) - starts[i]
+        if slot <= 0:
+            return None, "자막 시각이 겹쳐 있어 기존 시각에 맞출 수 없어요"
+        try:
+            got = ff.probe_duration_us(str(clip))
+        except Exception:  # noqa: BLE001
+            return None, "새 목소리 길이를 재지 못했어요"
+        if got <= slot:
+            out.append(clip)          # 짧으면 그대로 — 남는 자리는 조용하다
+            continue
+        need = got / slot
+        if need > max_stretch:
+            return None, (f"{i + 1}번째 문장이 원래 자리보다 {need:.1f}배 길어 "
+                          "기존 자막 시각에 안 들어가요")
+        dst = tmp / f"fit{i:04d}.wav"
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(clip),
+                "-af", _atempo_chain(need), "-c:a", "pcm_s16le", str(dst)])
+        out.append(dst)
+    return out, ""
+
+
+def swap_narration(done_mp4: str, out_path: str, narration_wav: str, *,
+                   bgm_path=None, bgm_db: float = -16.0, bgm_duck: bool = False,
+                   audio_bitrate: str = "192k") -> str:
+    """완성된 영상의 **화면은 손도 안 대고** 소리만 갈아 끼운다 (v1.30, 목록 60).
+
+    `-c:v copy` — 화면은 한 프레임도 다시 굽지 않는다. 그래서 4K든 8K든 상관없이
+    몇 초에 끝난다. 자막은 이미 화면에 구워져 있으므로 **시각이 그대로일 때만**
+    쓸 수 있다 (`fit_clips_to_slots`가 그걸 보장한다).
+    """
+    dur_s = max(0.1, ff.probe_duration_us(done_mp4) / 1e6)
+    args = [ff.ffmpeg_bin(), "-y", "-v", "error", "-i", str(done_mp4),
+            "-i", str(narration_wav)]
+    parts = [f"[1:a]apad,atrim=0:{dur_s:.6f}[anar]"]
+    last = "[anar]"
+    if bgm_path:
+        args += ["-stream_loop", "-1", "-i", str(bgm_path)]
+        parts.append(_bgm_filter(2, dur_s, bgm_db))       # 렌더와 같은 식
+        if bgm_duck:
+            parts.append("[anar]asplit[vmain][vside]")
+            parts.append(f"[abgm][vside]{_DUCK}[abgmd]")
+            parts.append("[vmain][abgmd]amix=inputs=2:duration=first:normalize=0[a]")
+        else:
+            parts.append("[anar][abgm]amix=inputs=2:duration=first:normalize=0[a]")
+        last = "[a]"
+    args += ff.filter_complex_args(";".join(parts),
+                                   Path(out_path).with_suffix(".filter.txt"))
+    args += ["-map", "0:v", "-c:v", "copy", "-map", last,
+             "-c:a", "aac", "-b:a", audio_bitrate, "-movflags", "+faststart",
+             str(out_path)]
+    ff.run(args)
+    return str(out_path)
 
 
 def build_narration_wav(clips: List, subtitles: List[Subtitle], total_us: int,
