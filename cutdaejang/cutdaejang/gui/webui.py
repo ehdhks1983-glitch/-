@@ -5656,7 +5656,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.31.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.32.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5776,7 +5776,9 @@ body.easy #easyBar { display: block; }
       <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 <b>[🎞 구간 대본 영상]</b>의 [✨ AI 클립]으로 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
       <div class="chk" style="gap:8px">
         <span>영상 전체 길이</span>
-        <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px">
+        <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px"
+               oninput="updatePhotoEta()">
+        <span class="hint" id="photoEta"></span>
         <span class="hint">초 — 예) 사진 5장 + 15초 = 한 장당 3초씩</span>
       </div>
     </div>
@@ -5826,7 +5828,7 @@ body.easy #easyBar { display: block; }
           <option value="아주 빠르게">아주 빠르게</option>
         </select>
         <span class="hint">· 화질</span>
-        <select id="autoQualitySel" style="width:auto;padding:6px 8px">
+        <select id="autoQualitySel" style="width:auto;padding:6px 8px" onchange="updatePhotoEta()">
           <option value="draft">빠름 (초안)</option>
           <option value="standard" selected>표준 (1080p)</option>
           <option value="high">고화질</option>
@@ -6711,7 +6713,7 @@ body.easy #easyBar { display: block; }
       <div class="steplabel"><span class="stepnum">2</span>사진 확인 <span class="hint">— 체크를 끄면 그 사진은 영상에서 빠져요 (순서 = 문장 순서)</span></div>
       <div id="wlGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px"></div>
       <div class="steplabel"><span class="stepnum">3</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄 = 사진 한 장 타이밍. AI 목소리가 읽어요</span></div>
-      <textarea id="wlScript" style="min-height:110px"></textarea>
+      <textarea id="wlScript" style="min-height:110px" oninput="updateEta()"></textarea>
       <div class="chk" style="gap:8px"><span>훅 제목</span><input type="text" id="wlHook" style="flex:1" placeholder="영상 상단에 크게 붙는 제목"></div>
       <div class="chk" style="gap:8px;flex-wrap:wrap">
         <span>목소리</span>
@@ -6729,13 +6731,14 @@ body.easy #easyBar { display: block; }
           <option value="wide">🖥 가로 (16:9)</option>
         </select>
         <span>화질</span>
-        <select id="wlQualitySel" style="width:auto">
+        <select id="wlQualitySel" style="width:auto" onchange="updateEta()">
           <option value="draft">빠름 (초안)</option>
           <option value="standard" selected>표준 (1080p)</option>
           <option value="high">고화질</option>
           <option value="ultra">초고화질 (4K)</option>
         </select>
       </div>
+      <div id="wlEta" class="hint hidden" style="margin-top:2px"></div>
       <details class="opt" id="wlDecoBox">
         <summary>🎨 꾸미기 <span class="hint">— 감성 테마·자막·제목 스타일·화면 톤 (안 바꾸면 기억된 설정 그대로)</span></summary>
         <div class="chk" style="gap:10px;flex-wrap:wrap">
@@ -7175,6 +7178,7 @@ body.easy #easyBar { display: block; }
 
     <div id="doneBox" class="hidden">
       <div style="font-weight:800;font-size:16px;margin-top:8px">🎉 영상 완성!</div>
+      <div class="stage hidden" id="stageReport"></div>
       <div class="stage" id="providerBadge"></div>
       <video id="player" controls playsinline></video>
       <div class="stage" id="outPaths"></div>
@@ -10547,6 +10551,38 @@ function voiceRetouchWhyNot(job){
   if(!ep.narration) return '이 영상은 목소리를 얹어 만든 게 아니라 «목소리만 다시»를 할 수 없어요 — 원본 소리를 그대로 쓰는 영상이에요. 🎨 꾸미기만 다시는 됩니다.';
   return '';
 }
+// ⏱ v1.32 (목록 57) — 만들기 «전에» 얼마나 걸릴지 알려 준다.
+//   회원님 24차: 4K만 경고하고 정작 더 크게 흔드는 «대본 길이»는 한 마디도 안 했다.
+//   실측(같은 PC·같은 사진): 대본 5줄 22초 → 30줄 127초, 4K면 거기에 4.2배.
+//   ⚠ 숫자를 박아 두지 않는다 — 내 컴퓨터 값은 회원님 PC에서 안 맞는다.
+//     프로그램이 회원님 PC에서 실제로 걸린 시간을 배운 뒤에만 시간을 말한다.
+function etaSeconds(videoSec, quality){
+  const learned = ((window._settings||{}).ui||{}).render_speed || {};
+  const per = learned[quality];
+  if(!per || !(videoSec > 0)) return 0;      // 아직 안 배웠으면 «모른다»
+  return Math.round(videoSec * per);
+}
+function etaText(videoSec, quality){
+  const s = etaSeconds(videoSec, quality);
+  if(!s) return '';
+  let tip = '⏱ 예상 약 ' + fmtDur(s) + ' (영상 ' + fmtDur(Math.round(videoSec)) + ')';
+  if(quality === 'ultra') tip += ' — 표준으로 바꾸면 훨씬 빨라요';
+  return tip;
+}
+function updatePhotoEta(){
+  const box = $('photoEta'); if(!box) return;
+  const sec = +(($('photoSec')||{}).value) || 0;
+  box.textContent = etaText(sec, (($('autoQualitySel')||{}).value)||'standard');
+}
+function updateEta(){
+  const box = $('wlEta'); if(!box) return;
+  const NL = String.fromCharCode(10);
+  const lines = (($('wlScript')||{}).value || '').split(NL).filter(s => s.trim()).length;
+  const sec = Math.max(10, Math.min(180, Math.round(lines * 4)));   // 서버와 같은 식
+  const t = lines ? etaText(sec, (($('wlQualitySel')||{}).value)||'standard') : '';
+  box.textContent = t;
+  box.classList.toggle('hidden', !t);
+}
 function toggleRetouch(ev){
   if(ev) ev.preventDefault();
   const b = $('retouchBox');
@@ -12418,6 +12454,10 @@ async function poll(){
   }
 
   $('statusTitle').textContent = job.title || job.id;
+  if(job.stage_report && $('stageReport')){          // ⏱ v1.32 (목록 57)
+    $('stageReport').textContent = job.stage_report;
+    $('stageReport').classList.remove('hidden');
+  }
   const frac = job.frac || 0;
   $('barFill').style.width = (job.status==='ok'||job.status==='partial' ? 100 : Math.round(frac*100)) + '%';
   let elaTxt = '';                     // ⏱ 오래 걸릴 때 최소한 경과라도 보이게 (v0.90)
