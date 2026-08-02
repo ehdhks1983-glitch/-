@@ -37,7 +37,7 @@ def _page() -> str:
 
 
 def test_version():
-    assert __version__ == "1.28.1"
+    assert __version__ == "1.29.0"
 
 
 def test_coupang_gallery_only_no_ads_no_recommendations():

@@ -722,6 +722,27 @@ def _run_pipeline(job_id: str, script: Script, params: dict, workdir: str,
 
 
 # ✏ 부분 수정 (v1.27) — 화면에서 새로 고를 수 있는 값만 덮어쓴다
+def _speed_settings(settings: dict, narr_speed) -> dict:
+    """화면에서 고른 «말 속도»를 설정에 반영 (v1.29, 목록 59).
+
+    🔴 v1.27에서 편집·구간 폼에도 말 속도 칸을 만들어 놓고 **뒤에서 안 읽었다.**
+    회원님이 속도를 바꿔도 아무 일이 안 일어났다 — 말 속도를 실제로 반영하는
+    `_apply_bg_style()`은 AI 생성 경로에서만 불린다(실측: 편집 경로의 설정 읽는
+    자리 3곳 모두 그냥 `config.load_settings()`).
+    """
+    if not str(narr_speed or "").strip():
+        return settings
+    try:
+        v = max(0.5, min(2.0, float(narr_speed)))
+    except (TypeError, ValueError):
+        return settings
+    return config.deep_merge(settings, {"audio": {"speech_speed": v}})
+
+
+def _job_narr_speed(job_id: str) -> str:
+    return str((( _get_job(job_id) or {}).get("edit_params") or {}).get("narr_speed") or "")
+
+
 _RETOUCH_VOICE_KEYS = ("narr_speed", "tts_provider", "voice", "tts_style")
 _RETOUCH_DECO_KEYS = ("sub_style", "tone", "sub_font", "hook_style",
                       "hook_font", "hook_tilt", "sub_anim")
@@ -745,6 +766,69 @@ def _saved_job_params(job_id: str, job: dict, workdir: str):
         except (TypeError, ValueError):
             saved = {}
     return saved, row
+
+
+# 새로 읽힐 때 «다시 쓰게» 하면 안 되는 것들 — 말이 바뀌어 버린다
+_EDIT_VOICE_DROP = ("narr_topic", "narr_analyze", "narr_file", "auto_multi",
+                    "auto_target_sec", "narr_subs_only")
+
+
+def _edit_voice_params(job: dict, old: dict, req: dict, job_dir: Path) -> tuple:
+    """편집 경로 영상의 «목소리만 다시» 입력값 (v1.29, 목록 58).
+
+    회원님 24차: "목소리면 영상은 그대로 하고 목소리만 변경되게끔 해야 하는 거 아니야?"
+    맞다. 그래서 **이미 만든 화면을 그대로 두고** 목소리만 새로 읽힌다:
+      · 대본 = 완성된 자막 글 그대로 (AI에게 다시 쓰게 하면 말 자체가 바뀐다)
+      · 화면 = 사진이 그대로 있으면 사진에서, 없어졌으면 이미 만들어 둔 영상에서
+      · 자막 검토는 건너뛴다 (고칠 게 없다)
+
+    ⚠ AI 경로(`_run_pipeline`)로 돌리면 **회원님 사진이 사라지고 AI 그림이 들어간다.**
+      그래서 관문만 여는 게 아니라 편집 경로 전용 재실행이 필요했다.
+
+    반환: (새 입력값, 못 하는 이유). 이유가 있으면 새 입력값은 None이다.
+    """
+    ep = job.get("edit_params") or {}
+    if ep.get("narr_file") or old.get("narr_file"):
+        return None, ("이 영상은 회원님이 직접 녹음한 파일로 만들어서 «목소리만 다시»가 "
+                      "안 돼요 — 새로 녹음한 파일로 다시 만들어 주세요")
+    if not ep.get("narration"):
+        return None, ("이 영상은 목소리를 얹어 만든 게 아니라 «목소리만 다시»를 할 수 "
+                      "없어요 — 원본 소리를 그대로 쓰는 영상이에요")
+    lines = [str(s.get("text") or "").strip()
+             for s in (job.get("subtitles") or []) if str(s.get("text") or "").strip()]
+    if not lines:   # 검토 화면을 거치지 않았으면 넣었던 대본 그대로
+        lines = [x.strip() for x in str(old.get("script") or "").splitlines() if x.strip()]
+    if not lines:
+        return None, "이 영상의 대본이 남아 있지 않아 «목소리만 다시»를 할 수 없어요"
+
+    p = {k: v for k, v in old.items() if k not in _EDIT_VOICE_DROP}
+    # 🎙 목소리 갈아 끼우기 — 편집 경로는 narr_voice 한 칸에 제공자까지 담는다
+    voice = str(req.get("voice") or "").strip()
+    if voice:
+        p["narr_voice"] = ("el:" + voice if req.get("tts_provider") == "elevenlabs"
+                           else voice)
+    if str(req.get("narr_speed") or "").strip():
+        p["narr_speed"] = req["narr_speed"]
+    p["script"] = "\n".join(lines)   # 완성된 자막 글을 그대로 읽힌다
+    p["script_tts"] = True
+    p["auto_edit"] = True            # 자막 검토는 건너뛴다 — 고칠 게 없다
+    p["auto_subtitle"] = False       # 이미 대본이 있다 (음성 인식 불필요)
+    p["cut_silence"] = False         # 화면은 그대로 둔다
+    p["narr_subs_only"] = False
+
+    # 📸 사진이 그대로 있으면 사진에서 — 사진 넘어가는 타이밍도 새 목소리에 맞춰진다
+    photos = [x.strip() for x in str(old.get("photo_path") or "").split(";") if x.strip()]
+    if photos and all(Path(x).is_file() for x in photos):
+        return p, ""
+    # 사진이 없어졌거나 원래부터 영상이면 — 이미 만들어 둔 화면을 그대로 쓴다
+    for cand in (job.get("cut_video") or "", str(job_dir / "slideshow.mp4"),
+                 str(old.get("video_path") or "")):
+        if cand and Path(cand).is_file():
+            p["photo_path"] = ""
+            p["video_path"] = cand
+            return p, ""
+    return None, ("원본 사진·영상이 지워져 «목소리만 다시»를 할 수 없어요 — "
+                  "사진을 다시 골라 만들어 주세요")
 
 
 def _reuse_scene_images(job_dir: Path, n: int):
@@ -849,7 +933,8 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
     """1단계: 무음컷 + 자동자막 분석 → 자막 검토 대기 (Phase 1). 자막 없으면 바로 렌더."""
     try:
         _apply_keys(params)
-        settings = config.load_settings()
+        # 🏃 v1.29 (목록 59): 편집 폼의 말 속도가 여기까지 안 왔다
+        settings = _speed_settings(config.load_settings(), params.get("narr_speed"))
         edit_cfg = settings["edit"]
         from ..core import edit_mode  # noqa: PLC0415
         from ..core.stt_engine import STTEngine, make_provider  # noqa: PLC0415
@@ -1092,6 +1177,11 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                          "narr_file": narr_file,  # 🎤 녹음 내레이션 (v0.58)
                          "narr_voice": (params.get("narr_voice") or "").strip(),
                          "narr_style": (params.get("narr_style") or "").strip(),
+                         # 🏃 v1.29 (목록 59): 2단계 렌더에서 읽어야 실제로 적용된다
+                         "narr_speed": str(params.get("narr_speed") or ""),
+                         # ✏ v1.29 (목록 58): «목소리만 다시»가 무엇을 되살릴지 판단할 근거
+                         "photo_path": (params.get("photo_path") or "").strip(),
+                         "script_tts": bool(script_tts),
                          "narr_fit": params.get("narr_fit") or "freeze",
                          # 원본 소리: 목소리를 얹을 때만 기본 무음 (자막만이면 유지)
                          "orig_audio": params.get("orig_audio")
@@ -1301,7 +1391,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         from ..core import edit_mode  # noqa: PLC0415
         from ..core.orchestrator import build_style  # noqa: PLC0415
 
-        settings = config.load_settings()
+        settings = _speed_settings(config.load_settings(), _job_narr_speed(job_id))
         note = "고화질(4K) 렌더는 사양에 따라 몇 분 걸릴 수 있어요…" if quality == "ultra" else ""
         # 최종 자막을 job에 남김 → 📦 업로드 키트가 대본으로 활용 (완전 자동 포함)
         _set_job(job_id, status="running", stage="render", frac=0.0, note=note,
@@ -1622,7 +1712,10 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             title=(_get_job(job_id) or {}).get("title") or "✂️ 내 영상 편집",
             mode="edit",
             status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
-            mp4=out if Path(out).exists() else None)
+            mp4=out if Path(out).exists() else None,
+            # ✏ v1.29 (목록 58): 입력값을 안 남겨 프로그램을 껐다 켜면 부분 수정이
+            #   안 됐다. 편집 작업도 남긴다 (API 키는 _record_simple_history가 뺀다).
+            params=(_get_job(job_id) or {}).get("params"))
         _set_job(
             job_id,
             status="ok" if result.ok else "partial" if Path(out).exists() else "failed",
@@ -1665,7 +1758,7 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             prev = (_get_job(job_id) or {}).get("tts_warn") or ""
             if w0 not in prev:
                 _set_job(job_id, tts_warn=f"{prev} · {w0}" if prev else w0)
-        settings = config.load_settings()
+        settings = _speed_settings(config.load_settings(), _job_narr_speed(job_id))
         subs = edit_mode.dicts_to_subtitles(subtitles_dicts)
         cut_video, subs, _, trim_note = _apply_trim(
             cut_video, subs, None, trim, Path(workdir) / job_id)
@@ -4454,10 +4547,26 @@ class _Handler(BaseHTTPRequestHandler):
         if what == "voice":
             sj = job_dir / "script.json"
             if not sj.is_file():
-                self._send_json(
-                    {"error": "이 영상은 «목소리만 다시»를 지원하지 않아요 — 대본으로 "
-                              "만든 영상(AI 영상 만들기)에서만 가능해요. 직접 찍은 영상은 "
-                              "[✂ 이 영상 편집]을 써주세요"}, 404)
+                # ✏ v1.29 (목록 58): 여기서 그냥 거절했었다. 그런데 블로그·쇼핑·구간·
+                #   사진 카드는 «편집 경로»로 가고 그쪽은 script.json을 안 쓴다 —
+                #   대본으로 만든 영상인데도 "대본으로 만든 영상에서만 가능해요"라고
+                #   퇴짜를 놨다 (회원님 24차 스크린샷).
+                if not old_params:
+                    self._send_json(
+                        {"error": "이 영상은 만들 때 쓴 설정이 저장돼 있지 않아 «목소리만 "
+                                  "다시»를 할 수 없어요 — 이 업데이트 이후에 만든 "
+                                  "영상부터 가능해요"}, 404)
+                    return
+                new_params, why = _edit_voice_params(job, old_params, params, job_dir)
+                if why:
+                    self._send_json({"error": why}, 404)
+                    return
+                _set_job(new_id, status="running", stage="analyze", frac=0.0,
+                         title=f"{title} (✏ 목소리 다시)", params=new_params,
+                         note="🎙 화면은 그대로 두고 목소리만 새로 읽는 중…",
+                         tts_warn="✏ 목소리만 다시 만들었어요 — 화면·자막 글은 그대로예요")
+                _queue_job(new_id, _run_edit, new_id, new_params, workdir)
+                self._send_json({"job_id": new_id})
                 return
             if not old_params:
                 # 이 업데이트 이전에 만든 작업은 입력값이 안 남아 있다 (v1.27부터 저장)
@@ -5339,7 +5448,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.28.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.29.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6881,7 +6990,7 @@ body.easy #easyBar { display: block; }
       <div id="retouchBox" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px dashed #4266d5;border-radius:10px">
         <div style="font-weight:700;font-size:14px">✏ 부분 수정 <span class="hint">— 대본·장면 그림은 그대로 두고 마음에 안 드는 것만</span></div>
         <div class="hint" style="margin-top:4px">처음부터 다시 만들 필요 없어요. <b>바꿀 것만</b> 고르고 아래 버튼을 누르면, 나머지는 그대로 재사용해 훨씬 빠르고 <b>AI 그림 값도 안 나가요</b>.</div>
-        <div style="margin-top:10px;padding:8px 10px;border:1px solid #3a4157;border-radius:8px">
+        <div id="rtVoiceBox" style="margin-top:10px;padding:8px 10px;border:1px solid #3a4157;border-radius:8px">
           <div style="font-weight:700;font-size:13px">🎙 목소리·말 속도만 다시</div>
           <div class="chk" style="gap:8px;margin-top:6px;flex-wrap:wrap">
             <span>말 속도</span>
@@ -6900,6 +7009,7 @@ body.easy #easyBar { display: block; }
           <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="retouch(event,'voice')" title="대본과 장면 그림은 그대로 두고 목소리만 새로 읽혀요 — 자막 타이밍은 새 목소리 길이에 맞춰 자동으로 다시 맞춰집니다">🎙 목소리만 다시 만들기</button>
           <div class="hint" style="margin-top:4px">자막이 나오는 시각도 새 목소리 길이에 맞춰 <b>자동으로 다시 맞춰져요</b>.</div>
         </div>
+        <div id="rtVoiceNo" class="hint hidden" style="margin-top:10px;padding:8px 10px;border:1px solid #3a4157;border-radius:8px"></div>
         <div style="margin-top:8px;padding:8px 10px;border:1px solid #3a4157;border-radius:8px">
           <div style="font-weight:700;font-size:13px">🎨 꾸미기만 다시 (자막 디자인·화면 톤)</div>
           <div class="chk" style="gap:8px;margin-top:6px;flex-wrap:wrap">
@@ -10219,13 +10329,31 @@ async function saveSettings(){
 }
 
 // ── ✏ 부분 수정 (v1.27) — 목소리·말 속도만 / 꾸미기만 다시 ──
+function voiceRetouchWhyNot(job){
+  // ✏ v1.29 (목록 58): 예전엔 아무 조건 없이 버튼을 보여주고, 누르면 거절했다.
+  //   회원님은 «대본으로 만든 영상에서만 가능해요»를 대본으로 만든 영상에서 보셨다.
+  if(!job) return '';                      // 아직 모르면 막지 않는다 (눌러 보면 안다)
+  const ep = job.edit_params;
+  if(!ep) return '';                       // 🤖 AI 영상 만들기 — 대본이 저장돼 있다
+  if(ep.narr_file) return '이 영상은 직접 녹음한 파일로 만들어서 «목소리만 다시»가 안 돼요 — 새로 녹음한 파일로 다시 만들어 주세요.';
+  if(!ep.narration) return '이 영상은 목소리를 얹어 만든 게 아니라 «목소리만 다시»를 할 수 없어요 — 원본 소리를 그대로 쓰는 영상이에요. 🎨 꾸미기만 다시는 됩니다.';
+  return '';
+}
 function toggleRetouch(ev){
   if(ev) ev.preventDefault();
   const b = $('retouchBox');
   if(!b) return;
   const opening = b.classList.contains('hidden');
   b.classList.toggle('hidden');
-  if(opening) fillRetouchVoices();
+  if(!opening) return;
+  fillRetouchVoices();
+  const why = voiceRetouchWhyNot(window._curJob);
+  const box = $('rtVoiceBox'), no = $('rtVoiceNo');
+  if(box) box.classList.toggle('hidden', !!why);
+  if(no){
+    no.classList.toggle('hidden', !why);
+    no.textContent = why ? ('🎙 ' + why) : '';
+  }
 }
 function fillRetouchVoices(){
   // 목소리 목록은 위 폼이 이미 채워 뒀다 — 그대로 복제해 온다 (중복 채움 방지)
@@ -12072,6 +12200,7 @@ async function poll(){
   else if(window._view === 'sections') initSectionCard();
   if(!currentJob) return;
   const job = state.jobs.find(j => j.id === currentJob);
+  window._curJob = job || null;      // ✏ v1.29: 부분 수정이 가능한 영상인지 판단용
   if(!job) return;
   if(job.status === 'cancelled'){
     clearInterval(timer); timer = null;
