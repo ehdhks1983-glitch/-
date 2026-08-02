@@ -15,7 +15,7 @@ from typing import List, Optional
 from .tts_engine import _http_post_json
 
 
-def _post_ai(url: str, payload: dict, key: str, timeout: float = 120.0) -> dict:
+def _post_ai(url: str, payload: dict, key: str, timeout=None) -> dict:
     """🔁 제미나이 호출 (v1.27.1, 목록 53) — 모델이 퇴역했으면 자동으로 다른 모델로.
 
     회원님 22차: 404 "This model models/gemini-2.5-flash is no longer available to
@@ -23,7 +23,9 @@ def _post_ai(url: str, payload: dict, key: str, timeout: float = 120.0) -> dict:
     """
     from . import gemini_models  # noqa: PLC0415
 
-    return gemini_models.post_url(url, payload, key, timeout=timeout)
+    # poster를 넘겨야 이 모듈의 _http_post_json 바꿔치기(테스트·대역)가 살아 있다
+    return gemini_models.post_url(url, payload, key, timeout=timeout,
+                                  poster=_http_post_json)
 
 
 

@@ -143,6 +143,17 @@ def resolve_text(want: str, api_key: str) -> str:
     return chosen
 
 
+def _remembered(model: str) -> Optional[str]:
+    """이미 «이 이름은 죽었고 대신 이걸 쓴다»고 정해 둔 게 있으면 그것 (조회 없음)."""
+    with _lock:
+        if model and model not in _gone:
+            return None                      # 아직 멀쩡하다고 보고 그대로 쓴다
+        for (want, _tail), got in _resolved.items():
+            if want == model and got not in _gone:
+                return got
+    return None
+
+
 def mark_gone(model: str) -> None:
     """이 이름은 없어졌다고 표시 — 다음부터 안 고른다."""
     if not model:
@@ -157,40 +168,58 @@ def mark_gone(model: str) -> None:
 _URL_RE = re.compile(r"/models/([^/:]+):([A-Za-z]+)")
 
 
-def post_url(url: str, payload: dict, api_key: str, *, timeout: float = 120.0) -> dict:
-    """이미 만들어진 제미나이 URL로 호출 — 모델 부분만 자동으로 갈아 끼운다.
+def post_url(url: str, payload: dict, api_key: str, *, timeout=None,
+             poster=None) -> dict:
+    """이미 만들어진 제미나이 URL로 호출 — 모델 부분만 필요할 때 갈아 끼운다.
 
-    호출부(대본·키트·요약 등 11곳)를 구조적으로 바꾸지 않고도 모델 퇴역에
-    대응하려고 URL에서 모델 이름만 뽑아 쓴다.
+    poster: 실제로 POST 하는 함수(url, payload, headers, timeout). 호출부가 넘겨주면
+    그걸 쓴다 — 테스트가 호출부의 `_http_post_json`을 바꿔치기하는 통로를 막지 않기 위해서.
     """
     m = _URL_RE.search(url or "")
+    post = poster or _default_poster()
     if not m:                      # 모양이 다르면 손대지 않고 그대로 (안전)
-        from .tts_engine import _http_post_json  # noqa: PLC0415
-        return _http_post_json(url, payload, {"x-goog-api-key": api_key}, timeout=timeout)
-    return post_generate(m.group(1), payload, api_key,
-                         method=m.group(2), timeout=timeout)
+        return post(url, payload, {"x-goog-api-key": api_key}, **_kw(timeout))
+    return post_generate(m.group(1), payload, api_key, method=m.group(2),
+                         timeout=timeout, poster=post)
+
+
+def _default_poster():
+    from .tts_engine import _http_post_json  # noqa: PLC0415 — 순환 import 방지
+
+    return _http_post_json
+
+
+def _kw(timeout) -> dict:
+    """timeout을 안 준 호출은 예전처럼 **인자 없이** 부른다.
+
+    호출 모양을 바꾸면 이 함수를 대역으로 바꿔치기해 둔 곳(테스트 등)이 전부 깨진다.
+    실제 기본값도 120초라 넘기지 않는 것과 결과가 같다.
+    """
+    return {} if timeout is None else {"timeout": timeout}
 
 
 def post_generate(model: str, payload: dict, api_key: str, *,
-                  method: str = "generateContent", timeout: float = 120.0) -> dict:
-    """글 모델 호출 — 모델이 없어졌으면 자동으로 다른 모델로 한 번 더 시도한다.
+                  method: str = "generateContent", timeout=None,
+                  poster=None) -> dict:
+    """글 모델 호출 — 모델이 없어졌을 때만 다른 모델로 갈아타고 한 번 더 시도한다.
 
-    호출부는 모델 이름을 신경 쓸 필요가 없다. 구글이 이름을 바꾸거나 퇴역시켜도
-    여기서 흡수한다.
+    ⚠ 잘 되고 있을 때는 **모델 목록을 조회하지 않는다.** 매번 물어보면
+    호출마다 왕복이 한 번씩 더 늘고(느려지고), 키가 없는 환경에서는 멀쩡한 호출까지
+    막힌다. 목록은 «없어진 모델»을 실제로 만났을 때만 딱 한 번 본다.
     """
-    from .tts_engine import _http_post_json  # noqa: PLC0415 — 순환 import 방지
-
+    post = poster or _default_poster()
+    use = _remembered(model) or model
     for attempt in (0, 1):
-        use = resolve_text(model, api_key)
         try:
-            return _http_post_json(f"{_BASE}/models/{use}:{method}", payload,
-                                   {"x-goog-api-key": api_key}, timeout=timeout)
+            return post(f"{_BASE}/models/{use}:{method}", payload,
+                        {"x-goog-api-key": api_key}, **_kw(timeout))
         except Exception as e:  # noqa: BLE001 — 모델 문제만 걸러내고 나머지는 그대로
             text = getattr(e, "text", "") or str(e)
             if attempt == 0 and is_model_gone(text):
                 mark_gone(use)
-                with _lock:
-                    _avail_cache.pop(_key_tail(api_key), None)   # 목록도 새로 받는다
-                continue
+                nxt = resolve_text(model, api_key)   # 이때 처음으로 목록을 본다
+                if nxt and nxt != use:
+                    use = nxt
+                    continue
             raise
     raise RuntimeError("모델 선택에 실패했습니다")   # 도달하지 않음

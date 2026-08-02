@@ -231,3 +231,42 @@ def test_edit_log_records_quality_so_slow_jobs_are_explainable():
     """🪵 51번 — 화질을 안 남겨 두어 «왜 40분 걸렸나»를 로그로 못 되짚었다."""
     src = (ROOT / "cutdaejang/gui/webui.py").read_text(encoding="utf-8")
     assert '"편집 시작: %s (화질=%s, 비율=%s' in src
+
+
+def test_resolver_does_not_probe_when_things_are_working():
+    """🔴 내가 한 번 깨뜨린 자리 — 호출마다 모델 목록을 물어보게 만들었더니,
+    ①호출마다 왕복이 하나씩 늘고 ②대역(테스트)이 통째로 막혀 15건이 깨졌다.
+    잘 되고 있을 때는 목록을 보지 않아야 한다 — 실패했을 때만 딱 한 번."""
+    from cutdaejang.core import gemini_models as gm
+
+    gm._avail_cache.clear(); gm._resolved.clear(); gm._gone.clear()
+    seen = []
+
+    def fake_post(url, payload, headers, **kw):
+        seen.append(url)
+        return {"ok": True}
+
+    def boom(*a, **k):
+        raise AssertionError("잘 되는데도 모델 목록을 물어봤다")
+
+    orig, gm.list_available = gm.list_available, boom
+    try:
+        gm.post_generate("gemini-2.5-flash", {}, "k", poster=fake_post)
+    finally:
+        gm.list_available = orig
+    assert len(seen) == 1 and "gemini-2.5-flash" in seen[0]
+
+
+def test_resolver_keeps_the_callers_stub_seam():
+    """호출부가 넘긴 poster를 써야 대역 바꿔치기가 살아 있다 (위 15건이 깨진 이유)."""
+    src = (ROOT / "cutdaejang/core/script_generator.py").read_text(encoding="utf-8")
+    body = src.split("def _post_ai(")[1].split("\n\n\n")[0]
+    assert "poster=_http_post_json" in body
+
+
+def test_resolver_omits_timeout_when_not_given():
+    """timeout을 안 준 호출은 예전처럼 인자 없이 — 대역 함수 시그니처를 안 깬다."""
+    from cutdaejang.core import gemini_models as gm
+
+    assert gm._kw(None) == {}
+    assert gm._kw(45.0) == {"timeout": 45.0}

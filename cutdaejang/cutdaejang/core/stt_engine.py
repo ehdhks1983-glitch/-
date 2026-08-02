@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 
-def _post_ai(url: str, payload: dict, key: str, timeout: float = 120.0) -> dict:
+def _post_ai(url: str, payload: dict, key: str, timeout=None) -> dict:
     """🔁 제미나이 호출 (v1.27.1, 목록 53) — 모델이 퇴역했으면 자동으로 다른 모델로.
 
     회원님 22차: 404 "This model models/gemini-2.5-flash is no longer available to
