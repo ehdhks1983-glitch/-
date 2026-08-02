@@ -888,9 +888,13 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 Path(workdir) / "cache" / "stt",
                 language=params.get("language", "ko"),
             )
+        # 🪵 v1.27.1 (목록 51): 화질·비율을 안 남겨 두어 "왜 40분 걸렸나"를 로그로
+        # 되짚을 수 없었다. 오래 걸리는 설정이 바로 보이도록 같이 적는다.
         logging.getLogger("cutdaejang").info(
-            "편집 시작: %s (내레이션=%s, 녹음=%s, 자막만=%s, 완전자동=%s)",
-            Path(video).name, bool(narr_topic), bool(narr_file),
+            "편집 시작: %s (화질=%s, 비율=%s, 내레이션=%s, 녹음=%s, 자막만=%s, 완전자동=%s)",
+            Path(video).name, params.get("quality") or "standard",
+            params.get("layout") or "shorts",
+            bool(narr_topic), bool(narr_file),
             bool(params.get('narr_subs_only')), bool(params.get("auto_edit")))
         _set_job(job_id, status="running", stage="analyze", frac=0.0, title=Path(video).stem)
         analysis = edit_mode.analyze_video(

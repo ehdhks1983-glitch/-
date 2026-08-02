@@ -15,6 +15,18 @@ from typing import List, Optional
 from .tts_engine import _http_post_json
 
 
+def _post_ai(url: str, payload: dict, key: str, timeout: float = 120.0) -> dict:
+    """🔁 제미나이 호출 (v1.27.1, 목록 53) — 모델이 퇴역했으면 자동으로 다른 모델로.
+
+    회원님 22차: 404 "This model models/gemini-2.5-flash is no longer available to
+    new users." 모델 이름을 박아 두면 구글이 퇴역시키는 날 통째로 멈춘다.
+    """
+    from . import gemini_models  # noqa: PLC0415
+
+    return gemini_models.post_url(url, payload, key, timeout=timeout)
+
+
+
 class ScriptError(RuntimeError):
     pass
 
@@ -500,7 +512,7 @@ def split_script_sections_ai(text: str, model: str = "gemini-2.5-flash",
     payload = {"contents": [{"parts": [{"text": SECTION_SPLIT_PROMPT.format(
         text=(text or "").strip()[:12000])}]}],
         "generationConfig": {"responseMimeType": "application/json"}}
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _post_ai(url, payload, key)
     try:
         out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
         secs = [{"title": str(s.get("title") or "")[:60],
@@ -538,7 +550,7 @@ class GeminiScript:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"},
         }
-        data = _http_post_json(url, payload, {"x-goog-api-key": self.api_key})
+        data = _post_ai(url, payload, self.api_key)
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError) as e:
@@ -567,7 +579,7 @@ def summarize_product(text: str, model: str = "gemini-2.5-flash", api_key=None) 
     payload = {"contents": [{"parts": [{"text": PRODUCT_SUMMARY_PROMPT.format(
         text=text.strip()[:4000])}]}],
         "generationConfig": {"responseMimeType": "application/json"}}
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _post_ai(url, payload, key)
     try:
         out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
     except (KeyError, IndexError, json.JSONDecodeError) as e:
@@ -614,7 +626,7 @@ def summarize_article(title: str, text: str, target_sec: int = 45,
         n_min=max(4, n - 2), n_max=n + 2, text=(text or "").strip()[:4000])
     payload = {"contents": [{"parts": [{"text": prompt}]}],
                "generationConfig": {"responseMimeType": "application/json"}}
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _post_ai(url, payload, key)
     try:
         out = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
         sents = [str(s).strip() for s in out.get("sentences") or [] if str(s).strip()]
@@ -673,7 +685,7 @@ def suggest_hooks(context: str, n: int = 5, model: str = "gemini-2.5-flash",
         f"{model}:generateContent"
     )
     payload = {"contents": [{"parts": [{"text": HOOK_PROMPT.format(context=context, n=n)}]}]}
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _post_ai(url, payload, key)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as e:
@@ -731,7 +743,7 @@ def suggest_highlights(subs: list, target_sec: int = 30,
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-    data = _http_post_json(url, payload, {"x-goog-api-key": key}, timeout=45.0)
+    data = _post_ai(url, payload, key, timeout=45.0)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as e:
@@ -797,7 +809,7 @@ def refine_subtitles(texts: list, context: str = "",
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-    data = _http_post_json(url, payload, {"x-goog-api-key": key}, timeout=45.0)
+    data = _post_ai(url, payload, key, timeout=45.0)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as e:
@@ -926,7 +938,7 @@ def suggest_thumbnail_copy(context: str, n: int = 4,
         "contents": [{"parts": [{"text": THUMB_PROMPT.format(context=context, n=n)}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _post_ai(url, payload, key)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as e:
@@ -1042,7 +1054,7 @@ def suggest_from_video(frames_b64: list, transcript: str = "", topic: str = "",
            f"{model}:generateContent")
     payload = {"contents": [{"parts": parts}],
                "generationConfig": {"responseMimeType": "application/json"}}
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _post_ai(url, payload, key)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         out = json.loads(text)
@@ -1206,7 +1218,7 @@ def suggest_upload_kit(frames_b64: list, transcript: str = "", *, duration_s: in
            f"{model}:generateContent")
     payload = {"contents": [{"parts": parts}],
                "generationConfig": {"responseMimeType": "application/json"}}
-    data = _http_post_json(url, payload, {"x-goog-api-key": key})
+    data = _post_ai(url, payload, key)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         out = json.loads(text)

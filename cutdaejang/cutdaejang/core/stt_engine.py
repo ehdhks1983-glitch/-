@@ -13,6 +13,19 @@
 
 from __future__ import annotations
 
+
+def _post_ai(url: str, payload: dict, key: str, timeout: float = 120.0) -> dict:
+    """🔁 제미나이 호출 (v1.27.1, 목록 53) — 모델이 퇴역했으면 자동으로 다른 모델로.
+
+    회원님 22차: 404 "This model models/gemini-2.5-flash is no longer available to
+    new users." 모델 이름을 박아 두면 구글이 퇴역시키는 날 통째로 멈춘다.
+    """
+    from . import gemini_models  # noqa: PLC0415
+
+    return gemini_models.post_url(url, payload, key, timeout=timeout)
+
+
+
 import base64
 import hashlib
 import json
@@ -140,18 +153,14 @@ class GeminiSTT:
         }
         if "2.5" in self.model:  # 씽킹이 짧은 받아쓰기 출력을 통째로 삼키는 것 방지 (v0.50.2)
             payload["generationConfig"] = {"thinkingConfig": {"thinkingBudget": 0}}
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", "replace")[:300]
-            raise STTError(f"Gemini STT 오류 {e.code}: {body}") from e
+            # v1.27.1 (목록 53): 모델이 퇴역했으면 자동으로 다른 모델로 (직접
+            # urlopen 하던 것을 공용 입구로 — 그래야 모델 교체가 여기도 걸린다)
+            data = _post_ai(url, payload, self.api_key, timeout=120.0)
+        except Exception as e:  # noqa: BLE001
+            code = getattr(e, "status", "") or getattr(e, "code", "")
+            body = (getattr(e, "text", "") or str(e))[:300]
+            raise STTError(f"Gemini STT 오류 {code}: {body}") from e
         cands = data.get("candidates") or []
         parts = ((cands[0].get("content") or {}).get("parts") or []) if cands else []
         text = " ".join(p.get("text", "") for p in parts if p.get("text")).strip()

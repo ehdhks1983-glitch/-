@@ -174,3 +174,60 @@ def test_html_is_still_well_formed():
         assert len(re.findall(rf"<{tag}[\s>]", HTML)) == len(
             re.findall(rf"</{tag}>", HTML)), f"<{tag}> 짝이 안 맞음"
     assert "(v1.27.1)" in HTML
+
+
+# ══ 53번: 구글이 모델을 퇴역시켜도 안 멈추게 ═══════════════════════
+# 회원님 22차 로그:
+#   404 "This model models/gemini-2.5-flash is no longer available to new users."
+# 이름이 11곳에 박혀 있어 **새로 키를 발급한 회원 전원**이 대본·업로드 키트·요약·
+# 자막 다듬기·음성 인식을 통째로 못 썼다 (크레딧과 무관).
+def test_no_hardcoded_text_model_left_in_call_sites():
+    """글 모델 호출은 전부 자동 선택 입구를 거쳐야 한다."""
+    for name in ("script_generator.py", "stt_engine.py"):
+        src = (ROOT / "cutdaejang/core" / name).read_text(encoding="utf-8")
+        body = src.split("def _post_ai(")[1].split("\n\n\n")[0]
+        assert "gemini_models.post_url" in body, f"{name}가 자동 선택을 안 거침"
+        # 직접 POST 하던 경로가 남아 있으면 그 자리만 또 퇴역에 걸린다
+        assert "urllib.request.urlopen(req" not in src.split("class OpenAISTT")[0] \
+            or name != "stt_engine.py"
+
+
+def test_model_resolver_prefers_available_and_skips_gone():
+    from cutdaejang.core import gemini_models as gm
+
+    gm._avail_cache.clear(); gm._resolved.clear(); gm._gone.clear()
+    gm._avail_cache["TESTKEY1"] = ["gemini-2.5-flash", "gemini-flash-latest"]
+    # 설정에 적힌 게 실제로 있으면 그대로 쓴다
+    assert gm.resolve_text("gemini-2.5-flash", "xxTESTKEY1") == "gemini-2.5-flash"
+    # 퇴역 표시가 되면 다른 것으로 넘어간다
+    gm.mark_gone("gemini-2.5-flash")
+    assert gm.resolve_text("gemini-2.5-flash", "xxTESTKEY1") == "gemini-flash-latest"
+    gm._avail_cache.clear(); gm._resolved.clear(); gm._gone.clear()
+
+
+def test_model_resolver_can_pick_a_model_it_has_never_heard_of():
+    """🔑 핵심 — 구글이 «gemini-9-flash» 같은 걸 내놔도 재빌드 없이 굴러가야 한다."""
+    from cutdaejang.core import gemini_models as gm
+
+    gm._avail_cache.clear(); gm._resolved.clear(); gm._gone.clear()
+    gm._avail_cache["TESTKEY2"] = ["gemini-9-pro", "gemini-9-flash-turbo",
+                                   "gemini-2.5-flash-preview-tts", "some-image-model"]
+    got = gm.resolve_text("gemini-2.5-flash", "xxTESTKEY2")
+    assert got == "gemini-9-flash-turbo", got     # flash 우선 + 최신 버전 우선
+    gm._avail_cache.clear(); gm._resolved.clear(); gm._gone.clear()
+
+
+def test_model_gone_is_not_confused_with_credit_problems():
+    """선불 크레딧 소진(429)을 모델 문제로 오인하면 엉뚱한 모델로 헤맨다."""
+    from cutdaejang.core import gemini_models as gm
+
+    assert gm.is_model_gone("This model models/gemini-2.5-flash is no longer available")
+    assert gm.is_model_gone('"code": 404, "status": "NOT_FOUND"')
+    assert not gm.is_model_gone("Your prepayment credits are depleted.")
+    assert not gm.is_model_gone("You exceeded your current quota")
+
+
+def test_edit_log_records_quality_so_slow_jobs_are_explainable():
+    """🪵 51번 — 화질을 안 남겨 두어 «왜 40분 걸렸나»를 로그로 못 되짚었다."""
+    src = (ROOT / "cutdaejang/gui/webui.py").read_text(encoding="utf-8")
+    assert '"편집 시작: %s (화질=%s, 비율=%s' in src
