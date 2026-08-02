@@ -108,12 +108,75 @@ def test_punctuationless_script_is_left_alone():
     assert em.group_sentence_units(lines) == [[0], [1], [2], [3]]
 
 
+def test_ai_generate_path_also_groups_sentences():
+    """🔴 v1.24의 더 큰 구멍: 문장 묶기가 **편집 모드에만** 들어가 있었다.
+
+    회원님이 쇼핑·블로그 쇼츠를 만드는 「AI 영상 만들기」는 orchestrator를 타는데,
+    거기서는 줄마다 따로 합성하고 build_spec이 줄 사이에 무조건 간격을 넣었다.
+    """
+    src = (ROOT / "cutdaejang/core/orchestrator.py").read_text(encoding="utf-8")
+    assert "edit_mode.group_sentence_units(tts_texts)" in src
+    assert "edit_mode.split_clip_by_chars(" in src
+    assert "joins=narr_joins" in src
+    # 분할이 실패해도 그 문장만 예전 방식으로 돌아가 영상이 안 깨진다
+    body = src.split("units = edit_mode.group_sentence_units")[1][:2000]
+    assert "narr_joins.extend([False] * len(u))" in body
+
+
+def test_build_spec_zero_gap_where_joined(tmp_path):
+    """붙이기로 한 자리는 간격 0, 나머지는 그대로 — 길이 계산도 맞아야 한다."""
+    from cutdaejang.core import timeline_calculator as tc
+    from cutdaejang.spec import Background, Style
+    from cutdaejang.utils import ffmpeg as ff
+
+    paths = []
+    for i in range(4):
+        p = tmp_path / f"c{i}.wav"
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+                "-i", "sine=frequency=440:duration=1.0", str(p)])
+        paths.append(str(p))
+    sents = ["첫 줄이고요", "이어지는 둘째 줄입니다.", "셋째 문장이에요.", "넷째 문장입니다."]
+    bg = Background(type="color", color="#101020")
+
+    def gaps(sp):
+        return [sp.audio[i + 1].start_us - sp.audio[i].end_us
+                for i in range(len(sp.audio) - 1)]
+
+    plain = tc.build_spec(sents, paths, bg, Style(),
+                          opts=tc.TimelineOptions(gap_us=220_000))
+    assert gaps(plain) == [220_000] * 3          # 예전 동작 그대로
+
+    j0 = tc.build_spec(sents, paths, bg, Style(),
+                       opts=tc.TimelineOptions(gap_us=220_000,
+                                               joins=[True, False, False]))
+    assert gaps(j0) == [0, 220_000, 220_000]
+    assert j0.duration_us == plain.duration_us - 220_000
+
+    # 마지막 경계를 붙여도 전체 길이가 어긋나지 않는다 (tail 계산 주의)
+    jlast = tc.build_spec(sents, paths, bg, Style(),
+                          opts=tc.TimelineOptions(gap_us=220_000,
+                                                  joins=[False, False, True]))
+    assert gaps(jlast) == [220_000, 220_000, 0]
+    assert jlast.duration_us == plain.duration_us - 220_000
+
+    # ⏱ 길이 맞추기는 남은 경계로만 늘린다 — 붙인 자리는 안 벌어진다
+    paced = tc.build_spec(sents, paths, bg, Style(),
+                          opts=tc.TimelineOptions(gap_us=220_000,
+                                                  pace_to_us=8_000_000,
+                                                  joins=[True, False, False]))
+    g = gaps(paced)
+    assert g[0] == 0
+    assert g[1] == g[2] > 220_000
+    assert abs(paced.duration_us - 8_000_000) < 300_000
+
+
 def test_sentence_gap_default_is_300ms():
     """문장 사이 기본 쉼 — 350ms는 뚝뚝 끊겨 들려 300ms로 줄였다."""
     src = (ROOT / "cutdaejang/core/edit_mode.py").read_text(encoding="utf-8")
     assert "natural_gap = 300_000 if gap_us is None" in src
     assert "natural_gap = 350_000" not in src
-    assert config.DEFAULTS["audio"]["sentence_gap_ms"] == 300
+    # 설정 파일에 안 쓰이는 값을 만들지 않았는지 — 읽는 코드가 없으면 없어야 한다
+    assert "sentence_gap_ms" not in config.DEFAULTS["audio"]
 
 
 def test_joins_apply_to_the_main_path_too(tmp_path):

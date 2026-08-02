@@ -19,7 +19,7 @@ from typing import Callable, List, Optional
 
 from .. import config, presets
 from ..spec import Background, Bgm, MainVideo, Style
-from . import background_generator, render_engine, timeline_calculator, tts_engine
+from . import background_generator, edit_mode, render_engine, timeline_calculator, tts_engine
 from .render_engine import RenderResult
 from .render_engine.ffmpeg_composer import RenderOptions
 from .script_generator import Script, ScriptParseError, split_long_sentences
@@ -280,8 +280,14 @@ def run_job(
         # 색 마크업([노랑]…[/])은 자막 전용 — 목소리가 읽지 않게 벗겨서 합성 (v0.61)
         tts_texts = [re.sub(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]", "", s).strip() or "네"
                      for s in script.sentences]
-        audio_paths, used_provider, fallback_note = tts_engine.synth_with_fallback(
-            tts_texts,
+        # 🔗 v1.27 (목록 44): 한 문장이 자막 두 줄로 쪼개져 있으면 줄마다 따로
+        # 합성 + 줄 사이 무음이라 문장 한가운데가 끊겨 들렸다. v1.24에서 편집 모드에만
+        # 넣었던 "문장 단위로 한 호흡에 합성 → 글자수 비례로 줄별 분할"을 회원님이
+        # 쇼핑·블로그 쇼츠를 만드는 이 경로에도 적용한다.
+        units = edit_mode.group_sentence_units(tts_texts)
+        unit_texts = [" ".join(tts_texts[i] for i in u) for u in units]
+        clips_u, used_provider, fallback_note = tts_engine.synth_with_fallback(
+            unit_texts,
             chain=list(opts.tts_chain),
             cache_root=Path(workdir_root) / "cache" / "tts",
             settings=settings,
@@ -290,6 +296,27 @@ def run_job(
             on_progress=lambda i, n: report("tts", i / n),
             continuity=True,
         )
+        audio_paths, narr_joins = [], []
+        for u, uc in zip(units, clips_u):
+            parts = (edit_mode.split_clip_by_chars(
+                uc, [len(tts_texts[i]) for i in u],
+                job_dir / "narr_split") if len(u) > 1 else [])
+            if len(u) > 1 and len(parts) == len(u):
+                audio_paths.extend(parts)
+                narr_joins.extend([True] * (len(u) - 1) + [False])
+            else:  # 분할 실패 → 그 문장만 예전 방식(줄별 재합성)으로 폴백
+                if len(u) > 1:
+                    fb, _fu, _fn = tts_engine.synth_with_fallback(
+                        [tts_texts[i] for i in u], chain=list(opts.tts_chain),
+                        cache_root=Path(workdir_root) / "cache" / "tts",
+                        settings=settings, voice=opts.voice)
+                    audio_paths.extend(fb)
+                else:
+                    audio_paths.append(uc)
+                narr_joins.extend([False] * len(u))
+        narr_joins = narr_joins[: max(0, len(audio_paths) - 1)]
+        if any(narr_joins):
+            note(f"🔗 같은 문장으로 이어지는 {sum(narr_joins)}곳을 한 호흡으로 붙였어요")
         result.tts_provider = used_provider
         result.fallback_note = fallback_note
 
@@ -332,6 +359,7 @@ def run_job(
             hook=opts.hook or script.title,  # 훅 미지정 시 대본 제목을 상단 제목으로
             opts=timeline_calculator.TimelineOptions(
                 gap_us=settings["audio"]["gap_ms"] * 1000,
+                joins=narr_joins,               # 🔗 같은 문장은 간격 0 (v1.27)
                 pace_to_us=max(0, int(opts.pace_sec)) * 1_000_000,  # ⏱ 내 대본 길이 맞춤 (v0.63)
             ),
         )

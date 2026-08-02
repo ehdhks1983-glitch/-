@@ -4367,11 +4367,18 @@ class _Handler(BaseHTTPRequestHandler):
 
         if what == "voice":
             sj = job_dir / "script.json"
-            if not sj.is_file() or not old_params:
+            if not sj.is_file():
                 self._send_json(
-                    {"error": "이 영상은 «목소리만 다시»를 지원하지 않아요 — AI로 만든 "
-                              "영상에서만 가능해요 (편집·구간 영상은 [✂ 이 영상 편집]을 "
-                              "써주세요)"}, 404)
+                    {"error": "이 영상은 «목소리만 다시»를 지원하지 않아요 — 대본으로 "
+                              "만든 영상(AI 영상 만들기)에서만 가능해요. 직접 찍은 영상은 "
+                              "[✂ 이 영상 편집]을 써주세요"}, 404)
+                return
+            if not old_params:
+                # 이 업데이트 이전에 만든 작업은 입력값이 안 남아 있다 (v1.27부터 저장)
+                self._send_json(
+                    {"error": "이 영상은 만들 때 쓴 설정이 저장돼 있지 않아 «목소리만 "
+                              "다시»를 할 수 없어요 — 이 업데이트 이후에 만든 영상부터 "
+                              "가능해요. (꾸미기만 다시는 지금도 됩니다)"}, 404)
                 return
             try:
                 script = Script.from_json_text(sj.read_text(encoding="utf-8"))
