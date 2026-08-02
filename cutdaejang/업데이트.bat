@@ -85,7 +85,9 @@ if errorlevel 1 (
     exit /b 1
 )
 if exist "!SRC!\windows" xcopy "!SRC!\windows" ".\windows" /E /Y /I >nul
-if exist "!SRC!\docs" xcopy "!SRC!\docs" ".\docs" /E /Y /I >nul
+rem docs는 고객용 안내(카페가이드)만 — 내부 기획·오류 목록은 배포하지 않는다 (v1.25)
+if exist "!SRC!\docs\카페가이드.txt" xcopy "!SRC!\docs\카페가이드.txt" ".\docs\" /Y /I >nul
+if exist "!SRC!\판매문서" xcopy "!SRC!\판매문서" ".\판매문서" /E /Y /I >nul
 rem [주의] 업데이트.bat(이 파일)는 지금 실행 중이라 덮어쓰면 실행이 깨질 수 있어 제외합니다.
 for %%F in (README.md 실행가이드.md pyproject.toml .gitignore .gitattributes) do (
     if exist "!SRC!\%%F" copy /Y "!SRC!\%%F" ".\%%F" >nul 2>nul

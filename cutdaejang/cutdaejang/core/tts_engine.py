@@ -83,6 +83,11 @@ def _http_post_json(url: str, payload: dict, headers: dict, timeout: float = 120
         except json.JSONDecodeError:
             parsed = None
         raise TTSHTTPError(e.code, parsed, text) from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # 🌐 v1.25 (목록 39-6): 인터넷 끊김·DNS 실패·읽기 타임아웃은 지금까지
+        # 어느 except에도 안 걸려 폴백 체인(제미나이→오픈AI→내장 음성)이 통째로
+        # 무산되고 영문 원문만 떴다. 재시도 가능한 TTSError로 바꿔 흘려보낸다.
+        raise TTSError(f"인터넷 연결 문제로 요청하지 못했어요: {str(e)[:160]}") from e
 
 
 def parse_retry_delay_s(err: TTSHTTPError) -> Optional[float]:

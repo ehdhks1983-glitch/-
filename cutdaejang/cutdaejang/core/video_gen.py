@@ -94,9 +94,14 @@ def _download(url: str, dest: Path, headers: Optional[dict] = None,
 
 
 def clip_cache_path(workdir, provider: str, model: str, prompt: str,
-                    duration_s: int, resolution: str) -> Path:
+                    duration_s: int, resolution: str, aspect: str = "16:9") -> Path:
+    """캐시 키 — v1.25부터 **비율(aspect)까지** 포함한다 (목록 39-7).
+
+    비율이 키에 없으면 세로로 고쳐 만들어도 같은 프롬프트의 옛 가로 클립이
+    그대로 재사용돼, 고쳐도 고쳐지지 않는 것처럼 보인다.
+    """
     key = json.dumps([provider, model, (prompt or "").strip(),
-                      int(duration_s), resolution], ensure_ascii=False)
+                      int(duration_s), resolution, aspect], ensure_ascii=False)
     name = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16] + ".mp4"
     return Path(workdir) / "ai_clips" / name
 
@@ -206,7 +211,8 @@ def generate_clip(prompt: str, provider: str, api_key: str, workdir,
         raise VideoGenError("어떤 장면인지 프롬프트를 적어주세요")
     if not api_key:
         raise VideoGenError("API 키가 없어요 — 🔑 API 연동에서 넣어주세요")
-    dest = clip_cache_path(workdir, provider, model, prompt, duration_s, resolution)
+    dest = clip_cache_path(workdir, provider, model, prompt, duration_s,
+                           resolution, aspect)
     if dest.is_file() and dest.stat().st_size > 30_000:
         say("♻ 같은 프롬프트로 만들어 둔 클립을 재사용해요 (과금 없음)")
         return str(dest), True

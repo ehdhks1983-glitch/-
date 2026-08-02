@@ -18,7 +18,7 @@ from cutdaejang.tools import fetch_web, product_page
 
 
 def test_version():
-    assert __version__ == "1.24.0"
+    assert __version__ == "1.25.0"
 
 
 # ── ③ 외부 링크 ────────────────────────────────────────────────

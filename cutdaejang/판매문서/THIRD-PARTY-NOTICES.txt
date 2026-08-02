@@ -1,0 +1,33 @@
+컷대장 — 제3자 소프트웨어·자산 고지
+
+이 프로그램은 아래 오픈소스·무료 자산을 사용합니다.
+
+■ 동봉되어 배포되는 것
+· Pretendard (글씨체)
+  Copyright (c) 2021 Kil Hyung-jin (https://github.com/orioncactus/pretendard)
+  SIL Open Font License 1.1 — 전문은
+  cutdaejang\resources\fonts\OFL-LICENSE.txt 에 함께 들어 있습니다.
+
+■ 사용자 PC에서 직접 내려받는 것 (프로그램에 동봉되지 않음)
+· FFmpeg — 영상·소리 처리 엔진. https://ffmpeg.org
+  windows\1_설치.bat 이 BtbN 빌드(GPL)를 내려받습니다.
+  라이선스: GNU GPL v3 (해당 빌드 기준). 소스는 위 사이트와
+  https://github.com/BtbN/FFmpeg-Builds 에서 받을 수 있습니다.
+· Python — https://www.python.org (PSF License)
+· 무료 글씨체 5종 (Black Han Sans, Jua, Do Hyeon, Gugi, Nanum Pen Script)
+  Google Fonts, SIL Open Font License 1.1
+· 무료 BGM — Kevin MacLeod (incompetech.com), CC BY 4.0
+  자세한 사용법은 「무료음원_크레딧_사용법.txt」 참고
+· faster-whisper (음성 인식, 선택 설치) — MIT License
+
+■ 프로그램이 호출하는 외부 서비스 (계정·요금은 사용자 부담)
+· Google Gemini / Veo   · ElevenLabs   · fal.ai
+· 쿠팡 파트너스 OpenAPI   · 네이버 쇼핑커넥트
+
+■ 효과음
+컷대장이 FFmpeg로 직접 합성합니다 (제3자 자산 아님).
+
+■ 「설치포함 풀버전」을 받으신 경우
+zip 안에 Python과 FFmpeg 실행 파일이 함께 들어 있습니다. 각각 PSF License와
+GPL v3를 따르며, 해당 라이선스 전문과 소스 취득 경로는 위 주소에서 확인하실 수
+있습니다. 요청하시면 판매자가 해당 빌드의 소스 취득 방법을 안내해 드립니다.

@@ -1649,6 +1649,29 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                  errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1500:]}"])
 
 
+def _resolve_random_bgm(params: dict) -> None:
+    """🎵 「랜덤」을 **시작 시점에 실제 곡으로 확정** (v1.25, 목록 39-5).
+
+    랜덤인 채로 두면 렌더는 곡을 무작위로 골라 쓰는데 크레딧을 만드는 쪽은
+    "random"만 보고 빈 문구를 돌려줘, 무료 음원(CC BY)의 **유일한 조건인
+    저작자표시가 통째로 빠졌다.** 여기서 곡을 정해 두면 영상·크레딧·업로드 키트가
+    모두 같은 곡을 가리킨다.
+    """
+    if str(params.get("bgm") or "") != "random":
+        return
+    try:
+        import random  # noqa: PLC0415
+
+        from ..core.orchestrator import _BGM_EXTS, DEFAULT_BGM_DIR  # noqa: PLC0415
+
+        files = sorted(p for p in DEFAULT_BGM_DIR.glob("*")
+                       if p.suffix.lower() in _BGM_EXTS and p.is_file())
+        if files:
+            params["bgm"] = random.choice(files).name
+    except Exception:  # noqa: BLE001 — 못 고르면 기존 동작(랜덤) 그대로
+        pass
+
+
 def _bgm_credit(bgm_name: str) -> str:
     """쓴 BGM의 저작자표시(CC BY) 문구 — 무료 음원이면 자동으로 설명란용 크레딧 생성."""
     if not bgm_name or bgm_name == "random":
@@ -3044,6 +3067,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "잘못된 요청"}, 400)
             return
 
+        _resolve_random_bgm(params)   # 🎵 v1.25 (목록 39-5): 랜덤 → 실제 곡으로 확정
         workdir = self.server.workdir  # type: ignore[attr-defined]
         if path == "/api/generate":
             topic = (params.get("topic") or "").strip()
@@ -4945,7 +4969,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.24.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.25.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -8886,7 +8910,10 @@ async function aiClipGo(ev){
       + '같은 내용을 다시 만들면 과금 없이 재사용돼요.')) return;
   const vi = _aiClipVi, btn = _aiClipBtn;
   const d = await (await fetch('/api/gen_clip', {method:'POST', body: JSON.stringify(
-    {prompt: prompt, provider: prov, duration_s: dur, aspect: '16:9',
+    {prompt: prompt, provider: prov, duration_s: dur,
+     // 🎞 v1.25 (목록 39-7): 구간이 세로 쇼츠면 세로로 — 가로 클립을 만들어
+     // 화면 1/3만 채우고 위아래가 블러로 덮이던 낭비를 막는다 (유료 호출)
+     aspect: (pick('secLayout') === 'shorts' ? '9:16' : '16:9'),
      gemini_key: key, save_key: true})})).json();
   if(d.error){ alert(d.error); return; }
   aiClipClose();
