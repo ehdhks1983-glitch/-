@@ -282,6 +282,7 @@ def render_edited(
     speed: float = 1.0,                # 저장(렌더) 속도 배수 (1.25/1.5/2배 등)
     speed_mode: str = "all",           # all=화면+소리 | voice=말소리만 | video=화면만
     quality: str = "standard",         # 화질 등급: standard | high | ultra(4K)
+    desub=None,                        # 🧹 원본 박힌 자막 지우기 (v1.28) — (y0, y1) 또는 None
     denoise=False,                     # 잡음 제거: False | True(중) | 'low'|'mid'|'high'
     narration_wav: Optional[str] = None,  # AI 내레이션 트랙(있으면 원본 소리는 덕킹)
     orig_audio: str = "keep",          # 원본 소리: keep(그대로) | low(작게) | mute(무음)
@@ -356,11 +357,23 @@ def render_edited(
     if tone_f:  # 🎨 화면 톤 (v0.56) — 자막 굽기 직전 (글자는 원색 유지)
         subs_arg = f"{tone_f},{subs_arg}"
     sharp = f",{_SHARPEN[sharpen]}" if sharpen else ""  # 전경만 선명화(자막·블러배경은 제외)
+    # 🧹 원본에 박힌 자막 지우기 (v1.28, 목록 54) — **화면 크기를 바꾸기 전에** 가린다.
+    # 찾은 좌표가 원본 픽셀 기준이라 scale 뒤에 걸면 엉뚱한 자리를 지운다.
+    src_tag, pre_vf = "[0:v]", ""
+    if desub:
+        from . import desub as _desub  # noqa: PLC0415
+
+        dl = _desub.delogo_filter(tuple(desub), src_w, src_h)
+        if dl:
+            pre_vf = f"[0:v]{dl}[dsv];"
+            src_tag = "[dsv]"
+            log.info("🧹 원본 자막 가림: %s", dl)
+
     if layout in _FIXED_CANVAS:
         # 고정 캔버스(세로 쇼츠·가로 16:9): 블러 커버 배경 + 원본 비율 유지 전경 오버레이
         # (가로영상→세로, 세로영상→가로 모두 잘림 없이 자연스럽게)
         vf = (
-            f"[0:v]split=2[bg][fg];"
+            f"{pre_vf}{src_tag}split=2[bg][fg];"
             f"[bg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=increase:flags=lanczos,"
             f"crop={canvas.w}:{canvas.h},boxblur=24:2,eq=brightness=-0.1[bgb];"
             f"[fg]scale={canvas.w}:{canvas.h}:force_original_aspect_ratio=decrease:flags=lanczos{sharp}[fgs];"
@@ -368,7 +381,7 @@ def render_edited(
         )
         visual = "[comp]"
     else:
-        vf = f"[0:v]scale={canvas.w}:{canvas.h}:flags=lanczos{sharp}[base];"
+        vf = f"{pre_vf}{src_tag}scale={canvas.w}:{canvas.h}:flags=lanczos{sharp}[base];"
         visual = "[base]"
 
     # 화면만 배속은 자막을 굽기 전에 적용해야 자막이 원래 음성 시각을 유지한다.
@@ -1286,6 +1299,7 @@ def render_from_analysis(
     speed: float = 1.0,
     speed_mode: str = "all",
     quality: str = "standard",
+    desub=None,                        # 🧹 원본 자막 지우기 (v1.28)
     denoise=False,
     narration_wav: Optional[str] = None,
     orig_audio: str = "keep",
@@ -1308,7 +1322,8 @@ def render_from_analysis(
             save_srt(subtitles, Path(out_path).parent / "subtitles.srt")
         render_edited(
             cut_video, subtitles, out_path, style, layout=layout, hook=hook, opts=opts,
-            speed=speed, speed_mode=speed_mode, quality=quality, denoise=denoise,
+            speed=speed, speed_mode=speed_mode, quality=quality, desub=desub,
+            denoise=denoise,
             narration_wav=narration_wav, orig_audio=orig_audio,
             bgm_path=bgm_path, bgm_db=bgm_db, bgm_duck=bgm_duck, watermark=watermark,
             progress_cb=progress_cb,

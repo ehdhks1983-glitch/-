@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_version():
-    assert __version__ == "1.27.1"
+    assert __version__ == "1.28.0"
 
 
 # ══ ① 🔗 나레이션 끊김 — 마침표가 있어도 이어지는 말 ═══════════════
@@ -436,4 +436,4 @@ def test_html_is_still_well_formed():
     for tag in ("div", "details", "select", "button"):
         assert len(re.findall(rf"<{tag}[\s>]", html)) == len(
             re.findall(rf"</{tag}>", html)), f"<{tag}> 짝이 안 맞음"
-    assert "(v1.27." in html          # 버전은 v1.27.1에서 올랐다
+    assert "(v1.27." in html          # 버전은 v1.28.0에서 올랐다

@@ -1,4 +1,4 @@
-"""v1.27.1 — 목록 50번(되돌아가기·초기화) + 51번(4K가 오래 걸리는 걸 미리 알리기).
+"""v1.28.0 — 목록 50번(되돌아가기·초기화) + 51번(4K가 오래 걸리는 걸 미리 알리기).
 
 회원님 22차(2026-08-02, 블로그 카드 스샷):
 > "처음으로 버튼이 너무 눈에 안 들어와 찾기가 힘들어. 초기화 버튼도 안 보이고"
@@ -22,7 +22,7 @@ HTML = webui._apply_links(webui._HTML)
 
 
 def test_version():
-    assert __version__ == "1.27.1"
+    assert __version__ == "1.28.0"
 
 
 # ── 🏠 따라오는 되돌아가기 바 ──────────────────────────────────
@@ -173,7 +173,7 @@ def test_html_is_still_well_formed():
     for tag in ("div", "details", "select", "button"):
         assert len(re.findall(rf"<{tag}[\s>]", HTML)) == len(
             re.findall(rf"</{tag}>", HTML)), f"<{tag}> 짝이 안 맞음"
-    assert "(v1.27.1)" in HTML
+    assert "(v1.28.0)" in HTML
 
 
 # ══ 53번: 구글이 모델을 퇴역시켜도 안 멈추게 ═══════════════════════

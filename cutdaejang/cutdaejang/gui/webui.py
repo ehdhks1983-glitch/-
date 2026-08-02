@@ -812,6 +812,31 @@ def _run_restyle(job_id: str, title: str, spec, params: dict, workdir: str) -> N
                  errors=[str(e), f"[원본 오류] {traceback.format_exc()[-1200:]}"])
 
 
+def _resolve_desub(ep: dict, video: str, job_id: str):
+    """🧹 원본에 박힌 자막을 지울 세로 범위 (v1.28, 목록 54) — 끄면 None.
+
+    «여러 쇼츠로 나누기» 경로에서도 똑같이 써야 해서 함수로 뺐다
+    (한쪽에만 두면 다른 경로에서 이름을 못 찾아 터진다).
+    """
+    if not ep.get("desub"):
+        return None
+    from ..core import desub as _desub  # noqa: PLC0415
+
+    mode = str(ep.get("desub_mode") or "auto")
+    manual = None
+    if mode == "manual":
+        try:
+            manual = (int(ep.get("desub_y0") or 0), int(ep.get("desub_y1") or 0))
+        except (TypeError, ValueError):
+            manual = None
+    _set_job(job_id, note="🧹 원본 자막 위치를 찾는 중…")
+    band, note = _desub.resolve_band(video, mode, manual)
+    logging.getLogger("cutdaejang").info("🧹 자막 지우기: %s", note)
+    prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+    _set_job(job_id, tts_warn=f"{prev} · {note}" if prev else note)
+    return band
+
+
 def _edit_summary(analysis) -> str:
     return (
         f"원본 {analysis.original_us/1e6:.1f}초 → {analysis.cut_us/1e6:.1f}초 "
@@ -888,7 +913,7 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                 Path(workdir) / "cache" / "stt",
                 language=params.get("language", "ko"),
             )
-        # 🪵 v1.27.1 (목록 51): 화질·비율을 안 남겨 두어 "왜 40분 걸렸나"를 로그로
+        # 🪵 v1.28.0 (목록 51): 화질·비율을 안 남겨 두어 "왜 40분 걸렸나"를 로그로
         # 되짚을 수 없었다. 오래 걸리는 설정이 바로 보이도록 같이 적는다.
         logging.getLogger("cutdaejang").info(
             "편집 시작: %s (화질=%s, 비율=%s, 내레이션=%s, 녹음=%s, 자막만=%s, 완전자동=%s)",
@@ -1540,10 +1565,11 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             else:
                 logging.getLogger("cutdaejang").warning(
                     "워터마크 파일을 찾지 못해 없이 렌더: %s", ep["wm_path"])
+        desub_band = _resolve_desub(ep, cut_video, job_id)
         result = edit_mode.render_from_analysis(
             cut_video, subs, out, style=style,
             layout=layout, hook=hook, speed=speed, speed_mode=speed_mode,
-            quality=quality, denoise=denoise,
+            quality=quality, desub=desub_band, denoise=denoise,
             narration_wav=narration_wav,
             orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
             bgm_duck=bool(settings["bgm"].get("duck", True)),
@@ -1729,7 +1755,8 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                 r = edit_mode.render_from_analysis(
                     clip_video, clip_subs, out, style=style, layout=layout,
                     hook=hook, speed=speed, speed_mode=speed_mode,
-                    quality=quality, denoise=denoise,
+                    quality=quality, desub=_resolve_desub(ep, clip_video, job_id),
+                    denoise=denoise,
                     orig_audio=orig_audio, bgm_path=bgm_path, bgm_db=bgm_db,
                     bgm_duck=bool(settings["bgm"].get("duck", True)),
                     watermark=watermark,
@@ -4332,6 +4359,8 @@ class _Handler(BaseHTTPRequestHandler):
                                  "fail": r["fail"], "fonts": ffonts.installed()})
             except Exception as e:  # noqa: BLE001
                 self._send_json({"error": f"글씨체 받기 실패: {str(e)[:200]}"}, 500)
+        elif path == "/api/desub_preview":   # 🧹 원본 자막 어디를 지울지 (v1.28)
+            self._desub_preview(params, workdir)
         elif path == "/api/retouch":     # ✏ 부분 수정 (v1.27)
             self._retouch(params, workdir)
         elif path == "/api/regenerate":
@@ -4342,6 +4371,55 @@ class _Handler(BaseHTTPRequestHandler):
             self._open_folder(params, workdir)
         else:
             self._send_json({"error": "not found"}, 404)
+
+    # ---------- 🧹 원본 자막 지우기 미리보기 (v1.28, 목록 54) ----------
+
+    def _desub_preview(self, params: dict, workdir: str) -> None:
+        """어디를 지울지 **눈으로 먼저 확인**시켜 준다.
+
+        초보자가 «잘못 지워진 영상»을 40분 걸려 만든 뒤에야 알게 되면 안 된다.
+        찾은 자리를 빨간 줄로 표시한 그림 한 장을 돌려준다.
+        """
+        from ..core import desub as _desub  # noqa: PLC0415
+        from ..core.video_editor import resolve_input_video  # noqa: PLC0415
+        from ..utils import ffmpeg as ff  # noqa: PLC0415
+
+        try:
+            video = resolve_input_video(str(params.get("video_path") or ""))
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 400)
+            return
+        mode = str(params.get("mode") or "auto")
+        manual = None
+        if mode == "manual":
+            try:
+                manual = (int(params.get("y0") or 0), int(params.get("y1") or 0))
+            except (TypeError, ValueError):
+                manual = None
+        band, note = _desub.resolve_band(video, mode, manual)
+        if not band:
+            self._send_json({"error": note}, 404)
+            return
+        y0, y1 = band
+        src_w, src_h = ff.probe_video_size(video)
+        out_dir = Path(workdir) / "_preview"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / "desub.png"
+        # 자막이 실제로 보이는 순간을 잡으려고 중간 지점에서 한 장
+        at = max(0.0, ff.probe_duration_us(video) / 2e6)
+        try:
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-ss", f"{at:.2f}",
+                    "-i", str(video), "-frames:v", "1", "-vf",
+                    f"drawbox=x=0:y={y0}:w={src_w}:h={y1-y0}:color=red@0.35:t=fill,"
+                    f"drawbox=x=0:y={y0}:w={src_w}:h=3:color=red@1:t=fill,"
+                    f"drawbox=x=0:y={max(0,y1-3)}:w={src_w}:h=3:color=red@1:t=fill,"
+                    f"scale=360:-2", str(out)])
+        except Exception as e:  # noqa: BLE001
+            self._send_json({"error": f"미리보기 그림을 못 만들었어요: {str(e)[:160]}"}, 500)
+            return
+        self._send_json({"ok": True, "y0": y0, "y1": y1, "height": src_h,
+                         "note": note + " — 빨간 칸이 지워질 자리예요",
+                         "url": "/preview/desub.png"})
 
     # ---------- ✏ 부분 수정 (v1.27) — 목소리·속도 / 꾸미기만 ----------
 
@@ -4772,6 +4850,20 @@ class _Handler(BaseHTTPRequestHandler):
         self._serve_file(str(p))
 
     def _serve_preview(self, name: str) -> None:
+        # 🧹 v1.28: 자막 지우기 미리보기 그림 (딱 이 파일 하나만 — 경로 조작 방지)
+        if name == "desub.png":
+            path = Path(self.server.workdir) / "_preview" / "desub.png"  # type: ignore[attr-defined]
+            if not path.is_file():
+                self._send_json({"error": "not found"}, 404)
+                return
+            body = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if not (name.endswith(".wav") and name[:-4].isalnum()):  # 캐시 해시 파일만
             self._send_json({"error": "not found"}, 404)
             return
@@ -5107,7 +5199,7 @@ _HTML = """<!doctype html>
   button:disabled { background:#2c3347; color:#6b7387; cursor:default; }
   button.ghost { background:transparent; border:1px solid #2c3347; width:auto; padding:8px 14px;
                  font-size:13px; font-weight:400; margin:0; }
-  /* 🏠 v1.27.1 (목록 50): 되돌아가기가 카드 맨 위에만 있어 스크롤을 내리면
+  /* 🏠 v1.28.0 (목록 50): 되돌아가기가 카드 맨 위에만 있어 스크롤을 내리면
      화면 밖으로 사라졌다. 맨 위에 붙어 따라오는 바로 바꿔 어디서든 보이게 한다. */
   .navbar { position:sticky; top:0; z-index:40; display:flex; align-items:center;
     gap:10px; flex-wrap:wrap; padding:10px 0; margin:-8px 0 8px;
@@ -5234,7 +5326,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.27.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.28.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5601,6 +5693,35 @@ body.easy #easyBar { display: block; }
           <option value="high">강하게</option>
         </select>
         <span class="hint">배경 잡음·히스·웅웅거림 줄이기 (목소리는 살림)</span>
+      </div>
+    </details>
+
+    <details class="opt" id="optDesub">
+      <summary>🧹 원본 자막 지우기 <span class="hint">— 영상에 이미 박혀 있는 (외국어) 자막을 지우고 우리 자막을 얹어요</span></summary>
+      <div class="chk" style="gap:8px;margin-top:4px">
+        <label style="margin:0"><input type="checkbox" id="desubChk" onchange="onDesubToggle()"> <b>원본에 박힌 자막 지우기</b></label>
+        <span class="hint">— 지운 자리에 한국어 자막이 들어가면 가장 깔끔해요</span>
+      </div>
+      <div id="desubBox" class="hidden">
+        <div class="chk" style="gap:8px;margin-top:6px;flex-wrap:wrap">
+          <span>찾는 방법</span>
+          <select id="desubModeSel" style="width:auto" onchange="onDesubToggle()">
+            <option value="auto" selected>자동으로 찾기 (권장)</option>
+            <option value="manual">내가 직접 지정</option>
+          </select>
+          <button class="ghost" style="padding:6px 10px" onclick="previewDesub(event)">👁 어디를 지우는지 보기</button>
+        </div>
+        <div class="chk hidden" id="desubManualRow" style="gap:8px;margin-top:6px;flex-wrap:wrap">
+          <span>위쪽(px)</span><input type="number" id="desubY0" style="width:110px" placeholder="예) 1080">
+          <span>아래쪽(px)</span><input type="number" id="desubY1" style="width:110px" placeholder="예) 1140">
+          <span class="hint">— [👁 보기]를 누르면 지금 값이 빨간 줄로 표시돼요</span>
+        </div>
+        <div id="desubPrev" class="hidden" style="margin-top:8px">
+          <img id="desubPrevImg" style="max-width:320px;width:100%;border-radius:8px;border:1px solid #2c3347;display:block">
+          <div class="hint" id="desubPrevNote" style="margin-top:4px"></div>
+        </div>
+        <div class="hint" style="margin-top:6px">💡 배경이 복잡한 영상은 지운 자리가 살짝 번질 수 있어요 —
+          그 위에 <b>우리 한국어 자막</b>이 덮이면 티가 거의 안 납니다.</div>
       </div>
     </details>
 
@@ -7445,7 +7566,7 @@ async function previewElevenVoice(ev){
 function pick(name){ return document.querySelector(`input[name=${name}]:checked`).value; }
 
 // ── 첫 화면(홈) ↔ 만들기 폼 전환 (v0.36 초보자 UI) ──
-// 🏠 v1.27.1 (목록 50) — 어느 카드에 있는지 + 되돌아가기 + 초기화를 한 줄에.
+// 🏠 v1.28.0 (목록 50) — 어느 카드에 있는지 + 되돌아가기 + 초기화를 한 줄에.
 const NAV_INFO = {
   gen:      ['🤖 AI 영상 만들기', 'resetGenForm'],
   edit:     ['✂️ 내 영상 편집', 'resetEditForm'],
@@ -7498,7 +7619,7 @@ function openMode(kind){
 function showHome(ev){
   if(ev) ev.preventDefault();
   window._view = 'home';
-  updateNav('home');                          // 첫 화면에서는 바를 숨긴다 (v1.27.1)
+  updateNav('home');                          // 첫 화면에서는 바를 숨긴다 (v1.28.0)
   $('homeCard').classList.remove('hidden');
   $('formCard').classList.add('hidden');
   $('editCard').classList.add('hidden');
@@ -8416,7 +8537,7 @@ function fmtClock(sec){ const m=Math.floor(sec/60), s=Math.floor(sec%60); return
 function togglePlay(ev){ if(ev&&ev.preventDefault)ev.preventDefault(); const p=$('cutPlayer'); if(!p||!p.src) return; if(p.paused) p.play(); else p.pause(); }
 function pauseCut(){ const p=$('cutPlayer'); if(p && !p.paused) p.pause(); }  // 자막 편집 시작하면 자동 정지
 function setPlayRate(){ const p=$('cutPlayer'); if(p) p.playbackRate=parseFloat($('playRate').value||'1'); }
-// 🐢 v1.27.1 (목록 51) — 회원님 블로그 영상이 40분 걸렸다. 원인은 「초고화질(4K)」.
+// 🐢 v1.28.0 (목록 51) — 회원님 블로그 영상이 40분 걸렸다. 원인은 「초고화질(4K)」.
 // 실측(개발 서버 4코어): 같은 영상이 표준 0.7분 / 4K 3.9분 = **5.7배**.
 // 코어가 적은 가정용 PC에서는 20~40분대가 나온다 → 고르는 순간 알려준다.
 const ULTRA_WARN = '🐢 4K는 표준보다 5배 이상 오래 걸려요 — 1분짜리가 PC에 따라 20~40분. '
@@ -8454,7 +8575,7 @@ document.addEventListener('change', function(e){
   if(t && t.tagName === 'SELECT' && (t.id || '').indexOf('Quality') >= 0) markUltraCost(t);
 });
 
-function fmtDur(sec){            // 초 → "45초" / "3분" / "1시간 5분" (v1.27.1)
+function fmtDur(sec){            // 초 → "45초" / "3분" / "1시간 5분" (v1.28.0)
   sec = Math.max(0, Math.round(sec));
   if(sec < 60) return sec + '초';
   const m = Math.round(sec / 60);
@@ -9637,7 +9758,7 @@ function resetGenForm(ev){
   syncDecorChips();
 }
 
-// 🧹 v1.27.1 (목록 50) — 블로그·구간 카드에는 초기화가 아예 없었다.
+// 🧹 v1.28.0 (목록 50) — 블로그·구간 카드에는 초기화가 아예 없었다.
 // 21번 때 쇼핑 카드에만 넣고 이 둘을 빠뜨렸다 (편집·생성은 ↺ 초기화가 있었음).
 function resetWeblinkCard(ev){
   if(ev) ev.preventDefault();
@@ -9990,6 +10111,10 @@ function collectTplParams(){
   return {
     layout: pick('editLayout'), auto_subtitle: $('autoSubChk').checked,
     cut_silence: $('cutSilenceChk').checked, denoise: $('denoiseSel').value,
+    desub: !!(($('desubChk')||{}).checked),                       // 🧹 v1.28
+    desub_mode: (($('desubModeSel')||{}).value)||'auto',
+    desub_y0: +((($('desubY0')||{}).value)||0),
+    desub_y1: +((($('desubY1')||{}).value)||0),
     orig_audio: $('origAudioSel').value, bgm: $('bgmEditSel').value,
     bgm_db: +$('bgmVolSel').value, hook_scale: +(($('hookSizeSel')||{}).value)||1,
     hook_style: (($('hookStyleSel')||{}).value)||'기본',
@@ -10134,6 +10259,38 @@ async function retouch(ev, what){
   $('doneBox').classList.add('hidden'); $('errBox').classList.add('hidden');
   $('reviewBox').classList.add('hidden'); $('retouchBox').classList.add('hidden');
   if(!timer) timer = setInterval(poll, 900);
+}
+
+// ── 🧹 원본 자막 지우기 (v1.28, 목록 54) ──
+function onDesubToggle(){
+  const on = !!(($('desubChk')||{}).checked);
+  const box = $('desubBox'); if(box) box.classList.toggle('hidden', !on);
+  const man = (($('desubModeSel')||{}).value) === 'manual';
+  const row = $('desubManualRow'); if(row) row.classList.toggle('hidden', !man);
+}
+async function previewDesub(ev){
+  if(ev) ev.preventDefault();
+  const v = (($('videoPath')||{}).value||'').trim();
+  if(!v){ alert('먼저 ①에서 영상을 골라주세요'); return; }
+  const btn = ev && ev.target ? ev.target : null;
+  const old = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = '찾는 중…'; }
+  let d;
+  try{
+    d = await (await fetch('/api/desub_preview', {method:'POST', body: JSON.stringify({
+      video_path: v,
+      mode: (($('desubModeSel')||{}).value)||'auto',
+      y0: +((($('desubY0')||{}).value)||0), y1: +((($('desubY1')||{}).value)||0),
+    })})).json();
+  } catch(e){ d = {error: '미리보기 실패: ' + e}; }
+  if(btn){ btn.disabled = false; btn.textContent = old; }
+  if(d.error){ alert(d.error); return; }
+  $('desubPrev').classList.remove('hidden');
+  $('desubPrevImg').src = d.url + '?t=' + Date.now();
+  $('desubPrevNote').textContent = d.note || '';
+  // 자동으로 찾은 값을 직접 지정 칸에도 채워 둔다 — 조금만 고치면 되게
+  if(d.y0 != null && $('desubY0') && !$('desubY0').value) $('desubY0').value = d.y0;
+  if(d.y1 != null && $('desubY1') && !$('desubY1').value) $('desubY1').value = d.y1;
 }
 
 async function regen(id){
@@ -11912,7 +12069,7 @@ async function poll(){
   if(job.status === 'running' && job.t_start){
     const es = Math.max(0, Math.floor(Date.now() / 1000 - job.t_start));
     if(es >= 60) elaTxt = ' · ⏱ ' + fmtDur(es) + ' 경과';
-    // ⏳ v1.27.1 (목록 51): 경과만 보이면 "언제 끝나는지"를 알 수 없어 멈춘 줄 안다.
+    // ⏳ v1.28.0 (목록 51): 경과만 보이면 "언제 끝나는지"를 알 수 없어 멈춘 줄 안다.
     // 지금까지 걸린 시간과 진행률로 남은 시간을 어림해 같이 보여준다.
     if(es >= 30 && frac > 0.05 && frac < 0.99){
       const left = Math.round(es * (1 - frac) / frac);
@@ -12173,7 +12330,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 injectFontFaces([]);  // 🔤 번들 프리텐다드 즉시 등록 — 받은 글씨체는 poll의 fillFontSels가 추가 (v0.68)
-sweepUltraCost();                       // 🐢 기억된 값이 4K면 바로 알림 (v1.27.1)
+sweepUltraCost();                       // 🐢 기억된 값이 4K면 바로 알림 (v1.28.0)
 poll(); setInterval(()=>{ if(!currentJob) poll(); }, 5000);
 </script>
 </body>

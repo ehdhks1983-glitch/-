@@ -18,7 +18,7 @@ def test_v090_ui_present_and_wired():
         'id="parallelSel"', "function setParallel", "function syncParallelSel",
         "/api/parallel", "동시 1개 (순서대로)", "동시 4개 (고사양)",
         # ⏱ 경과 시간 표시
-        # v1.27.1: "N분 경과" → fmtDur로 "45초/3분/1시간 5분" + 남은 시간까지 같이 표시
+        # v1.28.0: "N분 경과" → fmtDur로 "45초/3분/1시간 5분" + 남은 시간까지 같이 표시
         "t_start", "' 경과'", "남은 시간 약 ",
         # 🛒 검색창 링크 가드
         "function shopUrlGuard", "shopUrlGuard('cpKeyword')", "shopUrlGuard('nvKeyword')",
