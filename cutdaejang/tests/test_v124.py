@@ -45,10 +45,15 @@ def test_pronounce_still_reads_digits_aloud():
 
 # ── 44. 문장 단위 묶기 (내레이션 이어짐) ───────────────────────────
 def test_group_sentence_units_merges_split_lines():
-    """종결부호 없는 줄은 다음 줄과 한 문장 — 회원님 쇼핑 대본 실제 사례."""
+    """종결부호 없는 줄은 다음 줄과 한 문장 — 회원님 쇼핑 대본 실제 사례.
+
+    v1.27 갱신: "…제품인데요." "…나왔고요."도 **마침표가 있어도 뒷말로 이어지는
+    말**이라 이제 함께 묶인다(예전 기대값 [[0,1],[2],[3]]). 실제로 이 두 줄은 한
+    호흡으로 읽는 게 맞고, 사이에 침묵이 들어가던 것이 목록 44번의 증상이었다.
+    """
     texts = ["리뷰 십오만 개 넘는", "섬유유연제가 있어요.",
              "바로 스너글 제품인데요.", "초고농축으로 나왔고요."]
-    assert edit_mode.group_sentence_units(texts) == [[0, 1], [2], [3]]
+    assert edit_mode.group_sentence_units(texts) == [[0, 1], [2, 3]]
 
 
 def test_group_sentence_units_skips_when_no_punctuation():

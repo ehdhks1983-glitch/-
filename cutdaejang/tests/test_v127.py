@@ -228,6 +228,58 @@ def test_speed_applies_to_every_provider():
     assert 'f"{speed}{sr},areverse,{sr},"' in body
 
 
+def test_speed_does_not_break_continuous_reading():
+    """🔴 전체 테스트가 잡아낸 결함 — 말 속도가 「이어읽기」를 깨뜨렸다.
+
+    이어읽기는 여러 문장을 한 번에 합성한 뒤 **문장 사이 자연 무음**을 찾아
+    조각으로 나눈다. 그런데 블록을 먼저 빠르게 만들어 버리면 그 무음도 같이
+    짧아져 경계를 못 찾고, 이어읽기가 통째로 폐기돼 문장별 재합성으로 돌아갔다
+    → ①문장마다 목소리 톤이 튐(목록 6번 증상) ②API 호출 3배.
+    고친 방법: 블록은 원래 속도로 만들고 속도는 **잘라낸 조각마다** 건다.
+    """
+    src = (ROOT / "cutdaejang/core/tts_engine.py").read_text(encoding="utf-8")
+    blk = src.split("def _synth_continuity_block(")[1].split("\n    def ")[0]
+    assert '{**self.settings["audio"], "speech_speed": 1.0}' in blk, \
+        "블록을 원래 속도로 만들지 않으면 문장 경계를 못 찾는다"
+    split = src.split("def _split_continuity_block(")[1].split("\n    def ")[0]
+    assert '_speed_filter(audio_cfg.get("speech_speed", 1.0))' in split
+    assert 'f"{speed}{sr},areverse,{sr},"' in split
+
+
+def test_continuous_reading_survives_fast_speed(tmp_path, monkeypatch):
+    """말 속도를 올려도 이어읽기가 살아 있다 — 실제로 합성해서 확인.
+
+    측정: 이 테스트용 소리(문장 사이 쉼이 넉넉함)에서는 2.0배부터 경계 검출이
+    깨졌다(호출 1회 → 4회). 화면에서 고를 수 있는 최대는 1.25배지만 설정값은
+    2.0까지 허용되고, 진짜 성우 소리는 쉼이 더 짧아 여유가 이보다 좁다.
+    """
+    import sys
+
+    sys.path.insert(0, str(ROOT))
+    from cutdaejang.core import tts_engine as te
+    from tests.test_v109 import _PausingGemini
+
+    lines = ["첫 구간의 마지막 문장입니다.", "둘째 구간도 같은 목소리입니다.",
+             "마지막까지 같은 속도로 읽습니다."]
+
+    def run(speed):
+        prov = _PausingGemini()
+        st = config.deep_merge(config.DEFAULTS, {"audio": {"speech_speed": speed}})
+        eng = te.TTSEngine(prov, tmp_path / f"cache{speed}", settings=st)
+        paths = eng.synth_all(lines, continuity=True)
+        total = sum(te.ff.probe_duration_us(str(p)) for p in paths)
+        return prov.calls, paths, total
+
+    calls1, paths1, dur1 = run(1.0)
+    assert calls1 == 1, "원래 속도에서는 한 호흡 1회 (기존 동작)"
+
+    calls2, paths2, dur2 = run(2.0)
+    assert calls2 == 1, f"빠르게에서도 한 호흡 1회여야 함 (실제 {calls2}회)"
+    assert all(".cont-" in p.name for p in paths2), "이어읽기 조각이 유지돼야 함"
+    assert len(paths2) == len(lines)
+    assert dur2 < dur1 * 0.7, f"실제로 짧아져야 함: {dur1} → {dur2}"
+
+
 def test_speed_is_part_of_the_cache_key():
     """속도를 바꿨는데 예전 소리가 재사용되면 바꾼 티가 안 난다."""
     src = (ROOT / "cutdaejang/core/tts_engine.py").read_text(encoding="utf-8")
@@ -239,8 +291,14 @@ def test_speed_default_in_settings():
     assert config.DEFAULTS["audio"]["speech_speed"] == 1.0
 
 
-def test_speed_param_reaches_settings():
-    """화면에서 고른 말 속도가 settings.audio.speech_speed로 들어간다."""
+def test_speed_param_reaches_settings(tmp_path, monkeypatch):
+    """화면에서 고른 말 속도가 settings.audio.speech_speed로 들어간다.
+
+    ⚠ _apply_bg_style은 고른 값을 **파일로 저장**한다 — 테스트가 개발/사용자
+    settings.json을 건드리지 않도록 반드시 격리한다 (실제로 한 번 오염시켜
+    다른 테스트를 깨뜨린 적이 있다).
+    """
+    monkeypatch.setenv("CUTDAEJANG_SETTINGS", str(tmp_path / "settings.json"))
     base = config.deep_merge(config.DEFAULTS, {})
     merged = webui._apply_bg_style({"narr_speed": "1.12"}, base)
     assert merged["audio"]["speech_speed"] == pytest.approx(1.12)

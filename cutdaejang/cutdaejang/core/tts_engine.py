@@ -1127,6 +1127,8 @@ class TTSEngine:
         pad_ms = max(audio_cfg.get("edge_pad_ms", 30), 50)
         pad_s = pad_ms / 1000.0
         sr = f"silenceremove=start_periods=1:start_threshold={threshold}dB"
+        # 🏃 v1.27: 말 속도는 여기서 — 경계는 원래 속도로 찾고, 조각만 빠르게.
+        speed = _speed_filter(audio_cfg.get("speech_speed", 1.0))
         try:
             for i, out in enumerate(part_paths):
                 tmp = out.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp.wav")
@@ -1136,7 +1138,7 @@ class TTSEngine:
                 filters = (
                     f"atrim=start={bounds[i] / 1e6:.6f}:"
                     f"end={bounds[i + 1] / 1e6:.6f},asetpts=PTS-STARTPTS,"
-                    f"{sr},areverse,{sr},"
+                    f"{speed}{sr},areverse,{sr},"
                     "afade=t=in:d=0.02,areverse,afade=t=in:d=0.02,"
                     "aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo,"
                     f"adelay={pad_ms}:all=1,apad=pad_dur={pad_s}"
@@ -1183,8 +1185,13 @@ class TTSEngine:
                     self.provider._next_text = next_spoken
                 self._synth_raw_with_retry(
                     joined, voice, str(raw), continuity=True)
+                # 🏃 v1.27: 블록은 **원래 속도로** 만든다. 여기서 빠르게 해 버리면
+                # 문장 사이 자연 무음도 같이 짧아져 경계 검출이 실패하고, 이어읽기가
+                # 통째로 폐기돼 문장별 재합성으로 되돌아간다(톤 튐 + 호출 3배).
+                # 속도는 조각으로 자른 뒤 _split_continuity_block에서 건다.
                 raw_us, final_us = postprocess_clip(
-                    str(raw), str(block), self.settings["audio"])
+                    str(raw), str(block),
+                    {**self.settings["audio"], "speech_speed": 1.0})
                 self.stats["trim_saved_us"] += max(0, raw_us - final_us)
             finally:
                 if getattr(self.provider, "wants_context", False):
