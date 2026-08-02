@@ -131,7 +131,7 @@ def test_quick_set_roundtrip_and_whitelist(server):
     assert post({"patch": {"subtitle": {"font_size": 999}}}).get("ok")   # 상한 클램프
     with urllib.request.urlopen(server + "/api/state", timeout=30) as r:
         st2 = json.loads(r.read())
-    assert st2["settings"]["subtitle"]["font_size"] == 120
+    assert st2["settings"]["subtitle"]["font_size"] == 128   # v1.24 「특대」(124) 수용
     assert "error" in post({"patch": {"tts": {"rpm_limit": 1}}})         # 화이트리스트 밖
 
 

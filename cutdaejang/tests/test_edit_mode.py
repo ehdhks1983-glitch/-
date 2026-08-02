@@ -265,7 +265,7 @@ def test_refine_subtitles_no_key_raises():
 def test_refine_subtitles_preserves_count(monkeypatch):
     from cutdaejang.core import script_generator as sg
 
-    def fake_post(url, payload, headers):
+    def fake_post(url, payload, headers, timeout=120.0):   # v1.24: 45초 제한 인자 수용
         return {"candidates": [{"content": {"parts": [
             {"text": '{"lines":["고친 하나","고친 둘"]}'}]}}]}
 
