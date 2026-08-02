@@ -5103,6 +5103,17 @@ _HTML = """<!doctype html>
   button:disabled { background:#2c3347; color:#6b7387; cursor:default; }
   button.ghost { background:transparent; border:1px solid #2c3347; width:auto; padding:8px 14px;
                  font-size:13px; font-weight:400; margin:0; }
+  /* 🏠 v1.27.1 (목록 50): 되돌아가기가 카드 맨 위에만 있어 스크롤을 내리면
+     화면 밖으로 사라졌다. 맨 위에 붙어 따라오는 바로 바꿔 어디서든 보이게 한다. */
+  .navbar { position:sticky; top:0; z-index:40; display:flex; align-items:center;
+    gap:10px; flex-wrap:wrap; padding:10px 0; margin:-8px 0 8px;
+    background:#0f1117; border-bottom:1px solid #262b3a; }
+  .navbar .navttl { font-weight:700; font-size:15px; color:#e8eaf0; }
+  .navbar .navsp { flex:1; }
+  button.ghost.back { background:#243052; border-color:#4266d5; color:#fff;
+    font-weight:700; font-size:14px; padding:9px 16px; }
+  button.ghost.back:hover { background:#2d3d68; }
+  button.ghost.wipe { border-color:#5a3a46; color:#ffb3c0; }
   .bar { height:10px; background:#0f1117; border-radius:6px; overflow:hidden; margin-top:8px; }
   .bar > div { height:100%; background:linear-gradient(90deg,#4266d5,#7a5cf0); width:0%; transition:width .4s; }
   .stage { font-size:13px; color:#8b93a7; margin-top:8px; }
@@ -5219,7 +5230,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.27.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.27.1)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5238,6 +5249,13 @@ body.easy #easyBar { display: block; }
   <div class="banner hidden" id="envBanner"></div>
   <div class="banner" id="easyBar">🔰 <b>쉬운 모드</b> — 꼭 넣을 것만 보여요. 숨은 옵션은
     <b>저장된 설정 그대로</b> 적용됩니다 · 전부 보려면 위의 [🛠 자세히]를 누르세요</div>
+
+  <div id="navBar" class="navbar hidden">
+    <button class="ghost back" onclick="showHome(event)" title="첫 화면(무엇을 만들까요?)으로 돌아가요 — 지금 쓴 내용은 그대로 남아 있어요">🏠 처음으로</button>
+    <span class="navttl" id="navTitle"></span>
+    <span class="navsp"></span>
+    <button class="ghost wipe hidden" id="navReset" onclick="resetCurrentCard(event)" title="지금 카드에 넣은 내용을 한 번에 비우고 처음부터">🧹 전체 초기화</button>
+  </div>
 
   <div class="card" id="homeCard">
     <div style="font-size:17px;font-weight:800">무엇을 만들까요?</div>
@@ -6212,7 +6230,8 @@ body.easy #easyBar { display: block; }
     <div class="hint">내가 쓴 블로그 글(상품 소개·후기) 주소를 넣으면 글 속 <b>사진</b>과 <b>대본</b>을 가져와
       AI 목소리 내레이션 영상으로 만들어요. ⚠ 쿠팡·네이버쇼핑 <b>상품 페이지</b> 주소는 쇼핑몰이 막아서 안 돼요
       — 꼭 <b>상품을 소개한 블로그 글</b> 주소를 넣어주세요 (네이버 블로그 권장).</div>
-    <div class="steplabel"><span class="stepnum">1</span>블로그 글 주소</div>
+    <div class="steplabel"><span class="stepnum">1</span>블로그 글 주소
+      <button class="ghost wipe" style="margin-left:8px;padding:2px 10px" onclick="resetWeblinkCard(event)" title="주소·사진·대본·훅을 한 번에 비우고 처음부터">🧹 전체 초기화</button></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <input type="text" id="weblinkUrl" style="flex:1;min-width:220px" placeholder="예) https://blog.naver.com/아이디/글번호">
       <button class="ghost" style="white-space:nowrap;border-color:#4266d5" id="weblinkBtn" onclick="loadWeblink(event)">🔗 글 가져오기</button>
@@ -6409,6 +6428,7 @@ body.easy #easyBar { display: block; }
       <button id="secGoBtn" style="flex:1;min-width:180px" onclick="startSectionsSafe()">🎬 영상 만들기</button>
       <button class="ghost" onclick="saveSecDraft(event)" title="지금 작성 중인 구간·내레이션·설정을 저장해 두고, 나중에 이 카드를 열면 이어서 작성할 수 있어요">💾 임시 저장</button>
       <button class="ghost" onclick="clearSecDraft(event)" title="저장해 둔 임시 저장을 지워요">🗑</button>
+      <button class="ghost wipe" onclick="resetSectionCard(event)" title="구간·대본·훅·설정을 한 번에 비우고 처음부터">🧹 전체 초기화</button>
     </div>
     <div class="hint">구간이 많으면 시간이 걸려요 (구간당 보통 1~2분). 진행 상황에 구간 번호가 표시됩니다.
       완성 후 히스토리의 [✏ 다시 편집]으로 불러오면 <b>바뀐 구간만 다시 만들어</b> 빨라요.</div>
@@ -7421,6 +7441,32 @@ async function previewElevenVoice(ev){
 function pick(name){ return document.querySelector(`input[name=${name}]:checked`).value; }
 
 // ── 첫 화면(홈) ↔ 만들기 폼 전환 (v0.36 초보자 UI) ──
+// 🏠 v1.27.1 (목록 50) — 어느 카드에 있는지 + 되돌아가기 + 초기화를 한 줄에.
+const NAV_INFO = {
+  gen:      ['🤖 AI 영상 만들기', 'resetGenForm'],
+  edit:     ['✂️ 내 영상 편집', 'resetEditForm'],
+  photo:    ['📸 사진으로 영상', 'resetEditForm'],
+  weblink:  ['🔗 블로그 글로 만들기', 'resetWeblinkCard'],
+  sections: ['🎞 구간 대본 영상', 'resetSectionCard'],
+  shop:     ['🛒 쇼핑 상품 영상', 'resetShopCard'],
+  voice:    ['🎤 내 목소리 등록', ''],
+  rip:      ['🎙→📃 대본 따오기', ''],
+};
+function updateNav(view){
+  const bar = $('navBar'), ttl = $('navTitle'), rst = $('navReset');
+  if(!bar) return;
+  const info = NAV_INFO[view];
+  bar.classList.toggle('hidden', !info);      // 첫 화면에서는 숨김
+  if(!info) return;
+  if(ttl) ttl.textContent = info[0];
+  if(rst) rst.classList.toggle('hidden', !info[1]);
+}
+function resetCurrentCard(ev){
+  if(ev) ev.preventDefault();
+  const fn = (NAV_INFO[window._view] || [])[1];
+  if(fn && typeof window[fn] === 'function') window[fn](ev);
+}
+
 function openMode(kind){
   window._view = kind;                       // 'gen'|'edit'|'photo'|'weblink'|'sections'|'shop'
   $('homeCard').classList.add('hidden');
@@ -7431,6 +7477,7 @@ function openMode(kind){
   $('shopCard').classList.toggle('hidden', kind !== 'shop');        // 🛒 쇼핑 상품 (v0.89)
   $('formCard').classList.toggle('hidden', kind !== 'gen');
   $('editCard').classList.toggle('hidden', kind === 'gen' || kind === 'weblink' || kind === 'sections' || kind === 'shop');
+  updateNav(kind);
   if(kind === 'weblink'){ initWeblinkCard(); return; }
   if(kind === 'sections'){ initSectionCard(); return; }
   if(kind === 'shop'){ initShopCard(); return; }
@@ -7447,6 +7494,7 @@ function openMode(kind){
 function showHome(ev){
   if(ev) ev.preventDefault();
   window._view = 'home';
+  updateNav('home');                          // 첫 화면에서는 바를 숨긴다 (v1.27.1)
   $('homeCard').classList.remove('hidden');
   $('formCard').classList.add('hidden');
   $('editCard').classList.add('hidden');
@@ -7469,6 +7517,7 @@ function openVoice(ev){
   $('ripCard').classList.add('hidden');
   $('voiceCard').classList.remove('hidden');
   window._view = 'voice';
+  updateNav('voice');
 }
 function closeVoice(ev){
   if(ev) ev.preventDefault();
@@ -9537,6 +9586,31 @@ function resetGenForm(ev){
   if($('genProductSel')){ $('genProductSel').value = ''; onGenProductChange(); } // 📇 제품 끄기 + 즉시 저장 (v0.77)
   set('genContext','');
   syncDecorChips();
+}
+
+// 🧹 v1.27.1 (목록 50) — 블로그·구간 카드에는 초기화가 아예 없었다.
+// 21번 때 쇼핑 카드에만 넣고 이 둘을 빠뜨렸다 (편집·생성은 ↺ 초기화가 있었음).
+function resetWeblinkCard(ev){
+  if(ev) ev.preventDefault();
+  if(!confirm('블로그 카드를 처음 상태로 비울까요?' + String.fromCharCode(10) +
+              '(글 주소 · 가져온 사진 · 대본 · 훅 제목 — 꾸미기 설정은 그대로 둡니다)')) return;
+  const set = (id, v) => { const el = $(id); if(el) el.value = v; };
+  set('weblinkUrl', ''); set('wlScript', ''); set('wlHook', ''); set('wlPasteText', '');
+  window._weblink = null; window._wlLocalPhotos = [];
+  const grid = $('wlGrid'); if(grid) grid.innerHTML = '';
+  const cnt = $('wlPhotoCnt'); if(cnt) cnt.textContent = '';
+  const pv = $('wlPreview'); if(pv) pv.classList.add('hidden');
+  const hint = $('weblinkHint'); if(hint) hint.textContent = '';
+  uiBanner('🧹 블로그 카드를 비웠어요 — 새 글 주소를 붙여넣고 [🔗 글 가져오기]를 누르세요');
+}
+function resetSectionCard(ev){
+  if(ev) ev.preventDefault();
+  if(!confirm('구간 대본 카드를 처음 상태로 비울까요?' + String.fromCharCode(10) +
+              '(구간 전부 · 대본 · 훅 제목 · 풀영상 선택 — 꾸미기 설정은 그대로 둡니다)')) return;
+  if(typeof fillSectionsForm === 'function') fillSectionsForm({});   // 행 비우고 빈 줄 1개
+  const st = $('secScriptText'); if(st) st.value = '';
+  window._secReuseJob = null;
+  uiBanner('🧹 구간 카드를 비웠어요 — ①부터 다시 시작하시면 됩니다');
 }
 
 function updateLogs(lines){
