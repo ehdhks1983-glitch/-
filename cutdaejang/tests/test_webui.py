@@ -1102,7 +1102,7 @@ def test_hook_ui_order_style_and_voice_pickers(server):
     assert html.count('value="화이트 박스"') == 2         # 제목 프리셋 2곳
     # v1.27: 완성 화면 [✏ 부분 수정]에 자막 디자인 선택이 하나 더 생겼다
     assert html.count('value="예능 노랑"') == 5      # 제목 2 + 자막 2 + 부분수정 1
-    assert html.count('value="네온"') == 5                # 제목 2 + 자막 2 + 그림체 1
+    assert html.count('value="네온"') == 6      # 제목 2 + 자막 2 + 그림체 1 + 부분수정 1
     # 생성 폼 색 칩 + 미리보기
     assert 'id="genHookColorChips"' in html and 'id="genHookPreview"' in html
     # 내 목소리 등록: 📁 픽커 2곳 + 단계 안내 링크
