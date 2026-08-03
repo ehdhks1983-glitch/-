@@ -5566,6 +5566,37 @@ _HTML = """<!doctype html>
   .banner { background:#3a1520; border:1px solid #ff7b8a; color:#ffb3bd; border-radius:10px;
             padding:12px 14px; margin-top:14px; font-size:13px; }
   .banner.ok { background:#12301e; border-color:#43c273; color:#a9e8bf; }
+  /* ⚠ 경고 띠는 «읽어야 하는 것»이라 남긴다. 다만 v1.35부터 스크롤을 옮기지 않고
+     화면 위에 붙어 따라온다 (목록 67번 — 예전엔 scrollIntoView로 끌고 갔다). */
+  .banner { position:sticky; top:0; z-index:30; }
+  /* 🗒 v1.35 떴다 사라지는 쪽지 — 보던 자리를 잃지 않게 (목록 67번) */
+  #toastBox { position:fixed; left:50%; bottom:22px; transform:translateX(-50%);
+    z-index:60; display:flex; flex-direction:column; gap:8px; align-items:center;
+    pointer-events:none; width:min(560px,92vw); }
+  .toast { background:#1b2233; border:1px solid #3b4668; color:#e7ecf7;
+    border-radius:12px; padding:11px 16px; font-size:13.5px; line-height:1.5;
+    box-shadow:0 10px 30px rgba(0,0,0,.45); width:100%;
+    animation:toastIn .18s ease-out; }
+  .toast.ok { border-color:#2f6b45; background:#16281d; color:#bff0d0; }
+  .toast.out { animation:toastOut .3s ease-in forwards; }
+  @keyframes toastIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
+  @keyframes toastOut { to{opacity:0;transform:translateY(8px)} }
+  /* 🗄 v1.35 옆에서 나오는 서랍 — 설정·내 제품·API (목록 70번).
+     보던 화면은 뒤에 그대로 남고 스크롤이 움직이지 않는다. */
+  #drawerBack { position:fixed; inset:0; background:rgba(6,8,13,.55); z-index:40; }
+  .drawer { position:fixed; top:0; right:0; bottom:0; z-index:50;
+    width:min(600px,96vw); margin:0; border-radius:0; overflow-y:auto;
+    box-shadow:-14px 0 40px rgba(0,0,0,.5); }
+  .drawer-head { position:sticky; top:0; z-index:2; background:#171a23;
+    display:flex; align-items:center; gap:8px; padding:2px 0 10px;
+    border-bottom:1px solid #262b3a; margin-bottom:10px; }
+  .drawer-head b { flex:1; font-size:15px; }
+  .drawer-head button { width:auto; margin:0; }
+  .drawer-now { font-size:12px; color:#9aa4bd; font-weight:400; }
+  @media (max-width:620px){ .drawer { width:100vw; top:6vh; border-radius:16px 16px 0 0; } }
+  /* 🧭 v1.35 위 바 고정 — 아무리 내려가도 [처음으로]·[설정]이 보인다 (목록 70번) */
+  .navbar { position:sticky; top:0; z-index:35; background:#171a23;
+    padding:8px 0; border-bottom:1px solid #262b3a; }
   .hookcands { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
   .hookcands button { width:100%; text-align:left; background:#12305a; border:1px solid #2c4a7a;
     color:#dfe7f5; border-radius:8px; padding:9px 12px; font-size:14px; cursor:pointer; margin:0; }
@@ -5694,7 +5725,10 @@ body.easy #easyBar { display: block; }
     <span class="navttl" id="navTitle"></span>
     <span class="navsp"></span>
     <button class="ghost wipe hidden" id="navReset" onclick="resetCurrentCard(event)" title="지금 카드에 넣은 내용을 한 번에 비우고 처음부터">🧹 전체 초기화</button>
+    <button class="ghost" id="navSet" onclick="toggleSettings(event)" title="설정을 옆 서랍으로 열어요 — 보던 자리는 그대로 있어요">⚙ 설정</button>
   </div>
+  <div id="toastBox"></div>
+  <div id="drawerBack" class="hidden" onclick="closeDrawer(event)"></div>
 
   <div class="card" id="homeCard">
     <div style="font-size:17px;font-weight:800">무엇을 만들까요?</div>
@@ -5768,6 +5802,9 @@ body.easy #easyBar { display: block; }
       <span class="hint">— 꾸미기·완성 방식을 이름으로 저장해두고 언제든 한 번에 불러와요</span>
     </div>
 
+    <!-- 📐 v1.35 (목록 64) — 화면 비율은 「세부 설정」 안에 있었고, 사진 모드에선
+         그 서랍째 숨겨져 «고를 수조차 없었다». 이제 폼 맨 위로 올라온다. -->
+    <div id="editShapeTop" style="margin-bottom:10px"></div>
     <div id="videoBlock">
       <div class="steplabel"><span class="stepnum">1</span>편집할 영상 고르기</div>
       <div style="display:flex; gap:8px">
@@ -6189,8 +6226,8 @@ body.easy #easyBar { display: block; }
                title="흑백"><div class="sw" style="filter:grayscale(1) contrast(1.1)"></div><span>흑백</span></div></div>
       </div>
       <div class="row" style="margin-top:4px">
-        <div>
-          <label>출력 형태</label>
+        <div id="editShapeRow">
+          <label>📐 화면 비율 <span class="hint">— 제일 먼저 고르세요</span></label>
           <div class="toggle">
             <label><input type="radio" name="editLayout" value="shorts" checked><span>쇼츠 (세로 9:16)</span></label>
             <label><input type="radio" name="editLayout" value="wide"><span>가로 (16:9)</span></label>
@@ -6671,9 +6708,9 @@ body.easy #easyBar { display: block; }
 
     <details class="opt">
       <summary>⚙️ 세부 설정 <span class="hint">— 완성 전에 대본을 확인하고 싶다면</span></summary>
-      <div class="chk" style="gap:8px">
-        <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="radio" name="prov" value="stub"><span>🔊 소리 점검용 목소리 (삐- 테스트 — 기계 확인할 때만)</span></label>
-      </div>
+      <!-- 🔊 «소리 점검용 목소리(삐-)» 라디오는 v1.35에서 뺐다 (목록 66번).
+           개발용 신호음인데 성우들과 나란히 있어 잘못 고르면 영상 전체가 삐- 소리로
+           나왔다. 뒤쪽 stub 제공자 자체는 시험이 쓰므로 그대로 둔다. -->
       <label style="margin-top:4px">완성 방식</label>
       <div class="toggle">
         <label><input type="radio" name="mode" value="auto" checked><span>자동 (한 번에 완성)</span></label>
@@ -7405,7 +7442,8 @@ body.easy #easyBar { display: block; }
     </thead><tbody></tbody></table>
   </div>
 
-  <div class="card hidden" id="productCard">
+  <div class="card drawer hidden" id="productCard">
+  <div class="drawer-head"><b>📇 내 제품</b><span class="drawer-now"></span><button class="ghost" onclick="closeDrawer(event)" title="닫으면 보던 자리 그대로예요">✕ 닫기</button></div>
     <div class="backrow"><b>📇 내 제품 정보</b> <span class="hint">— 등록해 두면 AI가 이 사실만 근거로 대본·훅·키트를 써요 (지어내기 방지)</span></div>
     <div class="chk" style="gap:8px;margin-top:8px">
       <span>제품 고르기</span>
@@ -7436,7 +7474,8 @@ body.easy #easyBar { display: block; }
     <button style="margin-top:12px" class="ghost" onclick="toggleProductCard()">닫기</button>
   </div>
 
-  <div class="card hidden" id="apiCard">
+  <div class="card drawer hidden" id="apiCard">
+  <div class="drawer-head"><b>🔑 API 연동</b><span class="drawer-now"></span><button class="ghost" onclick="closeDrawer(event)" title="닫으면 보던 자리 그대로예요">✕ 닫기</button></div>
     <div class="backrow"><b>🔑 API 연동</b> <span class="hint">— 키는 이 PC의 설정 파일에만 저장돼요 (외부 전송 없음)</span></div>
     <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
       <div style="display:flex;align-items:center;gap:8px;font-weight:700">🌟 Gemini (구글)
@@ -7481,7 +7520,8 @@ body.easy #easyBar { display: block; }
     <button style="margin-top:12px" class="ghost" onclick="toggleApiCard()">닫기</button>
   </div>
 
-  <div class="card hidden" id="settingsCard">
+  <div class="card drawer hidden" id="settingsCard">
+  <div class="drawer-head"><b>⚙ 설정</b><span class="drawer-now"></span><button class="ghost" onclick="closeDrawer(event)" title="닫으면 보던 자리 그대로예요">✕ 닫기</button></div>
     <div style="font-weight:700">⚙ 설정 <span class="hint">— 여기 값은 <b>모든 영상에 항상</b> 적용돼요. 이번 영상만 다르게 하려면 만들기 화면의 🎨 꾸미기에서.</span></div>
 
     <div style="margin-top:10px;padding:10px 12px;border:1px solid #2c3350;border-radius:10px">
@@ -7949,6 +7989,7 @@ function resetCurrentCard(ev){
 }
 
 function openMode(kind){
+  closeDrawer();                             // 🗄 v1.35 화면을 옮기면 서랍은 닫는다
   window._view = kind;                       // 'gen'|'edit'|'photo'|'weblink'|'sections'|'shop'
   $('homeCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
@@ -7974,6 +8015,7 @@ function openMode(kind){
 }
 function showHome(ev){
   if(ev) ev.preventDefault();
+  closeDrawer();                             // 🗄 v1.35
   window._view = 'home';
   updateNav('home');                          // 첫 화면에서는 바를 숨긴다 (v1.28.0)
   $('homeCard').classList.remove('hidden');
@@ -9135,13 +9177,35 @@ function onBatchChange(){
 
 // ⚠ 버튼 무반응 방지 (v0.78) — 화면 동작 중 오류·조용한 중단을 상단 배너로 보여준다
 // (알림창이 브라우저에서 차단돼 있어도 배너는 항상 보임)
+// 🗒 v1.35 (목록 67) — 예전엔 안내를 띄울 때마다 페이지 맨 위의 띠로
+//   scrollIntoView 해서 «작업하던 자리»를 잃었다. 이제 둘로 가른다:
+//     · 알림(✅ 저장했어요…)  → 화면 아래 쪽지로 떴다 3.6초 뒤 사라짐. 스크롤 안 건드림.
+//     · 경고(⚠ ❌ …)         → 지금처럼 띠로 «남긴다». 다만 스크롤은 옮기지 않고
+//                              띠 자체가 sticky라 어디에 있든 보인다.
+function toast(msg, okMark){
+  try{
+    const box = $('toastBox'); if(!box){ return; }
+    const t = document.createElement('div');
+    t.className = 'toast' + (okMark ? ' ok' : '');
+    t.textContent = msg;
+    box.appendChild(t);
+    while(box.children.length > 3) box.removeChild(box.firstChild);
+    setTimeout(() => {
+      t.classList.add('out');
+      setTimeout(() => { try{ t.remove(); }catch(_e){} }, 320);
+    }, 3600);
+  }catch(_e){}
+}
+const _WARN_MARKS = ['⚠','❌','🔴','🚫'];
 function uiBanner(msg){
   try{
-    const b = $('envBanner');
-    const okMark = ['✅','🎉','🧹','📋','💾','♻','🖼','🎲','ℹ'].some(m => (msg||'').startsWith(m));
-    if(b){ b.textContent = msg; b.classList.remove('hidden');
-           b.classList.toggle('ok', okMark);
-           b.scrollIntoView({behavior:'smooth', block:'center'}); }
+    const s = String(msg || '');
+    if(!_WARN_MARKS.some(m => s.startsWith(m))){
+      const okMark = ['✅','🎉','🧹','📋','💾','♻','🖼','🎲','ℹ'].some(m => s.startsWith(m));
+      toast(s, okMark); return;               // 알림은 떴다 사라진다
+    }
+    const b = $('envBanner');                 // 경고는 남긴다 (스크롤은 안 옮김)
+    if(b){ b.textContent = s; b.classList.remove('hidden'); b.classList.remove('ok'); }
   }catch(_e){}
 }
 function reportUiError(where, e){
@@ -9697,13 +9761,41 @@ async function openDiagFolder(ev){
   if(data.error) alert('폴더 열기 실패: ' + data.error + String.fromCharCode(10) + '경로: ' + (data.path || ''));
 }
 
-function toggleSettings(){
-  const c = $('settingsCard');
-  c.classList.toggle('hidden');
-  // ⚙ 설정 카드는 페이지 맨 아래에 있어, 이동해 주지 않으면 "눌러도 아무 일도
-  // 없는 것처럼" 보였다 (회원님 리포트 22번) — 열리면 바로 데려간다
-  if(!c.classList.contains('hidden')) c.scrollIntoView({behavior:'smooth', block:'start'});
+// 🗄 v1.35 (목록 70) — 설정·내 제품·API를 «옆에서 나오는 서랍»으로.
+//   예전엔 이 카드들이 페이지 맨 아래에 있어, 열 때 scrollIntoView로 거기까지
+//   데려갔다(22번을 그렇게 덮었다). 그래서 만들다 말고 맨 아래로 끌려가고,
+//   끝나면 만들던 자리를 다시 찾아야 했다. 이제 스크롤을 아예 건드리지 않는다.
+const DRAWER_TITLES = {settingsCard:'⚙ 설정', productCard:'📇 내 제품', apiCard:'🔑 API 연동'};
+function _drawerNowLine(){
+  const KO = {gen:'🤖 AI 영상 만들기', edit:'✂️ 내 영상 편집', photo:'📸 사진으로 영상',
+              weblink:'🔗 블로그 글로 영상', sections:'🖥 긴 영상 (가로 16:9)',
+              shop:'🛒 쇼핑 상품 영상', aiclip:'✨ AI로 영상 만들기'};
+  const v = KO[window._view];
+  return v ? ('지금 만드는 중: ' + v + ' — 여기서 바꾼 값은 다음 영상부터 기본값이에요')
+           : '여기 값은 모든 영상의 기본값이에요';
 }
+function closeDrawer(ev){
+  if(ev) ev.preventDefault();
+  ['settingsCard','productCard','apiCard'].forEach(id => {
+    const c = $(id); if(c) c.classList.add('hidden');
+  });
+  const b = $('drawerBack'); if(b) b.classList.add('hidden');
+  window._drawer = null;
+}
+function openDrawer(id, ev){
+  if(ev) ev.preventDefault();
+  const c = $(id); if(!c) return;
+  const already = (window._drawer === id) && !c.classList.contains('hidden');
+  closeDrawer();
+  if(already) return;                          // 같은 버튼 다시 = 닫기
+  const nl = c.querySelector('.drawer-now');
+  if(nl) nl.textContent = _drawerNowLine();
+  c.classList.remove('hidden');
+  const b = $('drawerBack'); if(b) b.classList.remove('hidden');
+  c.scrollTop = 0;                             // 서랍 «안»만 맨 위로 (페이지는 그대로)
+  window._drawer = id;
+}
+function toggleSettings(ev){ openDrawer('settingsCard', ev); }
 
 // ── 🔰 쉬운 모드 (v1.17) — 기능은 그대로, 보이는 것만 최소로 ──
 // 숨긴 입력도 값은 살아 있어 만들기 페이로드는 자세히 모드와 100% 동일하다.
@@ -9868,13 +9960,11 @@ async function toggleEasy(ev){
 }
 
 // ── 📇 내 제품 프로필 (v0.64) ──
-function toggleProductCard(){
-  const c = $('productCard');
-  c.classList.toggle('hidden');
-  if(!c.classList.contains('hidden')){
-    loadProducts();
-    c.scrollIntoView({behavior:'smooth', block:'start'});   // 🔰 v1.17 — 열면 바로 이동
-  }
+function toggleProductCard(ev){
+  const opening = ($('productCard') || {}).classList
+                  && $('productCard').classList.contains('hidden');
+  openDrawer('productCard', ev);               // 🗄 v1.35 서랍 (목록 70)
+  if(opening) loadProducts();
 }
 async function loadProducts(keep){
   const d = await (await fetch('/api/products', {method:'POST', body: JSON.stringify({action:'list'})})).json();
@@ -9972,12 +10062,9 @@ async function extractAudio(ev, kind){
 }
 
 // ── 🔑 API 연동 화면 (v0.63) ──
-function toggleApiCard(){
-  const c = $('apiCard');
-  c.classList.toggle('hidden');
+function toggleApiCard(ev){
+  openDrawer('apiCard', ev);                   // 🗄 v1.35 서랍 (목록 70)
   refreshApiStates();
-  if(!c.classList.contains('hidden'))
-    c.scrollIntoView({behavior:'smooth', block:'start'});   // 🔰 v1.17 — 열면 바로 이동
 }
 function refreshApiStates(){
   const g = $('apiGeminiState'), e = $('apiElevenState');
@@ -10387,53 +10474,150 @@ async function quickSet(patch){
 }
 function markQuickDeco(){
   const size = +((($('setFontSize')||{}).value) || 84);
+  const db = +((($('setBgmVol')||{}).value) || -16);
   const on = (($('setTextCards')||{}).checked);
-  document.querySelectorAll('.qd-size').forEach(b => {
-    const hit = Math.abs(+b.dataset.v - size) < 11;
-    b.style.borderColor = hit ? '#4266d5' : ''; b.style.color = hit ? '#9db8ff' : '';
-  });
+  const mark = (b, hit) => { b.style.borderColor = hit ? '#4266d5' : ''; b.style.color = hit ? '#9db8ff' : ''; };
+  document.querySelectorAll('.qd-size').forEach(b => mark(b, Math.abs(+b.dataset.v - size) < 11));
+  document.querySelectorAll('.qd-bgm').forEach(b => mark(b, Math.abs(+b.dataset.v - db) < 4));
   document.querySelectorAll('.qd-cards').forEach(c => { c.checked = !!on; });
 }
-function injectQuickDeco(){
-  if(window._qdDone) return; window._qdDone = true;
-  const spots = [$('genSubStyleSel'), $('editSubStyleSel'),
-                 $('wlDecoBox'), $('secDecoBox'), $('shopDecoBox')];
-  spots.forEach(el => {
-    if(!el) return;
-    const host = (el.tagName === 'DETAILS') ? el : el.parentElement;
-    const d = document.createElement('div');
-    d.className = 'chk'; d.style.cssText = 'gap:8px;flex-wrap:wrap;margin-top:6px';
-    d.innerHTML = '<span>자막 글씨</span>'
-      + [['작게',64],['보통',84],['크게',104],['특대',124]].map(x =>
-          '<button class="ghost qd-size" data-v="' + x[1] + '" style="padding:4px 10px">' + x[0] + '</button>').join('')
-      + '<label style="margin-left:10px;display:flex;align-items:center;gap:4px">'
-      + '<input type="checkbox" class="qd-cards"><span>🅰 텍스트 카드</span></label>'
-      + '<span class="hint">— ⚙ 모든 영상에 함께 적용돼요</span>';
-    host.appendChild(d);
-    d.querySelectorAll('.qd-size').forEach(b => b.addEventListener('click', async (e) => {
-      e.preventDefault();
-      await quickSet({subtitle: {font_size: +b.dataset.v}});
-      if($('setFontSize')) $('setFontSize').value = b.dataset.v;
-      markEzChips(); markQuickDeco();
-      uiBanner('✅ 자막 글씨 크기를 바꿨어요 — 모든 영상에 적용 (⚙ 설정과 같은 값)');
-    }));
-    const cb = d.querySelector('.qd-cards');
-    cb.addEventListener('change', async () => {
-      await quickSet({subtitle: {text_cards: cb.checked}});
-      if($('setTextCards')) $('setTextCards').checked = cb.checked;
-      markQuickDeco();
-      uiBanner(cb.checked ? '🅰 텍스트 카드 장면을 켰어요 — 모든 영상에 적용'
-                          : '🅰 텍스트 카드 장면을 껐어요');
-    });
+// (v1.35) injectQuickDeco 는 mountDeco 로 대체됐다 — 만들기 화면 5곳에 칩만
+//   끼워 넣던 것을, 흩어진 선택칸까지 한 상자로 모으는 쪽으로 (목록 64).
+// ── 🎨 v1.35 공용 꾸미기 (목록 64) ────────────────────────────
+//   문제: 같은 5개 선택(테마·자막·제목·글씨체·톤)이 만들기 경로 6개에서
+//   서로 «다른 이름·다른 서랍»에 흩어져 있었다. 편집은 「⚙️ 세부 설정」 안,
+//   사진은 그 서랍째 숨겨져 아예 못 골랐다.
+//   해법: HTML을 6벌로 늘리지 않고, **이미 있는 요소를 한 상자로 옮겨 온다.**
+//   id가 그대로라 저장·복원·페이로드 코드는 한 줄도 안 바뀐다.
+const DECO_SETS = {
+  gen:     {host:'formCard',    ids:['genThemeSel','genSubStyleSel','genSubFontSel','genHookStyleSel','genToneSel'], before:'goBtn'},
+  edit:    {host:'editCard',    ids:['editThemeSel','editSubStyleSel','editSubFontSel','hookStyleSel','editToneSel'], before:'editBtn'},
+  weblink: {host:'weblinkCard', ids:['wlThemeSel','wlSubStyleSel','wlSubFontSel','wlHookStyleSel','wlToneSel'], before:'wlGoBtn'},
+  sections:{host:'sectionCard', ids:['secThemeSel','secSubStyleSel','secSubFontSel','secHookStyleSel','secToneSel'], before:'secGoBtn'},
+  shop:    {host:'shopCard',    ids:['shopThemeSel','shopSubStyleSel','shopSubFontSel','shopHookStyleSel','shopToneSel'], before:'shopGoBtn'}
+};
+// 다섯 개가 «이미» 한 접힘칸 안에 있으면(블로그·긴 영상·쇼핑) 그걸 그대로 쓴다.
+// 흩어져 있으면(AI 영상·편집) 새 상자를 만들어 옮겨 온다.
+function _decoSumHtml(key){
+  return '🎨 꾸미기 <span class="hint" id="decoSum_' + key + '"></span>';
+}
+function _commonDetails(ids){
+  const els = ids.map(id => $(id)).filter(Boolean);
+  if(!els.length) return null;
+  let node = els[0];
+  while(node && node.tagName !== 'DETAILS') node = node.parentElement;
+  return (node && els.every(e => node.contains(e))) ? node : null;
+}
+// 접혀 있어도 «지금 뭐가 골라져 있는지» 한 줄로 (초보자는 펼치지 않아도 안다)
+function decoSummary(key){
+  const set = DECO_SETS[key]; if(!set) return '';
+  const bits = [];
+  set.ids.slice(0, 3).forEach(id => {
+    const el = $(id); if(!el || !el.options || el.selectedIndex < 0) return;
+    const t = (el.options[el.selectedIndex].textContent || '').trim();
+    if(t && !/^(직접 고르기|기억된|자동|기본)/.test(t)) bits.push(t.replace(/\s*\(.*$/, ''));
+  });
+  const size = +((($('setFontSize')||{}).value) || 84);
+  bits.push('글씨 ' + (size <= 70 ? '작게' : size <= 94 ? '보통' : size <= 114 ? '크게' : '특대'));
+  return bits.join(' · ');
+}
+function refreshDecoSummaries(){
+  Object.keys(DECO_SETS).forEach(key => {
+    const s = $('decoSum_' + key);
+    if(s) s.textContent = '— ' + decoSummary(key);
   });
 }
+// 자막 크기·배경음악 소리 — «자주 바꾸는 것»을 만들다 말고 설정까지 안 가게
+function _decoQuickRow(){
+  const d = document.createElement('div');
+  d.className = 'chk'; d.style.cssText = 'gap:8px;flex-wrap:wrap;margin-top:8px';
+  d.innerHTML = '<span>자막 글씨</span>'
+    + [['작게',64],['보통',84],['크게',104],['특대',124]].map(x =>
+        '<button class="ghost qd-size" data-v="' + x[1] + '" style="padding:4px 10px">' + x[0] + '</button>').join('')
+    + '<span style="margin-left:10px">배경음악 소리</span>'
+    + [['작게',-22],['보통',-16],['크게',-9]].map(x =>
+        '<button class="ghost qd-bgm" data-v="' + x[1] + '" style="padding:4px 10px">' + x[0] + '</button>').join('')
+    + '<label style="margin-left:10px;display:flex;align-items:center;gap:4px">'
+    + '<input type="checkbox" class="qd-cards"><span>🅰 텍스트 카드</span></label>';
+  d.querySelectorAll('.qd-size').forEach(b => b.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await quickSet({subtitle: {font_size: +b.dataset.v}});
+    if($('setFontSize')) $('setFontSize').value = b.dataset.v;
+    markEzChips(); markQuickDeco(); refreshDecoSummaries();
+    uiBanner('✅ 자막 글씨 크기를 ' + b.textContent + '로 바꿨어요');
+  }));
+  d.querySelectorAll('.qd-bgm').forEach(b => b.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await quickSet({audio: {bgm_db: +b.dataset.v}});
+    if($('setBgmVol')) $('setBgmVol').value = b.dataset.v;
+    markEzChips(); markQuickDeco();
+    uiBanner('✅ 배경음악 소리를 ' + b.textContent + '로 바꿨어요');
+  }));
+  const cb = d.querySelector('.qd-cards');
+  cb.addEventListener('change', async () => {
+    await quickSet({subtitle: {text_cards: cb.checked}});
+    if($('setTextCards')) $('setTextCards').checked = cb.checked;
+    markQuickDeco();
+    uiBanner(cb.checked ? '🅰 텍스트 카드 장면을 켰어요' : '🅰 텍스트 카드 장면을 껐어요');
+  });
+  return d;
+}
+function mountDeco(key){
+  const set = DECO_SETS[key]; if(!set) return;
+  if($('decoSum_' + key)) return;                 // 한 번만
+  const host = $(set.host); if(!host) return;
+  let box = _commonDetails(set.ids);
+  if(box){                                        // 이미 「🎨 꾸미기」가 있는 화면
+    const sum = box.querySelector('summary');
+    if(sum) sum.innerHTML = _decoSumHtml(key);
+  } else {                                        // 흩어져 있던 화면 — 모아 온다
+    box = document.createElement('details');
+    box.className = 'opt'; box.id = 'decoBox_' + key;
+    box.style.cssText = 'margin-top:10px';
+    const sum = document.createElement('summary');
+    sum.innerHTML = _decoSumHtml(key);
+    box.appendChild(sum);
+    const inner = document.createElement('div');
+    box.appendChild(inner);
+    // 선택칸을 «있는 그대로» 옮긴다 — id·값·이벤트가 전부 살아 있어
+    // 저장·복원·페이로드 코드는 한 줄도 안 바뀐다.
+    set.ids.forEach(id => {
+      const el = $(id); if(!el) return;
+      const row = (el.parentElement && el.parentElement.querySelector('label')) ? el.parentElement : el;
+      inner.appendChild(row);
+    });
+    let anchor = set.before ? $(set.before) : null;   // 카드 «직속 자식»까지 타고 올라간다
+    while(anchor && anchor.parentElement && anchor.parentElement !== host) anchor = anchor.parentElement;
+    if(anchor && anchor.parentElement === host) host.insertBefore(box, anchor);
+    else host.appendChild(box);
+  }
+  box.appendChild(_decoQuickRow());
+  const tip = document.createElement('div');
+  tip.className = 'hint'; tip.style.marginTop = '6px';
+  tip.textContent = '안 건드리면 기억된 설정 그대로 만들어져요. 자막 글씨·배경음악 소리는 모든 영상에 함께 적용돼요.';
+  box.appendChild(tip);
+  box.addEventListener('toggle', refreshDecoSummaries);
+  set.ids.forEach(id => { const el = $(id); if(el) el.addEventListener('change', refreshDecoSummaries); });
+}
+function mountAllDeco(){
+  Object.keys(DECO_SETS).forEach(mountDeco);
+  mountShapeTop();
+  refreshDecoSummaries();
+}
+// 📐 화면 비율을 폼 맨 위로 (목록 64 ②) — 사진 모드에서 「세부 설정」이 통째로
+//   숨겨져 비율을 못 고르던 것이 여기서 같이 풀린다.
+function mountShapeTop(){
+  const row = $('editShapeRow'), top = $('editShapeTop');
+  if(row && top && row.parentElement !== top) top.appendChild(row);
+}
+
 function fillSettings(s){
   restoreDrafts(s); bindDrafts(); bindDrops();   // 📥 끌어넣기 (v1.13)
   applyEasy(!!(((s || {}).ui || {}).easy_mode)); // 🔰 쉬운 모드 기억 (v1.17)
   autoCheckUpdate();                             // 🔄 하루 1회 새 버전 확인 (v1.18)
   _loadAiCost().then(_renderAiSpend);            // ✨ AI 클립 월 사용액 (v1.19)
   try{ const _vv = $('vpVol'); if(_vv) _vv.value = localStorage.getItem('vp_vol') || 100; }catch(e){}
-  initEzChips(); injectQuickDeco();
+  initEzChips(); mountAllDeco();          // 🎨 v1.35 공용 꾸미기 (목록 64)
   setTimeout(() => { markEzChips(); markQuickDeco(); }, 0);
   $('setFontSize').value = s.subtitle.font_size;
   $('setOutline').value = s.subtitle.outline;
@@ -10882,8 +11066,11 @@ async function sceneUpload(ev, i){
 function checkElevenProv(ev){
   if(window._hasElevenKey) return;
   ev.target.checked = false;
-  const stub = document.querySelector("input[name='prov'][value='stub']");
-  if(stub) stub.checked = true;
+  // v1.35: 예전엔 stub(삐- 소리)으로 되돌렸는데 그 라디오를 뺐다 (목록 66번).
+  //   아무것도 안 켜지면 pick('prov')가 null을 읽어 터지므로 기본값으로 되돌린다.
+  const back = document.querySelector("input[name='prov'][value='gemini']")
+            || document.querySelector("input[name='prov'][value='windows']");
+  if(back) back.checked = true;
   if(confirm('일레븐랩스 성우를 쓰려면 키 등록이 필요해요 (elevenlabs.io 가입 → 키 발급).' +
              String.fromCharCode(10) + '등록 화면으로 갈까요?')) openVoice(ev);
 }
