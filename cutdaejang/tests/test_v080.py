@@ -227,4 +227,5 @@ def test_section_card_ui_present():
                 "openMode('sections')", "startSectionsSafe", "addSectionRow",
                 "구간 대본 영상"):
         assert tok in html, tok
-    assert html.count('class="modecard"') == 6  # 🛒 쇼핑 카드 추가 (v0.89)
+    # v1.35: 첫 화면에 「✨ AI로 영상 만들기」가 늘어 7개 (목록 68)
+    assert html.count('class="modecard"') == 7
