@@ -269,6 +269,17 @@ def _denoise_filter(denoise) -> str:
 _FIXED_CANVAS = {"shorts": (1080, 1920), "wide": (1920, 1080)}  # 고정 캔버스 형태 (v0.77 가로 추가)
 
 
+def canvas_for_layout(layout: str, default=(1080, 1920)) -> tuple:
+    """화면 비율 이름 → 만들 그림 크기 (v1.34, 목록 63).
+
+    🔴 사진 슬라이드쇼가 이걸 안 물어보고 **늘 세로**로 만들고 있었다. 회원님이
+    「가로 (16:9)」를 골라도 세로 그림이 나오고, 최종 프레임만 가로라 **가운데
+    세로 그림 + 양옆 블러 띠**가 된다. 원본 사진이 가로였으면 세로에 한 번, 가로에
+    또 한 번 우겨넣어 그림이 조각만 남는다 (이중 레터박스).
+    """
+    return _FIXED_CANVAS.get(layout, default)
+
+
 def _quality_canvas(layout: str, src_w: int, src_h: int, quality: str):
     """화질 등급 → (Canvas, crf, preset, sharpen). shorts/wide는 고정 캔버스, keep은 원본 기준 배수."""
     q = QUALITY_PRESETS.get(quality, QUALITY_PRESETS["standard"])

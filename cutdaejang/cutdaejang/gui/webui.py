@@ -1049,16 +1049,24 @@ def _run_edit(job_id: str, params: dict, workdir: str) -> None:
                     photo_sec = float(params.get("photo_sec") or 15)
                 except (TypeError, ValueError):
                     photo_sec = 15.0
-                photo_sec = max(3.0, min(180.0, photo_sec))
+                # v1.34 (목록 63): 3~5분 대본이 180초에서 잘려 뒷부분이 통째로 날아갔다
+                photo_sec = max(3.0, min(600.0, photo_sec))
                 if narr_file:  # 🎤 녹음이 있으면 사진 전체 길이 = 녹음 길이 (v0.58)
                     from ..utils import ffmpeg as _ff  # noqa: PLC0415
                     photo_sec = max(3.0, _ff.probe_duration_us(narr_file) / 1e6)
                 _set_job(job_id, stage="cut", frac=0.0,
                          note=f"사진 {len(imgs)}장 → {photo_sec:.0f}초 영상 만드는 중…")
                 (Path(workdir) / job_id).mkdir(parents=True, exist_ok=True)
+                # 🔴 v1.34 (목록 63): 여기서 size를 안 넘겨 **항상 세로(1080x1920)**로
+                #   만들고 있었다. 회원님이 「가로 (16:9)」를 골라도 세로 그림이 나오고,
+                #   최종 프레임만 1920x1080이라 **가로 화면 한가운데 세로 그림 +
+                #   양옆 블러 띠**가 된다. 원본 사진이 가로였으면 세로에 한 번,
+                #   가로에 또 한 번 — 이중 레터박스로 그림이 조각만 남는다.
+                _lay = params.get("layout") or edit_cfg["layout"]
                 video = photos_to_video(
                     imgs, int(photo_sec * 1e6),
                     str(Path(workdir) / job_id / "slideshow.mp4"),
+                    size=edit_mode.canvas_for_layout(_lay),
                     transition=(params.get("transition") or "none"))
             except Exception as ve:  # noqa: BLE001
                 _set_job(job_id, status="failed", errors=[str(ve)])
@@ -5661,7 +5669,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.33.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.34.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6731,9 +6739,17 @@ body.easy #easyBar { display: block; }
       </div>
       <div class="chk" style="gap:10px;flex-wrap:wrap">
         <span>화면 비율</span>
-        <select id="wlOrientSel" style="width:auto">
+        <select id="wlOrientSel" style="width:auto" onchange="onWlOrient()">
           <option value="shorts">📱 세로 쇼츠 (9:16)</option>
           <option value="wide">🖥 가로 (16:9)</option>
+        </select>
+        <span>영상 길이</span>
+        <select id="wlLenSel" style="width:auto" onchange="this.dataset.touched=1;updateEta()">
+          <option value="45">45초 (쇼츠)</option>
+          <option value="60">1분</option>
+          <option value="90">1분 30초</option>
+          <option value="180">3분 (가로 롱폼)</option>
+          <option value="300">5분</option>
         </select>
         <span>화질</span>
         <select id="wlQualitySel" style="width:auto" onchange="updateEta()">
@@ -10600,12 +10616,22 @@ function updatePhotoEta(){
   const sec = +(($('photoSec')||{}).value) || 0;
   box.textContent = etaText(sec, (($('autoQualitySel')||{}).value)||'standard');
 }
+function wlTargetSec(){ return +(($('wlLenSel')||{}).value) || 45; }
+function onWlOrient(){
+  // 🖥 v1.34 (목록 63): 가로를 골랐는데 대본이 45초면 «짧은 영상밖에 못 만드나»가 된다.
+  //   회원님이 길이를 따로 안 만졌으면 비율에 맞는 기본값으로 바꿔 준다.
+  const sel = $('wlLenSel'); if(!sel) return;
+  if(sel.dataset.touched) return;            // 직접 고르셨으면 건드리지 않는다
+  sel.value = (($('wlOrientSel')||{}).value === 'wide') ? '180' : '45';
+  updateEta();
+}
 function updateEta(){
   const box = $('wlEta'); if(!box) return;
   const NL = String.fromCharCode(10);
   const lines = (($('wlScript')||{}).value || '').split(NL).filter(s => s.trim()).length;
-  const sec = Math.max(10, Math.min(180, Math.round(lines * 4)));   // 서버와 같은 식
-  const t = lines ? etaText(sec, (($('wlQualitySel')||{}).value)||'standard') : '';
+  // 대본이 있으면 그 길이로, 아직 없으면 고른 «영상 길이»로 어림한다 (서버와 같은 식)
+  const sec = lines ? Math.max(10, Math.min(600, Math.round(lines * 4))) : wlTargetSec();
+  const t = etaText(sec, (($('wlQualitySel')||{}).value)||'standard');
   box.textContent = t;
   box.classList.toggle('hidden', !t);
 }
@@ -11455,7 +11481,7 @@ async function startShop(){
   if(!window._hasGeminiKey) key = ensureGeminiKey();
   const body = {
     photo_path: imgs.join(';'),
-    photo_sec: Math.max(10, Math.min(180, Math.round(lines.length * 4))),
+    photo_sec: Math.max(10, Math.min(600, Math.round(lines.length * 4))),
     layout: ($('shopOrientSel')||{}).value || 'shorts',        // 📐 비율 (v0.96)
     quality: ($('shopQualitySel')||{}).value || 'standard',    // 🖼 화질 (v0.96)
     script: lines.join(NL), script_tts: true,
@@ -11515,7 +11541,7 @@ async function loadWeblinkPasted(ev){
     const key = ensureGeminiKey();
     const d = await (await fetch('/api/fetch_url', {method:'POST',
       body: JSON.stringify({pasted_text: text, url: (($('weblinkUrl')||{}).value||'').trim(),
-                            target_sec: 45, gemini_key: key, save_key: true})})).json();
+                            target_sec: wlTargetSec(), gemini_key: key, save_key: true})})).json();
     if(d.error){ alert(d.error); return; }
     while(true){
       await new Promise(s => setTimeout(s, 1500));
@@ -11555,7 +11581,7 @@ async function loadWeblink(ev){
   try{
     const key = ensureGeminiKey();  // 대본 요약용 — 없으면 원문 문장으로 폴백
     const d = await (await fetch('/api/fetch_url', {method:'POST',
-      body: JSON.stringify({url, target_sec: 45, gemini_key: key, save_key: true})})).json();
+      body: JSON.stringify({url, target_sec: wlTargetSec(), gemini_key: key, save_key: true})})).json();
     if(d.error){ alert(d.error); return; }
     while(true){
       await new Promise(s => setTimeout(s, 1500));
@@ -11652,7 +11678,7 @@ async function startWeblink(){
   if(!window._hasGeminiKey) key = ensureGeminiKey();  // 보이스 적용용 (없어도 내장 음성으로 진행)
   const body = {
     photo_path: imgs.join(';'),
-    photo_sec: Math.max(10, Math.min(180, Math.round(lines.length * 4))),
+    photo_sec: Math.max(10, Math.min(600, Math.round(lines.length * 4))),
     layout: ($('wlOrientSel')||{}).value || 'shorts',          // 📐 비율 (v0.96)
     quality: ($('wlQualitySel')||{}).value || 'standard',      // 🖼 화질 (v0.96)
     script: lines.join(NL), script_tts: true,      // 🔊 대본을 목소리로
