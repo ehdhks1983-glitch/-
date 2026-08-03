@@ -25,10 +25,17 @@ def test_tiktok_tone_polite():
 
 
 def test_narration_flow_rules_in_script_prompts():
-    """대본 프롬프트: 문장이 자연스럽게 이어지는 한 흐름의 내레이션 규칙 (뚝뚝 끊김 방지)."""
+    """대본 프롬프트: 문장이 자연스럽게 이어지는 한 흐름의 내레이션 규칙 (뚝뚝 끊김 방지).
+
+    v1.33(목록 62)에서 블로그 대본 프롬프트를 다시 쓰면서 표현이 «이어 말하는
+    내레이션» → «이어서 말하는 한 편의 이야기»로 바뀌었다. 뜻은 더 강해졌으므로
+    **문구를 글자 그대로** 보지 않고 «이어짐을 요구하는가»를 본다.
+    """
     for p in (PROMPT_TEMPLATE, ARTICLE_SCRIPT_PROMPT):
-        assert "이어 말하는 내레이션" in p, p[:80]
-        assert "나열식" in p
+        assert "이어 말하는 내레이션" in p or "이어서 말하는 한 편의 이야기" in p, p[:80]
+        # 앞 문장을 받아 잇게 하는 연결어 지시가 있어야 한다
+        assert "그래서" in p and "특히" in p, p[:80]
+        assert "나열식" in p or "따로따로 만들어 늘어놓지 말고" in p, p[:80]
     assert "이어지는 한 흐름" in VIDEO_ANALYZE_PROMPT
 
 
