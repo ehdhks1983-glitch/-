@@ -309,12 +309,17 @@ $myThread = [CDJ.Fg]::GetCurrentThreadId()
 } catch {}
 $owner.Activate()
 $r = ''
+$initDir = '@INITDIR@'
 if ($kind -eq 'folder') {
     $d = New-Object System.Windows.Forms.FolderBrowserDialog
     $d.Description = '폴더 선택'
+    if ($initDir -and (Test-Path -LiteralPath $initDir)) { $d.SelectedPath = $initDir }
     if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $r = $d.SelectedPath }
 } else {
     $d = New-Object System.Windows.Forms.OpenFileDialog
+    # 📁 v1.35 (목록 69) — 예전엔 시작 폴더를 안 줘서 «누를 때마다» 윈도우
+    #   기본 위치에서 시작했다. 장면 12개면 그림 폴더를 12번 찾아 들어가야 했다.
+    if ($initDir -and (Test-Path -LiteralPath $initDir)) { $d.InitialDirectory = $initDir }
     if ($kind -eq 'images') {
         $d.Title = '사진 여러 장 선택 (Ctrl/Shift로 여러 개)'; $d.Multiselect = $true
         $d.Filter = '사진 파일|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|모든 파일|*.*'
@@ -342,30 +347,57 @@ import sys
 import tkinter as tk
 from tkinter import filedialog
 kind = sys.argv[1] if len(sys.argv) > 1 else "video"
+init = sys.argv[2] if len(sys.argv) > 2 else ""      # 📁 v1.35 마지막 폴더 (목록 69)
+kw = {"initialdir": init} if init else {}
 r = tk.Tk(); r.withdraw(); r.attributes("-topmost", True)
 if kind == "folder":
-    p = filedialog.askdirectory(title="폴더 선택")
+    p = filedialog.askdirectory(title="폴더 선택", **kw)
 elif kind == "images":
     ps = filedialog.askopenfilenames(
         title="사진 여러 장 선택 (Ctrl/Shift로 여러 개)",
-        filetypes=[("사진 파일", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"), ("모든 파일", "*.*")])
+        filetypes=[("사진 파일", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"), ("모든 파일", "*.*")], **kw)
     p = ";".join(ps or [])
 elif kind == "image":
     p = filedialog.askopenfilename(
         title="그림 파일 선택",
-        filetypes=[("그림 파일", "*.png *.jpg *.jpeg *.webp *.bmp"), ("모든 파일", "*.*")])
+        filetypes=[("그림 파일", "*.png *.jpg *.jpeg *.webp *.bmp"), ("모든 파일", "*.*")], **kw)
 elif kind == "audio":
     p = filedialog.askopenfilename(
         title="소리 파일 선택",
-        filetypes=[("소리 파일", "*.mp3 *.wav *.m4a *.ogg *.flac"), ("모든 파일", "*.*")])
+        filetypes=[("소리 파일", "*.mp3 *.wav *.m4a *.ogg *.flac"), ("모든 파일", "*.*")], **kw)
 else:
     p = filedialog.askopenfilename(
         title="편집할 영상 선택",
         filetypes=[("영상 파일", "*.mp4 *.mov *.avi *.mkv *.webm *.m4v *.wmv *.flv"),
-                   ("모든 파일", "*.*")])
+                   ("모든 파일", "*.*")], **kw)
 r.destroy()
 sys.stdout.write(p or "")
 """
+
+
+def _scene_order(names: list) -> list:
+    """그림 파일 이름 → 장면 번호(1부터). 못 읽으면 이름순 자리로 (목록 69).
+
+    ⚠ 예전엔 그냥 `sorted(...)` 뒤 `zip(scenes, files)`이었다. 그런데 챗지피티·
+      제미나이가 지어주는 이름은 «ChatGPT Image 2026-08-03 14-22-07.png»처럼
+      «만든 시각»이라, 이름순이 장면 순서와 우연히만 맞았다. 이제 이름 안의
+      숫자를 먼저 본다: `3.png` · `03_scene.png` · `장면2.png` → 3 · 3 · 2.
+
+    ⚠ 날짜·시각이 든 이름은 숫자가 여럿이라 «첫 숫자»를 쓰면 2026을 장면 번호로
+      읽는다. 그래서 **파일들이 서로 다른 작은 번호(1~999)를 하나씩 가질 때만**
+      번호로 인정하고, 아니면 이름순으로 되돌린다.
+    """
+    import re as _re  # noqa: PLC0415
+
+    picked = []
+    for n in names:
+        stem = Path(n).stem
+        nums = [int(x) for x in _re.findall(r"\d+", stem)]
+        small = [x for x in nums if 1 <= x <= 999]
+        picked.append(small[0] if len(small) == 1 else None)
+    if None not in picked and len(set(picked)) == len(picked):
+        return [x - 1 for x in picked]          # 1번 장면 = 자리 0
+    return list(range(len(names)))              # 번호를 못 믿겠으면 이름순
 
 
 def _pick_cannot_open(detail: str) -> RuntimeError:
@@ -375,12 +407,44 @@ def _pick_cannot_open(detail: str) -> RuntimeError:
     )
 
 
+# 📁 v1.35 (목록 69) — 종류별로 «마지막에 고른 폴더»를 기억한다.
+#   회원님 리포트: "폴더를 찾기도 보기도 너무 불편한 구조". 장면마다 [📁]를
+#   누를 때마다 윈도우 기본 위치에서 시작해, 그림 폴더를 매번 찾아 들어가야 했다.
+#   images/image 는 한 통으로 묶는다 (같은 그림 폴더를 쓰기 때문).
+_PICK_LAST: dict = {}
+_PICK_GROUP = {"images": "image", "image": "image", "video": "video",
+               "audio": "audio", "folder": "folder"}
+
+
+def _pick_initial_dir(kind: str) -> str:
+    return _PICK_LAST.get(_PICK_GROUP.get(kind, kind), "")
+
+
+def _pick_remember(kind: str, path: Optional[str]) -> None:
+    """고른 경로의 «폴더»를 다음 번 시작 위치로 기억."""
+    if not path:
+        return
+    first = str(path).split(";")[0].strip()
+    if not first:
+        return
+    p = Path(first)
+    folder = p if p.is_dir() else p.parent
+    try:
+        if folder.is_dir():
+            _PICK_LAST[_PICK_GROUP.get(kind, kind)] = str(folder)
+    except OSError:
+        pass
+
+
 def _pick_windows(kind: str, timeout: float) -> Optional[str]:
     """PowerShell(WinForms) 파일 대화상자. 취소=None, 실패=예외."""
     import base64  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
 
-    script = _PS_PICK_TEMPLATE.replace("@KIND@", kind)
+    # ⚠ 시작 폴더는 «작은따옴표로 감싼 PowerShell 문자열»에 들어간다.
+    #   경로에 '가 있으면 문자열이 깨지므로 PowerShell 규칙대로 ''로 이스케이프.
+    script = (_PS_PICK_TEMPLATE.replace("@KIND@", kind)
+              .replace("@INITDIR@", _pick_initial_dir(kind).replace("'", "''")))
     enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     try:
         proc = subprocess.run(
@@ -408,7 +472,7 @@ def _pick_tkinter(kind: str, timeout: float) -> Optional[str]:
 
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", _PICK_FILE_CODE, kind],
+            [sys.executable, "-c", _PICK_FILE_CODE, kind, _pick_initial_dir(kind)],
             capture_output=True, text=True, timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as e:
@@ -427,9 +491,9 @@ def pick_path(kind: str = "video", timeout: float = 300.0) -> Optional[str]:
     """
     if kind not in _PICK_KINDS:
         kind = "video"
-    if sys.platform == "win32":
-        return _pick_windows(kind, timeout)
-    return _pick_tkinter(kind, timeout)
+    got = _pick_windows(kind, timeout) if sys.platform == "win32" else _pick_tkinter(kind, timeout)
+    _pick_remember(kind, got)          # 📁 v1.35 다음엔 여기서 열린다 (목록 69)
+    return got
 
 
 def pick_video_file(timeout: float = 300.0) -> Optional[str]:
@@ -4060,13 +4124,21 @@ class _Handler(BaseHTTPRequestHandler):
             if not files:
                 self._send_json({"error": "폴더에 그림 파일(png/jpg/webp/bmp)이 없습니다"}, 400)
                 return
+            slots = _scene_order([p.name for p in files])   # 📁 v1.35 (목록 69)
+            by_name = (slots == list(range(len(files))))
             from .. import presets  # noqa: PLC0415
 
             scenes = job.get("scenes") or []
             scenes_dir = Path(workdir) / job["id"] / "scenes"
             scenes_dir.mkdir(parents=True, exist_ok=True)
-            applied, errors = 0, []
-            for scene, f in zip(scenes, files):  # 이름순 k번째 그림 → k번째 장면
+            applied, errors, skipped = 0, [], []
+            pairs = []
+            for f, slot in zip(files, slots):
+                if 0 <= slot < len(scenes):
+                    pairs.append((scenes[slot], f))
+                else:                       # 장면보다 큰 번호 → 버리지 말고 «말해준다»
+                    skipped.append(f.name)
+            for scene, f in pairs:
                 dest = scenes_dir / f"scene_{int(scene['i']) + 1:02d}.png"
                 try:
                     background_generator.normalize_to_canvas(str(f), str(dest),
@@ -4076,8 +4148,11 @@ class _Handler(BaseHTTPRequestHandler):
                 except Exception as e:  # noqa: BLE001
                     errors.append(f"{f.name}: {str(e)[:80]}")
             _set_job(job["id"], scenes=scenes)
+            empty = [i + 1 for i, s in enumerate(scenes) if not s.get("ok")]
             self._send_json({"ok": True, "applied": applied, "total": len(scenes),
-                             "files": len(files), "errors": errors[:3]})
+                             "files": len(files), "errors": errors[:3],
+                             "by_name": by_name, "empty": empty[:20],
+                             "skipped": skipped[:10]})
         elif path == "/api/confirm_scenes":  # 🖼 장면 검토 확정 → 렌더 (v0.50)
             job = _get_job(params.get("job_id", ""))
             if not job or job.get("status") != "review_scenes":
@@ -5700,7 +5775,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.34.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.35.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -5749,11 +5824,15 @@ body.easy #easyBar { display: block; }
       </button>
     </div>
     <details class="home-more" id="homeMoreModes">
-      <summary>더 많은 만들기 도구 3개 <span class="hint">— AI · 사진 · 블로그</span></summary>
+      <summary>더 많은 만들기 도구 4개 <span class="hint">— AI 대본 · ✨ AI 영상 · 사진 · 블로그</span></summary>
       <div class="home-cards">
         <button class="modecard" onclick="openMode('gen')">
           <span class="mc-emoji">🤖</span><span class="mc-title">AI 영상 만들기</span>
           <span class="mc-desc">주제 한 줄만 쓰면<br>대본·목소리·자막·배경까지 자동</span>
+        </button>
+        <button class="modecard" onclick="openMode('aiclip')" title="장면 설명을 적으면 AI가 짧은 영상을 만들어 줘요 (시댄스·Veo — 요금은 미리 보여드려요)">
+          <span class="mc-emoji">✨</span><span class="mc-title">AI로 영상 만들기</span>
+          <span class="mc-desc">찍은 게 없어도 됩니다<br>장면을 글로 적으면 AI가 영상으로</span>
         </button>
         <button class="modecard" onclick="openMode('photo')">
           <span class="mc-emoji">📸</span><span class="mc-title">사진으로 영상</span>
@@ -5804,7 +5883,17 @@ body.easy #easyBar { display: block; }
 
     <!-- 📐 v1.35 (목록 64) — 화면 비율은 「세부 설정」 안에 있었고, 사진 모드에선
          그 서랍째 숨겨져 «고를 수조차 없었다». 이제 폼 맨 위로 올라온다. -->
-    <div id="editShapeTop" style="margin-bottom:10px"></div>
+    <div id="editShapeTop" style="margin-bottom:10px">
+      <div id="editShapeRow">
+        <label>📐 화면 비율 <span class="hint">— 제일 먼저 고르세요</span></label>
+        <div class="toggle">
+          <label><input type="radio" name="editLayout" value="shorts" checked><span>쇼츠 (세로 9:16)</span></label>
+          <label><input type="radio" name="editLayout" value="wide"><span>가로 (16:9)</span></label>
+          <label><input type="radio" name="editLayout" value="keep"><span>원본 비율 유지</span></label>
+        </div>
+        <span class="hint hidden" id="layoutAutoHint"></span>
+      </div>
+    </div>
     <div id="videoBlock">
       <div class="steplabel"><span class="stepnum">1</span>편집할 영상 고르기</div>
       <div style="display:flex; gap:8px">
@@ -5823,7 +5912,7 @@ body.easy #easyBar { display: block; }
         <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','folder')">📁 폴더째</button>
       </div>
       <div class="hint">[🖼 사진 고르기]에서 Ctrl/Shift로 여러 장을 한 번에 — 고른 순서(입력칸의 세미콜론 순서)대로 들어가요. 폴더를 고르면 안의 사진 전부(이름순). 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
-      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 <b>[🎞 구간 대본 영상]</b>의 [✨ AI 클립]으로 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
+      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 첫 화면의 <b>[✨ AI로 영상 만들기]</b>에서 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
       <div class="chk" style="gap:8px">
         <span>영상 전체 길이</span>
         <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px"
@@ -6226,15 +6315,6 @@ body.easy #easyBar { display: block; }
                title="흑백"><div class="sw" style="filter:grayscale(1) contrast(1.1)"></div><span>흑백</span></div></div>
       </div>
       <div class="row" style="margin-top:4px">
-        <div id="editShapeRow">
-          <label>📐 화면 비율 <span class="hint">— 제일 먼저 고르세요</span></label>
-          <div class="toggle">
-            <label><input type="radio" name="editLayout" value="shorts" checked><span>쇼츠 (세로 9:16)</span></label>
-            <label><input type="radio" name="editLayout" value="wide"><span>가로 (16:9)</span></label>
-            <label><input type="radio" name="editLayout" value="keep"><span>원본 비율 유지</span></label>
-          </div>
-          <span class="hint hidden" id="layoutAutoHint"></span>
-        </div>
         <div>
           <label>음성 인식 엔진</label>
           <select id="sttSel"></select>
@@ -6757,7 +6837,7 @@ body.easy #easyBar { display: block; }
         <span class="hint" id="wlPhotoCnt" style="align-self:center"></span>
         <button class="ghost" style="border-color:#4266d5" onclick="loadWeblinkPasted(event)">🤖 이 내용으로 대본 만들기</button>
       </div>
-      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 <b>[🎞 구간 대본 영상]</b>의 [✨ AI 클립]으로 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
+      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 첫 화면의 <b>[✨ AI로 영상 만들기]</b>에서 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
     </details>
     <div id="wlPreview" class="hidden">
       <div class="steplabel"><span class="stepnum">2</span>사진 확인 <span class="hint">— 체크를 끄면 그 사진은 영상에서 빠져요 (순서 = 문장 순서)</span></div>
@@ -6848,7 +6928,7 @@ body.easy #easyBar { display: block; }
     <div class="chk" style="gap:10px;flex-wrap:wrap">
       <div class="toggle" style="margin:0">
         <label><input type="radio" name="secSrcMode" value="full" checked onchange="applySecMode()"><span>🎥 풀영상 하나로 <span class="hint">(길게 찍고 구간만 고르기 — 추천)</span></span></label>
-        <label><input type="radio" name="secSrcMode" value="clips" onchange="applySecMode()"><span>🎬 구간마다 클립 따로</span></label>
+        <label><input type="radio" name="secSrcMode" value="clips" onchange="applySecMode()"><span>🎬 구간마다 클립 따로 <span class="hint">— ✨ AI로 장면 영상을 만들려면 이쪽</span></span></label>
       </div>
     </div>
     <div id="secFullBox" style="margin-top:8px;padding:10px;border:1px dashed #3a4157;border-radius:10px">
@@ -6863,6 +6943,10 @@ body.easy #easyBar { display: block; }
         (미리보기가 안 떠도 만들기는 됩니다 — 일부 폰 영상 형식은 브라우저가 재생만 못 해요)</div>
     </div>
     <div class="steplabel" style="margin-top:10px"><span class="stepnum">2</span>구간 만들기 <span class="hint">— 행 순서대로 이어붙어요. 구간마다 읽을 내레이션 + (클립 또는 풀영상 범위)</span></div>
+    <div class="hint hidden" id="secAiTip" style="margin:6px 0;padding:9px 12px;border:1px solid #3a4a7a;border-radius:10px;background:#141a2b;color:#cdd8f5">
+      ✨ <b>AI로 영상 만들기</b> — 아래 구간마다 <b>내레이션</b>을 쓰고, 그 줄의 <b>[✨ AI 클립]</b>을 누르면
+      장면 영상을 AI가 만들어 그 자리에 넣어드려요. <b>만들기 전에 예상 요금을 보여드립니다.</b>
+    </div>
     <div id="secRows"></div>
     <button class="ghost" style="margin-top:8px" onclick="addSectionRow()">➕ 구간 추가</button>
     <div class="hint" id="secTotal" style="margin-top:6px"></div>
@@ -7027,7 +7111,7 @@ body.easy #easyBar { display: block; }
       <button class="ghost" onclick="resetShopCard(event)" title="링크·결과 글·사진·대본·훅을 한 번에 비우고 처음부터 (로그인 창은 그대로)">🧹 전체 초기화</button>
       <span class="hint" id="shopPhotoCnt" style="align-self:center"></span>
     </div>
-    <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 <b>[🎞 구간 대본 영상]</b>의 [✨ AI 클립]으로 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
+    <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 첫 화면의 <b>[✨ AI로 영상 만들기]</b>에서 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
     <div id="shopPhotoPrev" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
     <div class="hint" style="margin-top:4px">📋 <b>사진 한꺼번에 넣기</b> — 상품 페이지에서 사진 있는 부분을 마우스로 드래그해 복사(Ctrl+C)한 뒤 이 화면에 붙여넣기(Ctrl+V)하면 사진 여러 장이 자동으로 들어와요. 스크린샷(Win+Shift+S)을 바로 붙여넣어도 됩니다</div>
     <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)" title="수집된 설명을 수정한 뒤 대본만 다시 만들 때 사용하세요">🤖 수정한 정보로 대본 다시 만들기</button>
@@ -7115,12 +7199,12 @@ body.easy #easyBar { display: block; }
       <div class="hint" style="margin-top:4px">마음에 안 드는 장면은 <b>묘사를 고치고 [🔄 다시 그리기]</b>, 또는 <b>[📁 내 그림]</b>으로 직접 만든 그림을 넣어도 돼요 → 다 되면 맨 아래 <b>[✅ 이 그림들로 완성]</b></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         <button class="ghost" onclick="copyScenePrompts(event)" title="장면별 프롬프트를 「N번 장면 → 묘사」 통합 형식으로 복사 — 챗지피티/제미나이에 붙여넣어 한 번에 생성">📋 프롬프트 전체 복사 (통합)</button>
-        <button class="ghost" onclick="importSceneFolder(event)" title="직접 만든 그림들을 폴더에 담아두면 이름순으로 1번 장면부터 차례로 들어갑니다">📁 그림 폴더에서 한꺼번에 넣기</button>
+        <button onclick="importSceneFolder(event)" style="width:auto;margin:0" title="직접 만든 그림들을 폴더에 담아두면 파일 이름의 번호대로(1.png→1번 장면) 한 번에 들어갑니다. 번호가 없으면 이름순.">📁 내가 만든 그림 폴더에서 한꺼번에 넣기</button>
       </div>
       <textarea id="sceneAllText" class="hidden" readonly
                 style="margin-top:8px;min-height:180px;font-size:12.5px;line-height:1.55"
                 title="복사된 내용 — 여기서 드래그해 직접 복사해도 됩니다"></textarea>
-      <div id="sceneGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:10px"></div>
+      <div id="sceneGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-top:10px"></div>
       <button style="margin-top:12px" onclick="confirmScenes()">✅ 이 그림들로 영상 완성</button>
     </div>
 
@@ -7500,7 +7584,7 @@ body.easy #easyBar { display: block; }
     <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
       <div style="display:flex;align-items:center;gap:8px;font-weight:700">✨ fal.ai (AI 영상 클립)
         <span class="hint" id="apiFalState" style="font-weight:400"></span></div>
-      <div class="hint" style="margin-top:4px">쓰이는 곳: 구간 만들기의 [✨ AI 클립] — 시댄스·클링 같은 영상 생성 모델
+      <div class="hint" style="margin-top:4px">쓰이는 곳: 첫 화면의 [✨ AI로 영상 만들기] — 시댄스·클링 같은 영상 생성 모델
         — <a href="{{LINK:fal}}" target="_blank" style="color:#7a9bff">fal.ai (선불 크레딧 — 충전한 만큼만 쓰여요)</a></div>
       <div style="display:flex;gap:6px;margin-top:8px">
         <input type="password" id="apiFalKey" placeholder="fal.ai API 키 (사이트 Keys 메뉴에서 발급)" style="flex:1">
@@ -7968,7 +8052,8 @@ const NAV_INFO = {
   edit:     ['✂️ 내 영상 편집', 'resetEditForm'],
   photo:    ['📸 사진으로 영상', 'resetEditForm'],
   weblink:  ['🔗 블로그 글로 만들기', 'resetWeblinkCard'],
-  sections: ['🎞 구간 대본 영상', 'resetSectionCard'],
+  sections: ['🖥 긴 영상 (가로 16:9)', 'resetSectionCard'],
+  aiclip:   ['✨ AI로 영상 만들기', 'resetSectionCard'],
   shop:     ['🛒 쇼핑 상품 영상', 'resetShopCard'],
   voice:    ['🎤 내 목소리 등록', ''],
   rip:      ['🎙→📃 대본 따오기', ''],
@@ -7990,18 +8075,34 @@ function resetCurrentCard(ev){
 
 function openMode(kind){
   closeDrawer();                             // 🗄 v1.35 화면을 옮기면 서랍은 닫는다
-  window._view = kind;                       // 'gen'|'edit'|'photo'|'weblink'|'sections'|'shop'
+  window._view = kind;                       // 'gen'|'edit'|'photo'|'weblink'|'sections'|'shop'|'aiclip'
+  // ✨ v1.35 (목록 68) — 'aiclip'은 «긴 영상» 화면을 그대로 쓰되 들어오는 문만
+  //   다르다. 카드를 보이고 숨기는 규칙은 sections와 똑같이 취급한다.
+  const view = (kind === 'aiclip') ? 'sections' : kind;
   $('homeCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
   $('ripCard').classList.add('hidden');      // 🎙→📃 대본 따오기 (v1.01)
-  $('weblinkCard').classList.toggle('hidden', kind !== 'weblink');  // 🔗 전용 탭 (v0.79)
-  $('sectionCard').classList.toggle('hidden', kind !== 'sections'); // 🎞 구간 대본 (v0.80)
-  $('shopCard').classList.toggle('hidden', kind !== 'shop');        // 🛒 쇼핑 상품 (v0.89)
-  $('formCard').classList.toggle('hidden', kind !== 'gen');
-  $('editCard').classList.toggle('hidden', kind === 'gen' || kind === 'weblink' || kind === 'sections' || kind === 'shop');
+  $('weblinkCard').classList.toggle('hidden', view !== 'weblink');  // 🔗 전용 탭 (v0.79)
+  $('sectionCard').classList.toggle('hidden', view !== 'sections'); // 🎞 구간 대본 (v0.80)
+  $('shopCard').classList.toggle('hidden', view !== 'shop');        // 🛒 쇼핑 상품 (v0.89)
+  $('formCard').classList.toggle('hidden', view !== 'gen');
+  $('editCard').classList.toggle('hidden', view === 'gen' || view === 'weblink' || view === 'sections' || view === 'shop');
   updateNav(kind);
   if(kind === 'weblink'){ initWeblinkCard(); return; }
-  if(kind === 'sections'){ initSectionCard(); return; }
+  if(kind === 'sections' || kind === 'aiclip'){
+    initSectionCard();
+    // ✨ v1.35 (목록 68) — [✨ AI 클립] 버튼은 「구간마다 클립 따로」 모드의
+    //   구간 줄에만 붙는다. 기본값이 「풀영상 하나로」라 회원님 화면에선
+    //   그 버튼이 통째로 숨어 있었다. AI 입구로 들어오면 미리 맞춰 준다.
+    if(kind === 'aiclip'){
+      const r = document.querySelector("input[name='secSrcMode'][value='clips']");
+      if(r){ r.checked = true; applySecMode(); }
+      const rows = $('secRows');            // initSectionCard가 이미 한 줄 넣지만 안전하게
+      if(rows && !rows.children.length && typeof addSectionRow === 'function') addSectionRow();
+      const tip = $('secAiTip'); if(tip) tip.classList.remove('hidden');
+    }
+    return;
+  }
   if(kind === 'shop'){ initShopCard(); return; }
   if(kind !== 'gen'){
     window._editKind = kind;
@@ -10110,7 +10211,7 @@ async function saveApiKey(ev, which){
     return;
   }
   alert(which === 'fal'
-    ? '저장했어요 — 구간 만들기의 [✨ AI 클립]에서 시댄스·클링 같은 fal.ai 모델을 쓸 수 있어요'
+    ? '저장했어요 — 첫 화면의 [✨ AI로 영상 만들기]에서 시댄스·클링 같은 fal.ai 모델을 쓸 수 있어요'
     : '저장했어요 — 이제 이 키가 필요한 기능이 모두 켜집니다');
 }
 async function clearAllKeys(ev){
@@ -10604,8 +10705,10 @@ function mountAllDeco(){
   mountShapeTop();
   refreshDecoSummaries();
 }
-// 📐 화면 비율을 폼 맨 위로 (목록 64 ②) — 사진 모드에서 「세부 설정」이 통째로
-//   숨겨져 비율을 못 고르던 것이 여기서 같이 풀린다.
+// 📐 화면 비율은 v1.35부터 «화면 자체»가 폼 맨 위에 있다 (목록 64 ②).
+//   예전엔 「⚙️ 세부 설정」 안에 있었고 사진 모드는 그 서랍을 통째로 숨겨서
+//   비율을 «고를 수조차» 없었다 — 직전 편집에서 고른 값이 조용히 되살아났다.
+//   여기 남긴 건 혹시 옛 자리에 남아 있을 때를 위한 대비다.
 function mountShapeTop(){
   const row = $('editShapeRow'), top = $('editShapeTop');
   if(row && top && row.parentElement !== top) top.appendChild(row);
@@ -10953,28 +11056,44 @@ function renderScenes(job){
     const cell = document.createElement('div');
     cell.style.cssText = 'border:1px solid #2c3350;border-radius:12px;padding:10px;background:#12141c;display:flex;flex-direction:column;gap:6px'
       + (s.ok ? '' : ';border-style:dashed');
-    const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;gap:8px;font-weight:700';
-    head.innerHTML = '<span style="background:#22283f;border-radius:8px;padding:2px 10px">장면 ' + (k + 1) + '</span>'
-      + '<span class="hint" style="font-weight:400">' + (s.ok ? '🟢 그림 있음' : '⬜ 그림 없음') + '</span>';
-    cell.appendChild(head);
-    if(s.ok){  // 그림이 있을 때만 이미지 — 없으면 깨진 아이콘 대신 프롬프트에 집중
+    // 🖼 v1.35 (목록 69 ②) — 예전엔 한 칸에 그림 + 대사 + 96px 프롬프트 상자 +
+    //   버튼을 다 넣어 «그림이 작고 글상자가 화면을 먹었다». 이제 그림이 먼저고,
+    //   프롬프트는 고칠 때만 펼친다. 번호는 그림 «위에» 크게 얹어 대조가 되게.
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;border-radius:10px;overflow:hidden;'
+      + 'background:#0d0f14;aspect-ratio:' + (window._jobOrient === 'wide' ? '16/9' : '9/16');
+    if(s.ok){
       const img = document.createElement('img');
-      img.style.cssText = 'width:100%;border-radius:8px;aspect-ratio:9/16;object-fit:cover;background:#0d0f14';
+      img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block';
       img.src = '/scene/' + encodeURIComponent(job.id) + '/' + s.i + '?t=' + Date.now();
       img.alt = '장면 ' + (k + 1);
-      cell.appendChild(img);
+      wrap.appendChild(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;'
+        + 'justify-content:center;color:#6b7590;font-size:13px';
+      ph.textContent = '⬜ 그림 없음';
+      wrap.appendChild(ph);
     }
+    const badge = document.createElement('div');
+    badge.style.cssText = 'position:absolute;left:8px;top:8px;background:rgba(8,10,16,.8);'
+      + 'border:1px solid #3b4668;border-radius:9px;padding:3px 11px;font-weight:800;font-size:14px';
+    badge.textContent = (k + 1);
+    wrap.appendChild(badge);
+    cell.appendChild(wrap);
     const cap = document.createElement('div');
     cap.style.cssText = 'font-size:12.5px;color:#cdd3e0;line-height:1.45';
     cap.textContent = '💬 ' + (s.text || '');
-    const lab = document.createElement('div');
-    lab.className = 'hint';
-    lab.textContent = '그림 묘사 (프롬프트) — 고쳐도 돼요';
+    const lab = document.createElement('details');       // 접어 둔다
+    lab.className = 'opt';
+    const lsum = document.createElement('summary');
+    lsum.innerHTML = '✍ 그림 묘사 고치기 <span class="hint">— 다시 그릴 때만 쓰면 돼요</span>';
+    lab.appendChild(lsum);
     const ta = document.createElement('textarea');
-    ta.style.cssText = 'min-height:96px;font-size:12.5px;line-height:1.5';
+    ta.style.cssText = 'min-height:88px;font-size:12.5px;line-height:1.5';
     ta.value = s.prompt || '';
     ta.id = 'scnP' + s.i;
+    lab.appendChild(ta);
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
     const btn = document.createElement('button');
@@ -10989,7 +11108,7 @@ function renderScenes(job){
     up.title = '직접 만든 그림 파일을 이 장면에 넣기 (자동으로 쇼츠 크기에 맞춰져요)';
     up.onclick = (e) => sceneUpload(e, s.i);
     row.append(btn, up);
-    cell.append(cap, lab, ta, row);
+    cell.append(cap, lab, row);
     grid.appendChild(cell);
   });
   $('sceneBox').classList.remove('hidden');
@@ -11043,10 +11162,17 @@ async function importSceneFolder(ev){
     body: JSON.stringify({job_id: currentJob, folder: pk.path})})).json();
   if(data.error){ alert(data.error); return; }
   await refreshScenes();
-  let msg = '그림 ' + data.applied + '/' + data.total + '개 장면에 넣었어요';
-  if(data.files < data.total) msg += ' (폴더에 그림이 ' + data.files + '개뿐 — 나머지 장면은 직전 그림 유지)';
-  if((data.errors||[]).length) msg += String.fromCharCode(10) + '실패: ' + data.errors.join(', ');
-  alert(msg);
+  // 📁 v1.35 (목록 69) — 예전엔 «몇 개 넣었다»만 말하고, 모자라거나 남는 건
+  //   조용히 넘어갔다. 이제 어떻게 짝지었는지·어디가 비었는지까지 말한다.
+  const NL = String.fromCharCode(10);
+  const lines = ['그림 ' + data.files + '장 → 장면 ' + data.applied + '/' + data.total + '개를 채웠어요.'];
+  lines.push(data.by_name
+    ? '📄 파일 이름에 장면 번호가 없어서 «이름순»으로 넣었어요 — 순서가 다르면 장면마다 [📁 내 그림]으로 바꿔주세요.'
+    : '🔢 파일 이름의 번호대로 넣었어요 (1.png → 1번 장면).');
+  if((data.empty||[]).length) lines.push('⬜ 아직 빈 장면: ' + data.empty.join('·') + '번');
+  if((data.skipped||[]).length) lines.push('↩ 장면 수보다 번호가 큰 파일은 안 넣었어요: ' + data.skipped.join(', '));
+  if((data.errors||[]).length) lines.push('❌ 실패: ' + data.errors.join(', '));
+  alert(lines.join(NL));
 }
 
 // 📁 이 장면에 내 그림 1장 (v0.51)
