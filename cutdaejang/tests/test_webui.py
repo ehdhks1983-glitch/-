@@ -81,7 +81,8 @@ def test_beginner_ui_structure(server):
     """v0.36 초보자 UI: 홈 모드 카드 + 단계형 폼 + 접는 옵션 그룹 (옛 토글 잔재 없음)."""
     html = _get(server, "/").read().decode("utf-8")
     assert 'id="homeCard"' in html
-    assert html.count('class="modecard"') == 6  # AI/편집/사진/🔗블로그/🎞구간/🛒쇼핑(v0.89)
+    # v1.35: ✨AI로 영상 만들기 추가 (목록 68)
+    assert html.count('class="modecard"') == 7
     # 완전 자동은 이제 라디오(editFinish) + 길이 프리셋으로
     assert 'name="editFinish"' in html and 'id="autoTargetPreset"' in html
     # 꾸미기 그룹: 훅·내레이션·소리·워터마크·대본·세부설정
@@ -1137,7 +1138,9 @@ def test_beginner_first_run_defaults(server):
     🎬 자동 연출 그룹 신설, 완료 화면 다음 단계 안내, 개발 버전 표기 제거."""
     html = _get(server, "/").read().decode("utf-8")
     assert 'value="gemini" checked' in html           # 기본 목소리 = 🌟 AI 성우
-    assert html.count('value="stub"') == 1            # 라디오는 세부 설정 한 곳에만
+    # v1.35 (목록 66): 「🔊 소리 점검용(삐-)」 라디오를 뺐다 — 개발용인데
+    #   성우들과 나란히 있어 잘못 고르면 영상 전체가 삐- 소리로 나왔다.
+    assert html.count('value="stub"') == 0
     assert "소리 점검용 목소리" in html                 # 용어: 테스트 톤 → 소리 점검용
     assert "테스트 톤" not in html.split("<script>")[0]  # 화면 텍스트에서 제거
     i = html.index("🎬 자동 연출")                     # 🎬 연출 4종이 한 그룹에
@@ -1345,7 +1348,8 @@ def test_html_wellformed_and_scene_review_v0572(server):
     # 통합 복사 버튼 + 보이는 복사 상자 + 넓어진 그리드
     assert "프롬프트 전체 복사 (통합)" in html
     assert html.count('id="sceneAllText"') == 1
-    assert "minmax(240px,1fr)" in html
+    # v1.35 (목록 69): 장면 칸을 «그림 먼저»로 바꾸며 넓혔다 (240 → 300)
+    assert "minmax(300px,1fr)" in html
     # 복사 형식: 「N번 장면」 블록을 만드는 JS가 실려 있어야 한다
     assert "'번 장면'" in html or '"번 장면"' in html
 

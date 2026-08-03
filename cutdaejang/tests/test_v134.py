@@ -28,7 +28,7 @@ SRC = open(webui.__file__, encoding="utf-8").read()
 
 
 def test_version():
-    assert __version__ == "1.34.0"
+    assert __version__ == "1.35.0"
 
 
 # ── ① 16:9인데 세로로 나오던 것 ────────────────────────────────

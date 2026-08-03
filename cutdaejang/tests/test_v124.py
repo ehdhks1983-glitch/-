@@ -25,7 +25,7 @@ from cutdaejang.utils.pronounce import pronounce_ko
 
 
 def test_version():
-    assert __version__ == "1.34.0"
+    assert __version__ == "1.35.0"
 
 
 # ── 43. 자막은 숫자, 소리는 한글 발음 ──────────────────────────────
@@ -110,7 +110,10 @@ def test_shop_guide_is_stepwise_not_wall():
 def test_success_banner_is_not_red():
     html = webui._HTML
     assert ".banner.ok" in html
-    assert "b.classList.toggle('ok', okMark);" in html
+    # v1.35 (목록 67): 알림은 띠가 아니라 «떴다 사라지는 쪽지»로 나간다.
+    #   초록/빨강을 가르는 자리도 그리로 옮겨졌다.
+    assert ".toast.ok" in html
+    assert "t.className = 'toast' + (okMark ? ' ok' : '');" in html
 
 
 def test_extra_large_subtitle_choice():

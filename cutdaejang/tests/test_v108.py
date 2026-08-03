@@ -139,7 +139,8 @@ def test_v108_ui_wiring():
     html = webui._HTML
     for tok in ("👵 자주 바꾸는 것", "🔧 전문가 설정", "모든 영상에 항상",
                 'class="ezchips"', "function initEzChips", "function markEzChips",
-                "function injectQuickDeco", "function quickSet", "/api/quick_set",
+                # v1.35: injectQuickDeco(칩만 끼워 넣기) → mountDeco(선택칸까지 한 상자로) (목록 64)
+                "function mountDeco", "function quickSet", "/api/quick_set",
                 "qd-size", "qd-cards", "data-lazy"):
         assert tok in html, tok
     assert html.count('id="setTextCards"') == 1          # 누구나 존으로 '이동' (중복 없음)

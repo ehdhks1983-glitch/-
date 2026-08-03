@@ -34,7 +34,7 @@ SUBS = [Subtitle(text=f"{i + 1}번째 문장이에요", start_us=i * 3_000_000,
 
 
 def test_version():
-    assert __version__ == "1.34.0"
+    assert __version__ == "1.35.0"
 
 
 @pytest.fixture(scope="module")

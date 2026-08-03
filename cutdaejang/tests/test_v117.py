@@ -21,7 +21,7 @@ from cutdaejang.gui import webui
 
 
 def test_version():
-    assert __version__ == "1.34.0"
+    assert __version__ == "1.35.0"
 
 
 def test_easy_mode_css_and_toggle_wired():
@@ -53,9 +53,17 @@ def test_easy_hides_options_but_keeps_essentials():
 
 
 def test_settings_card_scrolls_on_open():
+    """v1.35에서 뒤집혔다 (목록 70) — 이제 «움직이면 안 된다».
+
+    v1.17에는 설정이 페이지 맨 아래에 있어 «눌러도 아무 일 없는 것 같다»는
+    리포트(22번)를 scrollIntoView로 덮었다. 그런데 그게 만들다 말고 맨 아래로
+    끌려가는 불편이 되어 돌아왔다. 이제 옆 서랍으로 열려 페이지는 그대로 있고,
+    닫으면 보던 자리 그대로다. 그래서 이 시험도 «안 움직이는지»를 본다.
+    """
     html = webui._HTML
     seg = html.split("function toggleSettings")[1][:420]
-    assert "scrollIntoView" in seg
+    assert "scrollIntoView" not in seg
+    assert "openDrawer('settingsCard'" in seg
     seg2 = html.split("function toggleApiCard")[1][:420]
     assert "scrollIntoView" in seg2
     seg3 = html.split("function toggleProductCard")[1][:420]
