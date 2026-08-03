@@ -64,10 +64,11 @@ def test_settings_card_scrolls_on_open():
     seg = html.split("function toggleSettings")[1][:420]
     assert "scrollIntoView" not in seg
     assert "openDrawer('settingsCard'" in seg
+    # 📇 내 제품 · 🔑 API 연동도 같은 병이라 같이 서랍으로 (목록 70)
     seg2 = html.split("function toggleApiCard")[1][:420]
-    assert "scrollIntoView" in seg2
+    assert "scrollIntoView" not in seg2 and "openDrawer('apiCard'" in seg2
     seg3 = html.split("function toggleProductCard")[1][:420]
-    assert "scrollIntoView" in seg3
+    assert "scrollIntoView" not in seg3 and "openDrawer('productCard'" in seg3
 
 
 @pytest.fixture()
