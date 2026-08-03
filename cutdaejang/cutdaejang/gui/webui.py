@@ -3710,9 +3710,14 @@ class _Handler(BaseHTTPRequestHandler):
             if not any(t.strip() for t in texts):
                 self._send_json({"error": "다듬을 자막이 없습니다"}, 400)
                 return
+            # 🪄 v1.33 (목록 62): 받아쓴 자막이면 «오타 교정», 대본이면 «말맛 다듬기».
+            #   대본에 오타 교정을 걸면 고칠 게 없어 원문 그대로 돌아온다
+            #   ("눌러도 바뀌는 게 없다" — 회원님 26차).
+            mode = "polish" if params.get("mode") == "polish" else "stt"
             try:
-                lines = sg.refine_subtitles(texts, context=params.get("context", ""))
-                self._send_json({"lines": lines})
+                lines = sg.refine_subtitles(texts, context=params.get("context", ""),
+                                            mode=mode)
+                self._send_json({"lines": lines, "mode": mode})
             except sg.ScriptError as e:
                 self._send_json({"error": str(e)}, 400)
             except Exception as e:
@@ -5656,7 +5661,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.32.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.33.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -7117,7 +7122,7 @@ body.easy #easyBar { display: block; }
       <div class="hint" id="hlReason" style="margin-top:4px"></div>
       <div id="subList" class="subList-scroll" style="margin-top:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-        <button class="ghost" onclick="refineSubs(event)" title="발음 오인식을 문맥에 맞게 자연스럽게 자동 교정 (제미나이 키 필요)">🪄 AI로 대본 다듬기</button>
+        <button class="ghost" onclick="refineSubs(event)" title="대본으로 만든 영상이면 «뜻은 그대로 두고 이어지게» 다듬고, 받아쓴 자막이면 잘못 적힌 부분을 고쳐요 (제미나이 키 필요)">🪄 AI로 대본 다듬기</button>
         <button class="ghost" onclick="addSubRow(event)">+ 자막 줄 추가</button>
       </div>
       <details class="opt" style="margin-top:8px">
@@ -8830,16 +8835,37 @@ async function refineSubs(ev){
   const btn=ev.target; btn.disabled=true; const old=btn.textContent; btn.textContent='다듬는 중…';
   try{
     const subs=idxs.map(i=>({text:window._subs[i].text}));
+    // 🪄 v1.33 (목록 62): 받아쓴 자막이면 «오타 교정», 대본이면 «말맛 다듬기».
+    //   대본에 오타 교정을 걸면 고칠 게 없어 원문이 그대로 돌아온다 — 그게
+    //   «눌러도 아무것도 안 바뀌던» 정체다.
+    const mode = subsAreScript() ? 'polish' : 'stt';
     const data=await (await fetch('/api/refine_subtitles',{method:'POST',
-      body:JSON.stringify({subtitles:subs, context:$('editHook').value||'', gemini_key:key, save_key:true})})).json();
+      body:JSON.stringify({subtitles:subs, mode:mode, context:$('editHook').value||'', gemini_key:key, save_key:true})})).json();
     if(data.error){ alert(data.error); return; }
     window._hasGeminiKey=true;
-    (data.lines||[]).forEach((t,k)=>{ if(idxs[k]!=null && t) window._subs[idxs[k]].text=t; });
+    let changed=0;
+    (data.lines||[]).forEach((t,k)=>{
+      if(idxs[k]==null || !t) return;
+      if(t !== window._subs[idxs[k]].text) changed++;
+      window._subs[idxs[k]].text=t;
+    });
     renderSubRows();
-    const r=$('hlReason'); if(r) r.textContent='🪄 AI가 대본을 다듬었어요. 어색한 부분은 직접 더 고치세요.';
+    const r=$('hlReason');
+    if(r) r.textContent = changed
+      ? (mode==='polish'
+         ? '🪄 ' + changed + '줄을 이어지게 다듬었어요 — 뜻은 그대로예요. 어색하면 직접 더 고치세요.'
+         : '🪄 ' + changed + '줄의 잘못 받아쓴 부분을 고쳤어요. 어색한 부분은 직접 더 고치세요.')
+      : '🪄 이미 자연스러워서 고칠 곳이 없었어요 (AI가 그대로 두었습니다).';
   } finally { btn.disabled=false; btn.textContent=old; }
 }
 // ── ↕ 자막 위치 드래그 (v0.49) — 노란 점선 상자를 끌면 그 높이로 자막이 들어감 ──
+function subsAreScript(){
+  // 대본으로 만든 영상(블로그·쇼핑·구간·사진·AI 내레이션)은 «받아쓴» 게 아니다.
+  // 그런 영상에는 오타 교정이 아니라 말맛 다듬기를 걸어야 한다.
+  const ep = (window._curJob||{}).edit_params;
+  if(!ep) return true;                 // 🤖 AI 영상 만들기 — 대본이 원본이다
+  return !!ep.narration || !!ep.script_tts;
+}
 function initSubPosBar(){
   const bar=$('subPosBar'), wrap=$('playerWrap');
   if(!bar || !wrap || bar._init) return;
