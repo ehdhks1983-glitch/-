@@ -905,6 +905,141 @@ HIGHLIGHT_PROMPT = """\
 """
 
 
+# ── 🎬 v1.40 (목록 82) — «여러 개»도 좋은 데만 골라 만들기 ────────
+# 회원님 40차: "롱폼을 쇼츠로 여러 개 만들면 그냥 줄여서 여러 개 나오는 것 같은데
+#  1개 할 때는 하이라이트만 잘 추출해서 만들어지는 게 맞는지 확인"
+#
+# 확인해 보니 회원님 말이 맞았다. 여러 개는 `split_into_clips`가 자막을
+# **순서대로** 묶기만 했다 — 어디가 좋은지는 안 봤다. 1개일 때만 핵심을 골랐다.
+# 74번 조사에서 «AI가 하이라이트를 찾아 편집 — 이미 있다»고 적었는데,
+# 그건 «1개일 때만» 있었다. 그때 내가 덜 봤다.
+MULTI_HL_PROMPT = """\
+역할: 유튜브 쇼츠 편집자
+아래는 긴 영상의 자막 목록이야. 각 줄: 번호) [시작시각] (길이) 내용.
+목표: 이 영상에서 **서로 다른 쇼츠 {n}개**를 뽑아 줘. 하나가 약 {target}초.
+반드시 지켜:
+- 각 쇼츠는 **그 자체로 완결된 이야기**여야 한다 (혼자 봐도 말이 되게).
+- 쇼츠끼리 **같은 번호를 겹쳐 쓰지 마라.** 서로 다른 대목이어야 한다.
+- ⚠ 앞에서부터 {n}등분하지 마라. 그건 그냥 자르기다 — 실패다.
+- 각 쇼츠는 **숫자·질문·반전·이득·결론**이 있는 대목을 중심으로.
+  지루한 설명·군더더기·중복은 통째로 버려라.
+- 좋은 대목이 {n}개가 안 되면 **적게 줘도 된다.** 억지로 채우지 마라.
+- 각 쇼츠의 번호들은 영상 순서(작은 번호부터)로 정렬해서 줘.
+자막들:
+{lines}
+출력(JSON만): {{"clips":[{{"keep":[번호들],"title":"이 쇼츠 한 줄 제목"}}, ...],
+ "reason":"왜 이렇게 나눴는지 한 줄"}}
+"""
+
+
+def _clip_groups_sane(clips: list, subs: list, want: int) -> list:
+    """AI가 준 묶음을 검사·정리 — 겹침 제거, 번호 범위 확인, 시간순 정렬."""
+    used: set = set()
+    out: list = []
+    for c in clips:
+        raw = _as_list(_as_dict(c).get("keep"))
+        keep = []
+        for v in raw:
+            try:
+                i = int(float(v))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= i < len(subs) and i not in used:
+                keep.append(i)
+        if len(keep) < 2:                      # 한 문장짜리 쇼츠는 의미가 없다
+            continue
+        keep.sort()
+        used.update(keep)
+        out.append({"keep": keep, "title": str(_as_dict(c).get("title") or "").strip()})
+        if len(out) >= want:
+            break
+    out.sort(key=lambda g: g["keep"][0])       # 영상 순서대로 저장되게
+    return out
+
+
+def suggest_multi_highlights(subs: list, target_sec: int = 30, n: int = 3,
+                             model: str = "gemini-2.5-flash", api_key=None) -> dict:
+    """긴 영상 → 서로 겹치지 않는 «쇼츠 n개»의 자막 번호 묶음 (Gemini)."""
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 AI 핵심 추천을 쓸 수 없습니다")
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent")
+    prompt = MULTI_HL_PROMPT.format(target=target_sec, n=n, lines=_fmt_sub_lines(subs))
+    data = _post_ai(url, {"contents": [{"parts": [{"text": prompt}]}],
+                          "generationConfig": {"responseMimeType": "application/json"}},
+                    key, timeout=60.0)
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as e:
+        raise ScriptError(f"핵심 추천 응답 형식 예상 밖: {json.dumps(data)[:200]}") from e
+    obj = _as_dict(json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())))
+    groups = _clip_groups_sane(_as_list(obj.get("clips")), subs, n)
+    if not groups:
+        raise ScriptError("AI가 쓸 만한 묶음을 하나도 주지 않음")
+    # 게으른 선택 가드 — 1개짜리(suggest_highlights)와 같은 취지.
+    # «앞에서부터 n등분»이면 그냥 자르기와 다를 게 없다.
+    if len(groups) >= 2 and len(subs) >= 8:
+        flat = [i for g in groups for i in g["keep"]]
+        if flat == list(range(len(flat))):
+            raise ScriptError("AI가 앞에서부터 순서대로 나눔(핵심 선별 실패) — 점수 방식으로 대체")
+    return {"clips": groups, "reason": str(obj.get("reason", ""))}
+
+
+def suggest_multi_highlights_heuristic(subs: list, target_sec: int = 30,
+                                       n: int = 3) -> dict:
+    """키 없이 쓰는 대역 — 후킹 점수의 «봉우리» n군데를 잡아 그 둘레로 묶는다.
+
+    1개짜리(suggest_highlights_heuristic)는 영상 전체에서 좋은 문장을 «모아»
+    하나로 만든다. 여기는 다르다 — 쇼츠 하나가 «그 자리에서 이어지는 이야기»여야
+    혼자 봐도 말이 되므로, 점수가 높은 문장을 **중심**으로 앞뒤를 붙여 나간다.
+    """
+    if not subs:
+        return {"clips": [], "reason": "자막이 없습니다"}
+    total = len(subs)
+    dur = [max(0.1, (s.get("end_us", 0) - s.get("start_us", 0)) / 1e6) for s in subs]
+    score = [_hook_score(str(s.get("text") or ""), dur[i], i, total)
+             for i, s in enumerate(subs)]
+    taken = [False] * total
+    clips: list = []
+    for _ in range(max(1, n)):
+        # 아직 안 쓴 문장 중 점수가 제일 높은 곳을 «씨앗»으로
+        seed, best = -1, -1.0
+        for i in range(total):
+            if not taken[i] and score[i] > best:
+                seed, best = i, score[i]
+        if seed < 0:
+            break
+        keep, got = [seed], dur[seed]
+        lo = hi = seed
+        while got < target_sec:                # 씨앗 둘레로 «이어지게» 넓힌다
+            cand_lo = lo - 1 if lo - 1 >= 0 and not taken[lo - 1] else -1
+            cand_hi = hi + 1 if hi + 1 < total and not taken[hi + 1] else -1
+            if cand_lo < 0 and cand_hi < 0:
+                break
+            if cand_hi < 0 or (cand_lo >= 0 and score[cand_lo] > score[cand_hi]):
+                lo = cand_lo
+                keep.append(lo)
+                got += dur[lo]
+            else:
+                hi = cand_hi
+                keep.append(hi)
+                got += dur[hi]
+        if len(keep) < 2:
+            taken[seed] = True                 # 혼자짜리는 버리고 다음 씨앗으로
+            continue
+        keep.sort()
+        for i in keep:
+            taken[i] = True
+        clips.append({"keep": keep, "title": str(subs[seed].get("text") or "")[:40]})
+    clips.sort(key=lambda g: g["keep"][0])
+    return {"clips": clips,
+            "reason": (f"후킹 요소(숫자·질문·키워드)가 강한 대목 {len(clips)}군데를 중심으로 "
+                       f"앞뒤를 이어 붙였어요 (대략치 — 제미나이 키를 넣으면 문맥까지 봐요)")}
+
+
 def _fmt_sub_lines(subs: list) -> str:
     out = []
     for i, s in enumerate(subs):
