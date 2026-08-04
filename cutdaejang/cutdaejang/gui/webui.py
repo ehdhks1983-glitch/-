@@ -2286,6 +2286,8 @@ def _kit_text(kit: dict, title: str) -> str:
                   kit["pinned_comment"]]
     lines += ["", "── 카테고리 ──",
               f"{kit.get('category', '')} — {kit.get('category_reason', '')}"]
+    if kit.get("phone_music"):  # 📱 v1.39 (목록 81) — 폰 앱에서 최신곡 붙이기
+        lines += ["", "── 📱 폰에서 최신 음악 붙이기 ──", kit["phone_music"]]
     if kit.get("bgm_credit"):   # 🎵 v1.36 (목록 73) — 설명문과 «따로» 둔다
         lines += ["", "── 🎵 음원 크레딧 (설명란 맨 아래에 붙여넣기) ──",
                   "무료 BGM(Kevin MacLeod)은 «저작자 표시(CC BY)»가 사용 조건이에요.",
@@ -5185,9 +5187,29 @@ class _Handler(BaseHTTPRequestHandler):
         #     따로 보여주고 «어디에 넣어야 하는지»까지 알려 준다.
         #   ⚠ 내 음원·직접 넣은 파일이면 아무것도 안 붙인다 (예전엔 파일 이름이
         #     설명문에 그대로 들어갔다 — 그건 순전히 잡음이었다).
-        credit = _bgm_credit((ep.get("bgm") or jp.get("bgm") or "").strip())
+        bgm_name = (ep.get("bgm") or jp.get("bgm") or "").strip()
+        credit = _bgm_credit(bgm_name)
         if credit:
             kit["bgm_credit"] = credit
+        elif not bgm_name:
+            # 📱 v1.39 (목록 81) — 회원님 39차: "유튜브는 폰으로 올릴 때 최신 노래를
+            #   넣을 수 있는데 컷대장에서는 안 되냐?"
+            #   그 곡들은 «유튜브 앱 안에서 만들 때»만 쓰라고 유튜브가 음반사와
+            #   계약해 둔 것이라 어떤 외부 프로그램도 파일에 넣을 수 없다.
+            #   넣어서 올리면 Content ID가 잡는다 (1분 넘는 쇼츠는 아예 차단).
+            #   그런데 «배경음악 없이 만들어 폰 앱에서 붙이는» 길은 열려 있다 —
+            #   지금 이 영상이 딱 그 상태다. 그 방법을 알려 준다.
+            kit["phone_music"] = (
+                "📱 최신 유행곡을 넣고 싶으면 — 이 영상은 배경음악이 없어서 바로 됩니다\n"
+                "① 완성된 영상 파일을 휴대폰으로 옮기세요 (카톡 나에게 보내기 등)\n"
+                "② 휴대폰 유튜브 앱 → [＋] → 「동영상 업로드」로 이 파일 고르기\n"
+                "③ 편집 화면에서 [🎵 사운드] → 원하는 최신곡 고르기\n"
+                "④ 「원본 소리」와 음악 크기를 섞어 내레이션이 들리게 맞추기\n"
+                "※ 이 방법만 저작권에 안전합니다 — 유튜브가 음반사와 계약한 곡이라\n"
+                "   앱 안에서 붙일 때만 쓸 수 있고, 영상 파일에 미리 넣어 올리면\n"
+                "   Content ID에 걸립니다 (1분 넘는 쇼츠는 아예 차단돼요).\n"
+                "※ 쇼츠는 3분까지, 붙는 음악은 최대 90초입니다."
+            )
         # 업로드 체크리스트 (계산으로 확실한 것들)
         checks = []
         if is_shorts:
@@ -7574,6 +7596,14 @@ body.easy #easyBar { display: block; }
           <textarea id="kitDesc" style="min-height:120px;margin-top:4px"></textarea>
       <!-- 🎵 v1.36 (목록 73) — 예전엔 이 크레딧이 설명문 «안»에 섞여 있었다.
            설명문은 깨끗하게 두고, 무료 BGM을 쓴 경우에만 따로 보여준다. -->
+      <div id="kitPhoneRow" class="hidden" style="margin-top:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <b style="font-size:13px">📱 폰에서 최신 음악 붙이기</b>
+          <span class="hint">— 이 영상은 배경음악이 없어서 바로 돼요</span>
+          <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitPhone')">📋 복사</button>
+        </div>
+        <textarea id="kitPhone" style="min-height:120px;margin-top:4px" readonly></textarea>
+      </div>
       <div id="kitBgmRow" class="hidden" style="margin-top:8px">
         <div style="display:flex;align-items:center;gap:8px">
           <b style="font-size:13px">🎵 음원 크레딧</b>
@@ -9975,6 +10005,10 @@ function renderKit(data){
   const bc = kit.bgm_credit || '';
   $('kitBgm').value = bc;
   $('kitBgmRow').classList.toggle('hidden', !bc);
+  // 📱 v1.39 (목록 81) — 배경음악이 없을 때만: 폰 앱에서 최신곡 붙이는 법
+  const pm = kit.phone_music || '';
+  $('kitPhone').value = pm;
+  $('kitPhoneRow').classList.toggle('hidden', !pm);
   $('kitTags').value = (kit.tags || []).join(', ');
   // v0.47: 플랫폼별 섹션 (틱톡·인스타·네이버 클립·스레드)
   const NL = String.fromCharCode(10);
