@@ -34,7 +34,7 @@ SRC = open(webui.__file__, encoding="utf-8").read()
 
 
 def test_version():
-    assert __version__ == "1.38.1"
+    assert __version__ == "1.39.0"
 
 
 # ── ① 대본 말투·구조 ───────────────────────────────────────────

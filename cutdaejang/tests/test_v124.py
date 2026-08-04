@@ -25,7 +25,7 @@ from cutdaejang.utils.pronounce import pronounce_ko
 
 
 def test_version():
-    assert __version__ == "1.38.1"
+    assert __version__ == "1.39.0"
 
 
 # ── 43. 자막은 숫자, 소리는 한글 발음 ──────────────────────────────

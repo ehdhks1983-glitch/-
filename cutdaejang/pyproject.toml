@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cutdaejang"
-version = "1.38.1"
+version = "1.39.0"
 description = "컷대장 — 유튜브 쇼츠·영상 자동 제작 (대본→TTS→배경→자막→mp4)"
 requires-python = ">=3.10"
 # 런타임 의존성 없음(표준 라이브러리만) — PyInstaller 패키징·고객 PC 설치 문제 최소화.
