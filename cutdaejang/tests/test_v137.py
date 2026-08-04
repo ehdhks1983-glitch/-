@@ -192,6 +192,20 @@ def test_it_does_not_cut_inside_an_ordinary_word(word, text):
     assert any(word in c for c in clauses), f"{word}가 쪼개졌다: {clauses}"
 
 
+def test_it_never_merges_across_a_full_stop():
+    """🔴 처음 고칠 때 놓친 것 — 마침표는 «회원님이 직접 찍은» 경계다.
+
+    말 단위로 나눈 뒤 다시 묶다 보니 마침표까지 넘어 묶었다. 그러면
+    v1.14에서 고쳐 둔 «문장부호 우선 분할»(리포트 18번)이 도로 무너진다.
+    전체 시험의 test_v114가 이걸 잡아 줬다.
+    """
+    t = "직원 여섯 명을 채용했습니다. 월급은 0원입니다. 농담 같죠? 화면 보세요."
+    assert sg.pack_ko_lines(t, 32) == [
+        "직원 여섯 명을 채용했습니다.", "월급은 0원입니다.", "농담 같죠?", "화면 보세요."]
+    # 한도가 아무리 커도 마찬가지 — 길이가 아니라 «경계»의 문제다
+    assert len(sg.pack_ko_lines(t, 200)) == 4
+
+
 def test_a_clause_longer_than_the_limit_is_still_cut():
     """절 하나가 한도를 넘으면 어쩔 수 없이 자른다 — 무한정 길면 화면을 덮는다."""
     t = "오늘 소개할 곳은 서울 강남역 근처에 있는 아주 조용하고 깨끗한 호텔입니다"

@@ -198,26 +198,32 @@ def pack_ko_lines(text: str, limit: int) -> List[str]:
     "안녕하세요 더브라운호텔입니다 여기가 좋은점은 뭐뭐 입니다" (limit 16)
       → ["안녕하세요 더브라운호텔입니다", "여기가 좋은점은 뭐뭐 입니다"]
         (5자 + 10자 = 15자라 한 줄로 묶이고, 다음 절은 새 줄)
+
+    ⚠ 마침표·물음표·느낌표를 «넘어서» 묶지는 않는다. 그건 회원님이 직접 찍은
+    경계라 종결어미보다 세다. 안 그러면
+      "직원 여섯 명을 채용했습니다. 월급은 0원입니다."
+    가 한 줄이 돼 v1.14에서 고쳐 놓은 «문장부호 우선 분할»이 도로 무너진다.
     """
     if limit <= 0:
         return [text.strip()] if text.strip() else []
     lines: List[str] = []
-    cur = ""
-    for clause in split_ko_clauses(text):
-        if len(clause) > limit:              # 절 하나가 한도를 넘음 — 어쩔 수 없이 자른다
-            if cur:
+    for piece in _split_by_punct(text):       # ← 문장부호 경계는 절대 안 넘는다
+        cur = ""
+        for clause in split_ko_clauses(piece):
+            if len(clause) > limit:          # 절 하나가 한도를 넘음 — 어쩔 수 없이 자른다
+                if cur:
+                    lines.append(cur)
+                    cur = ""
+                lines += _chunk_by_words(clause, limit)
+                continue
+            cand = f"{cur} {clause}".strip()
+            if cur and len(cand) > limit:
                 lines.append(cur)
-                cur = ""
-            lines += _chunk_by_words(clause, limit)
-            continue
-        cand = f"{cur} {clause}".strip()
-        if cur and len(cand) > limit:
+                cur = clause
+            else:
+                cur = cand
+        if cur:
             lines.append(cur)
-            cur = clause
-        else:
-            cur = cand
-    if cur:
-        lines.append(cur)
     return lines
 
 
