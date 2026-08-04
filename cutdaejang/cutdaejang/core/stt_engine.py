@@ -68,6 +68,16 @@ class FasterWhisperSTT:
                 "faster-whisper가 설치되어 있지 않습니다. `pip install faster-whisper` 하거나 "
                 "Gemini/OpenAI 음성인식을 사용하세요."
             ) from e
+        except Exception as e:  # noqa: BLE001
+            # 🔴 v1.35.1 (목록 71) — 설치는 됐는데 못 «불러오는» 경우가 있다.
+            #   회원님 PC: ctranslate2.dll을 찾지 못해 FileNotFoundError(=OSError).
+            #   ImportError가 아니라 예전엔 안 잡혔고, 그대로 위로 터졌다.
+            raise STTError(
+                "무료 음성인식(Whisper)을 불러오지 못했습니다 (" + type(e).__name__ + "). "
+                "Visual C++ 재배포 패키지가 없거나 설치 파일이 깨진 경우입니다 — "
+                "windows\\5_영상편집_음성인식설치.bat 를 다시 실행하거나, "
+                "음성인식을 Gemini로 바꿔 주세요."
+            ) from e
         # 클래스 레벨 캐시 (같은 모델 재사용)
         if FasterWhisperSTT._model is None or FasterWhisperSTT._model_size != self.model_size:
             import os as _os  # noqa: PLC0415

@@ -501,16 +501,41 @@ def pick_video_file(timeout: float = 300.0) -> Optional[str]:
     return pick_path("video", timeout)
 
 
+_WHISPER_WHY = ""          # 왜 못 쓰는지 (화면에 그대로 보여준다)
+
+
 def _stt_available() -> dict:
-    """편집 모드에서 쓸 수 있는 음성인식 제공자."""
+    """편집 모드에서 쓸 수 있는 음성인식 제공자.
+
+    🔴 v1.35.1 (목록 71) — 여기서 `except ImportError`만 잡고 있었다.
+    회원님 PC에서 faster-whisper는 설치돼 있는데 그 아래 ctranslate2의
+    **DLL이 깨져** `FileNotFoundError`(=OSError)가 났고, ImportError가 아니라
+    안 잡혀서 그대로 위로 터졌다. 이 함수는 `_state()` 안에 있어서
+    **화면이 5초마다 부르는 /api/state가 통째로 500**이 됐다.
+    → 음성인식은 «선택» 기능인데 그것 하나가 프로그램 전체를 못 쓰게 만든 것이다.
+
+    선택 부품은 무슨 이유로 망가지든 «없는 것»으로 취급하고, 왜 못 쓰는지는
+    화면에 적어 준다.
+    """
+    global _WHISPER_WHY
+    whisper = False
     try:
         import faster_whisper  # noqa: F401, PLC0415
 
         whisper = True
+        _WHISPER_WHY = ""
     except ImportError:
-        whisper = False
+        _WHISPER_WHY = "설치되어 있지 않아요 — windows\\5_영상편집_음성인식설치.bat 를 실행하세요"
+    except Exception as e:  # noqa: BLE001 — DLL 깨짐·CPU 미지원 등 무엇이든
+        _WHISPER_WHY = (
+            "설치는 됐지만 불러오지 못했어요 (" + type(e).__name__ + ") — "
+            "Visual C++ 재배포 패키지가 없거나 파일이 깨진 경우예요. "
+            "Gemini 음성인식을 쓰시거나, 5_영상편집_음성인식설치.bat 를 다시 실행해 보세요"
+        )
+        logging.getLogger("cutdaejang").warning("faster-whisper 사용 불가: %r", e)
     return {
         "whisper": whisper,
+        "whisper_why": _WHISPER_WHY,
         "gemini": bool(os.environ.get("GEMINI_API_KEY")),
         "openai": bool(os.environ.get("OPENAI_API_KEY")),
     }
@@ -5306,6 +5331,20 @@ class _Handler(BaseHTTPRequestHandler):
             return []
 
     def _state(self) -> dict:
+        # 🫀 v1.35.1 (목록 71) — 이 응답은 화면이 5초마다 부른다. 여기서 한 번
+        #   터지면 «프로그램 전체가 안 되는» 것처럼 보인다. 실제로 그랬다:
+        #   깨진 ctranslate2.dll 하나가 /api/state를 500으로 만들어 UI가 죽었다.
+        #   그래서 조각 하나가 터져도 나머지는 내보낸다.
+        return self._state_inner()
+
+    def _safe(self, name, fn, fallback):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("cutdaejang").warning("state.%s 실패 — 건너뜀: %r", name, e)
+            return fallback
+
+    def _state_inner(self) -> dict:
         with _LOCK:
             jobs = [dict(j) for j in _JOBS.values()]
         for j in jobs:
@@ -5339,7 +5378,7 @@ class _Handler(BaseHTTPRequestHandler):
         return {
             "jobs": jobs,
             "history": history,
-            "fonts": self._state_fonts(),
+            "fonts": self._safe("fonts", self._state_fonts, []),
             "keys": {
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
@@ -5360,7 +5399,9 @@ class _Handler(BaseHTTPRequestHandler):
             ),
             "voices": GEMINI_VOICES,
             "styles": list(STYLE_INSTRUCTIONS),
-            "stt_available": _stt_available(),
+            "stt_available": self._safe("stt", _stt_available,
+                                        {"whisper": False, "whisper_why": "확인 실패",
+                                         "gemini": False, "openai": False}),
             "bgm_fetch": dict(_BGM_TASK),
             "weblink_fetch": dict(_WEBLINK_TASK),  # 🔗 글 가져오기 진행/결과 (v0.78)
             "logs": list(_LOG_BUF)[-120:],
@@ -5775,7 +5816,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.35.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.35.1)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -8339,6 +8380,10 @@ async function loadStt(){
   if(!any){
     sel.add(new Option('Gemini (키 입력 필요)', 'gemini'));
   }
+  // 🩺 v1.35.1 (목록 71) — Whisper가 왜 목록에 없는지 말해 준다.
+  //   예전에는 그냥 «없는 것»이라 회원님이 이유를 알 수 없었고, 그보다 먼저
+  //   /api/state 자체가 죽어 프로그램 전체가 안 되는 것처럼 보였다.
+  window._whisperWhy = av.whisper ? '' : (av.whisper_why || '');
   // 지난번 세팅 복원 — 목록에 있는 값이면 그대로
   if(window._wantStt && [...sel.options].some(o => o.value === window._wantStt))
     sel.value = window._wantStt;
@@ -8354,6 +8399,8 @@ function updateSttHint(){
     ? '최초 1회 모델 다운로드(수십 MB). 이후 무료·오프라인.'
     : v === 'gemini' ? '내 Gemini 키 사용. 구간마다 호출돼 조금 걸릴 수 있어요.'
     : '내 OpenAI 키 사용.';
+  if(window._whisperWhy)                       // 🩺 v1.35.1 (목록 71)
+    $('sttHint').textContent += '  ⚠ 무료 Whisper는 지금 못 써요 — ' + window._whisperWhy;
 }
 
 const PASTE_TIP = '\\n\\n창이 안 보이면: 탐색기에서 영상 파일을 Shift+우클릭 → "경로로 복사" → 아래 칸에 붙여넣으세요.';
@@ -10839,22 +10886,43 @@ function applyTemplate(){
   applyEditLast(t);
 }
 
+// 🔴 v1.35.1 (목록 71) — 빈 칸을 저장하면 0이 «박제»됐다.
+//   자바스크립트에서 +"" 는 0이다. /api/state가 죽어 설정 화면이 안 채워진 채로
+//   [설정 저장]을 누르면 font_size=0이 settings.json에 남고, 그 다음부터는
+//   모든 만들기가 `SpecError: style 값 오류: size=0, outline=0`으로 실패했다.
+//   빈 칸·말이 안 되는 값이면 «지금 값»을 건드리지 않는다.
+function numOr(id, fallback, lo, hi){
+  const el = $(id);
+  const raw = el ? String(el.value).trim() : '';
+  if(raw === '') return fallback;
+  const n = Number(raw);
+  if(!isFinite(n) || n < lo || n > hi) return fallback;
+  return n;
+}
 async function saveSettings(){
+  const S0 = (window._settings || {});
+  const sub0 = S0.subtitle || {}, bgm0 = S0.bgm || {}, aud0 = S0.audio || {}, bg0 = S0.bg || {};
   const body = {settings: {
-    subtitle: {font_size: +$('setFontSize').value, outline: +$('setOutline').value,
-               margin_v: +$('setMarginV').value, fade: $('setFade').checked,
+    subtitle: {font_size: numOr('setFontSize', sub0.font_size || 84, 24, 200),
+               outline: numOr('setOutline', sub0.outline != null ? sub0.outline : 3, 0, 20),
+               margin_v: numOr('setMarginV', sub0.margin_v || 480, 0, 900),
+               fade: $('setFade').checked,
                highlight_color: $('setHlColor').value.toUpperCase(),
                hook_band: $('setHookBand').checked, band: $('setBand').checked,
-               wrap_chars: +$('setWrapChars').value, anim: $('setSubAnim').value,
+               wrap_chars: numOr('setWrapChars', sub0.wrap_chars != null ? sub0.wrap_chars : 16, 0, 60),
+               anim: $('setSubAnim').value,
                text_cards: $('setTextCards').checked,
                card_variety: $('setCardVariety').checked,
                card_pack: $('setCardPack').value, card_density: $('setCardDensity').value,
                font_pack: $('setFontPack').value},
-    bg: {motion: $('setMotion').value, motion_amount: +$('setMotionAmt').value,
+    bg: {motion: $('setMotion').value,
+         motion_amount: numOr('setMotionAmt', bg0.motion_amount || 0.06, 0, 1),
          ai_image: $('setAiImage').checked, scene_images: $('setSceneImg').checked},
-    bgm: {volume_db: +$('setBgmVol').value, duck: $('setDuck').checked},
-    audio: {gap_ms: +$('setGap').value},
-    tts: {rpm_limit: +$('setRpm').value, windows_rate: +$('setWinRate').value,
+    bgm: {volume_db: numOr('setBgmVol', bgm0.volume_db != null ? bgm0.volume_db : -16, -60, 12),
+          duck: $('setDuck').checked},
+    audio: {gap_ms: numOr('setGap', aud0.gap_ms != null ? aud0.gap_ms : 250, 0, 3000)},
+    tts: {rpm_limit: numOr('setRpm', ((S0.tts || {}).rpm_limit) || 12, 1, 600),
+          windows_rate: +$('setWinRate').value,
           windows_voice: $('setWinVoice').value},
     channel: {name: $('setChName').value.trim(), topic: $('setChTopic').value.trim(),
               audience: $('setChAudience').value.trim(), stage: $('setChStage').value},

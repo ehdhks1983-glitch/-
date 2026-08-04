@@ -189,11 +189,49 @@ def _settings_candidates(path: Optional[str] = None) -> list:
     ]
 
 
+# ⚠ 값이 «있지만 말이 안 되는» 경우를 여기서 되돌린다 (v1.35.1 — 목록 71).
+#   회원님 화면: `SpecError: style 값 오류: size=0, outline=0` 으로 데모까지 실패.
+#   원인은 /api/state가 죽어 설정 화면이 «빈 칸»으로 남았는데 그대로 [설정 저장]을
+#   누른 것 — 자바스크립트 `+""`는 0이라 font_size=0이 파일에 박제됐다.
+#   한 번 박제되면 프로그램을 다시 켜도 계속 실패하므로, 읽을 때 되돌린다.
+_SANE = {
+    "subtitle": {"font_size": (24, 200), "outline": (0, 20), "margin_v": (0, 900),
+                 "wrap_chars": (0, 60)},
+    "bgm": {"volume_db": (-60, 12)},
+    "audio": {"gap_ms": (0, 3000)},
+}
+
+
+def _sanitize(user: dict) -> list:
+    """말이 안 되는 숫자를 기본값으로 되돌리고, 무엇을 되돌렸는지 반환."""
+    fixed = []
+    for sect, keys in _SANE.items():
+        blk = user.get(sect)
+        if not isinstance(blk, dict):
+            continue
+        for key, (lo, hi) in keys.items():
+            if key not in blk:
+                continue
+            v = blk[key]
+            ok = isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi
+            if not ok:
+                blk[key] = DEFAULTS[sect][key]
+                fixed.append(f"{sect}.{key}={v!r} → {blk[key]}")
+    return fixed
+
+
 def load_settings(path: Optional[str] = None) -> dict:
     for candidate in _settings_candidates(path):
         if candidate and Path(candidate).is_file():
             try:
                 user = json.loads(Path(candidate).read_text(encoding="utf-8"))
+                if isinstance(user, dict):
+                    fixed = _sanitize(user)
+                    if fixed:
+                        import logging  # noqa: PLC0415
+                        logging.getLogger("cutdaejang").warning(
+                            "설정에 말이 안 되는 값이 있어 기본값으로 되돌렸습니다: %s",
+                            ", ".join(fixed))
                 return deep_merge(DEFAULTS, user)
             except (OSError, json.JSONDecodeError) as e:
                 import logging  # noqa: PLC0415

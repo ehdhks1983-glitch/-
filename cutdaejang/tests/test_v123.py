@@ -19,7 +19,7 @@ from cutdaejang.tools import fetch_bgm as fb
 
 
 def test_version():
-    assert __version__ == "1.35.0"
+    assert __version__ == "1.35.1"
 
 
 # ── 35. 나레이션 미리듣기 — 목소리 고르는 곳 어디에나 ─────────────────

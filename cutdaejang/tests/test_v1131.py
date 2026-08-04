@@ -15,7 +15,7 @@ from cutdaejang.tools import product_page as pp
 
 
 def test_version():
-    assert __version__ == "1.35.0"
+    assert __version__ == "1.35.1"
 
 
 # ── ① WAL에만 있는 로그인도 보인다 ───────────────────────────────
