@@ -279,7 +279,9 @@ def test_bgm_mix_normalize_zero():
     spec.bgm = Bgm(path="bgm.mp3", volume_db=-20)
     cmd = _cmd(spec)
     assert "-stream_loop -1 -i bgm.mp3" in cmd
-    assert "volume=-20dB,atrim=0:5.000000,afade=t=in:d=0.5,afade=t=out:st=3.500:d=1.5" in cmd
+    # 🎵 v1.39 (목록 77) — 이제 곡을 재서 맞춘 값이 들어간다. 여기 bgm.mp3는
+    #   실제 파일이 아니라 «못 잼» → 예전 그대로 -20dB (소수점 형식만 붙는다).
+    assert "volume=-20.00dB,atrim=0:5.000000,afade=t=in:d=0.5,afade=t=out:st=3.500:d=1.5" in cmd
     assert "amix=inputs=2:duration=first:normalize=0[aout]" in cmd
     assert "-map [v] -map [aout]" in cmd
 

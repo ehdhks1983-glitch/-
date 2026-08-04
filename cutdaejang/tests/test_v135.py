@@ -129,7 +129,13 @@ def test_every_making_screen_has_the_same_five_choices(key, ids):
 def test_the_deco_box_is_built_from_the_elements_that_already_exist():
     """id가 바뀌면 저장·복원·페이로드가 전부 깨진다 — «옮기기»여야 한다."""
     body = JS.split("function mountDeco(")[1].split("\nfunction ")[0]
-    assert "inner.appendChild(row)" in body, "새로 만들지 말고 있던 걸 옮겨야 한다"
+    # v1.39 (목록 79): «옮긴다»는 그대로. 다만 «부모 줄째» 옮기던 것이 상단 제목의
+    #   색·크기·글씨체까지 통째로 데려가 버려서, 이제 조작이 하나뿐인 줄만 통째로
+    #   옮기고 아니면 «칸과 바로 앞 이름표»만 옮긴다. 어느 쪽이든 새로 만들진 않는다.
+    assert "$(id)" in body, "id로 «있던 것»을 찾아야 한다"
+    assert "inner.appendChild(p);" in body, "한 줄짜리는 그 줄을 옮긴다"
+    assert "wrap.appendChild(el);" in body, "여러 조작 든 줄에서는 칸만 옮긴다"
+    assert "createElement('select'" not in body, "새로 만들면 id·값·이벤트가 다 끊긴다"
     assert "_commonDetails(set.ids)" in body, "이미 한 상자면 그걸 재사용해야 한다"
 
 

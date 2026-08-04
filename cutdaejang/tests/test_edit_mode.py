@@ -404,7 +404,15 @@ def test_render_bgm_mixed_and_looped(tmp_path):
     r = render_from_analysis(video, [], out, layout="keep", quality="draft",
                              orig_audio="mute", bgm_path=str(bgm), bgm_db=-10)
     assert r.ok, r.errors
-    assert _max_volume_db(out) > -25         # BGM이 실제로 들림 (원본은 무음인데도)
+    # 🎵 v1.39 (목록 77) — 이제 곡의 «실제 크기»를 재서 목소리 기준으로 맞춘 뒤 낮춘다.
+    #   이 시험의 음원은 0dBFS 사인파라 어떤 실제 음악보다도 크다(약 -3 LUFS).
+    #   맞추면 당연히 많이 내려간다 — 그게 이 판에서 고친 것이다.
+    #   그래서 «옛 수치»가 아니라 ①들린다 ②의도한 자리에 온다 를 본다.
+    peak = _max_volume_db(out)
+    assert peak > -40, f"BGM이 안 들린다 (무음은 -91 근처): {peak}"
+    got = ff.measure_lufs(out)
+    want = ff.VOICE_LUFS + (-10)             # bgm_db=-10 → 목소리보다 10dB 아래
+    assert abs(got - want) < 3.0, f"의도한 자리(-26 LUFS)와 다르다: {got:.1f}"
     assert abs(ff.probe_duration_us(out) - ff.probe_duration_us(video)) < 300_000
 
 
