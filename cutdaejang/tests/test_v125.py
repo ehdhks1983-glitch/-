@@ -130,12 +130,21 @@ def test_random_bgm_is_pinned_before_job_starts(tmp_path, monkeypatch):
     """시작 시점에 실제 곡으로 확정해야 크레딧(CC BY 저작자표시)이 만들어진다."""
     from cutdaejang.core import orchestrator
 
-    (tmp_path / "코믹_Test Song.mp3").write_bytes(b"x" * 200)
+    # ⚠ v1.36 (목록 73): 예전엔 아무 파일이나 «🎵 BGM: 파일이름»을 돌려줘서
+    #   이 시험이 가짜 곡명으로도 통과했다. 이제 «동봉 CC BY 곡»일 때만
+    #   크레딧이 나오므로(내 음원은 표시 의무가 없다) 실제 곡명으로 확인한다.
+    from cutdaejang.tools.fetch_bgm import TRACKS
+
+    real = TRACKS[0][1]                              # 예: "Monkeys Spinning Monkeys"
+    (tmp_path / f"코믹_{real}.mp3").write_bytes(b"x" * 200)
     monkeypatch.setattr(orchestrator, "DEFAULT_BGM_DIR", tmp_path)
     params = {"bgm": "random"}
     webui._resolve_random_bgm(params)
-    assert params["bgm"] == "코믹_Test Song.mp3"
-    assert webui._bgm_credit(params["bgm"])          # 크레딧 문구가 나온다
+    assert params["bgm"] == f"코믹_{real}.mp3"
+    credit = webui._bgm_credit(params["bgm"])        # 크레딧 문구가 나온다
+    assert credit and "Kevin MacLeod" in credit and real in credit
+    # 내가 넣은 음원은 표시할 «의무»가 없으므로 아무것도 안 붙는다 (목록 73)
+    assert webui._bgm_credit("내가만든음악.mp3") == ""
     assert webui._bgm_credit("random") == ""         # 확정 전이면 여전히 빈 문구
 
 

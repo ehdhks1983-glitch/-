@@ -227,5 +227,6 @@ def test_section_card_ui_present():
                 "openMode('sections')", "startSectionsSafe", "addSectionRow",
                 "구간 대본 영상"):
         assert tok in html, tok
-    # v1.35: 첫 화면에 「✨ AI로 영상 만들기」가 늘어 7개 (목록 68)
-    assert html.count('class="modecard"') == 7
+    # v1.36: 「✨ AI로 영상 만들기」는 뺐다 (목록 72 — 「긴 영상」과 같은 화면을
+    #   여는 두 번째 문이라 오히려 헷갈렸다). AI 영상은 각 경로 «안»으로 들어갔다.
+    assert html.count('class="modecard"') == 6

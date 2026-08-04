@@ -28,8 +28,9 @@ def test_v089_ui_present_and_wired():
         "function initShopCard",
     ):
         assert tok in html, tok
-    # v1.35: 첫 화면에 「✨ AI로 영상 만들기」가 늘어 7개 (목록 68)
-    assert html.count('class="modecard"') == 7
+    # v1.36: 「✨ AI로 영상 만들기」는 뺐다 (목록 72 — 「긴 영상」과 같은 화면을
+    #   여는 두 번째 문이라 오히려 헷갈렸다). AI 영상은 각 경로 «안»으로 들어갔다.
+    assert html.count('class="modecard"') == 6
     # 블로그 카드에는 쇼핑 검색 UI가 더 이상 없음 (전용 카드로 이전)
     wl = html.split('id="weblinkCard"')[1].split('id="sectionCard"')[0]
     assert "cpKeyword" not in wl

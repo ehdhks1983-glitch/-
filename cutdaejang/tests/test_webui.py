@@ -81,8 +81,9 @@ def test_beginner_ui_structure(server):
     """v0.36 초보자 UI: 홈 모드 카드 + 단계형 폼 + 접는 옵션 그룹 (옛 토글 잔재 없음)."""
     html = _get(server, "/").read().decode("utf-8")
     assert 'id="homeCard"' in html
-    # v1.35: ✨AI로 영상 만들기 추가 (목록 68)
-    assert html.count('class="modecard"') == 7
+    # v1.36: 「✨ AI로 영상 만들기」는 뺐다 (목록 72 — 「긴 영상」과 같은 화면을
+    #   여는 두 번째 문이라 오히려 헷갈렸다). AI 영상은 각 경로 «안»으로 들어갔다.
+    assert html.count('class="modecard"') == 6
     # 완전 자동은 이제 라디오(editFinish) + 길이 프리셋으로
     assert 'name="editFinish"' in html and 'id="autoTargetPreset"' in html
     # 꾸미기 그룹: 훅·내레이션·소리·워터마크·대본·세부설정

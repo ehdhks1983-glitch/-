@@ -93,6 +93,10 @@ def test_ai_clip_guidance_on_photo_cards():
     html = webui._HTML
     # 사진 흐름(photoBlock)·블로그(wl)·쇼핑(shop) 3곳 모두에 같은 안내
     assert html.count("✨ 사진이 부족한 장면은") == 3
-    assert html.count("사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중") == 3
+    # v1.36 (목록 72 ③): «자동으로 끼워 넣는 기능은 준비 중»이 이제 «된다»로 바뀌었다.
+    #   세 화면 모두 옆에 [✨ AI 영상 넣기] 버튼이 붙었다.
+    # ⚠ «준비 중»으로 세면 안 된다 — 렌더 진행 문구("영상 렌더링 준비 중…")가 걸린다.
+    assert html.count("자동으로 끼워 넣는 기능은 준비 중") == 0
+    assert html.count("addAiClipPhoto(event,") == 3
     # 안내가 가리키는 [✨ AI 클립] 버튼은 구간 카드에 실재한다
     assert "aiClipOpen" in html
