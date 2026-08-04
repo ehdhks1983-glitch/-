@@ -100,7 +100,8 @@ def test_moving_screens_closes_the_drawer():
 def test_the_drawer_says_which_video_you_are_making():
     body = JS.split("function _drawerNowLine(")[1].split("\nfunction ")[0]
     assert "다음 영상부터 기본값" in body
-    for key in ("gen", "edit", "photo", "weblink", "sections", "shop", "aiclip"):
+    # v1.36에서 'aiclip'은 뺐다 (목록 72 — 같은 방으로 가는 두 번째 문이었다)
+    for key in ("gen", "edit", "photo", "weblink", "sections", "shop"):
         assert f"{key}:" in body
 
 
@@ -173,32 +174,19 @@ def test_photo_mode_still_hides_the_things_it_should():
 
 
 # ── 68: [✨ AI 클립]을 찾을 수 없던 것 ────────────────────────
-def test_there_is_a_front_door_for_ai_video():
-    assert "openMode('aiclip')" in HTML
-    assert "AI로 영상 만들기" in HTML
-
-
-def test_the_ai_door_pre_arms_the_mode_that_shows_the_button():
-    """🔴 기본값이 「풀영상 하나로」라 [✨ AI 클립]이 있는 줄이 display:none 이었다."""
-    body = JS.split("function openMode(kind){")[1].split("\nfunction ")[0]
-    assert "input[name='secSrcMode'][value='clips']" in body
-    assert "applySecMode()" in body
-    assert "addSectionRow" in body, "구간 줄이 있어야 버튼이 붙는다"
-
-
-def test_aiclip_view_shows_the_same_card_as_sections():
-    """'aiclip'을 그대로 쓰면 sectionCard가 숨겨져 빈 화면이 된다."""
-    body = JS.split("function openMode(kind){")[1].split("\nfunction ")[0]
-    assert "const view = (kind === 'aiclip') ? 'sections' : kind;" in body
-    assert "view !== 'sections'" in body
+# ⚠ v1.36에서 «되돌렸다» (목록 72). v1.35의 답(첫 화면에 바로가기 카드)은
+#   같은 방(sectionCard)으로 가는 «두 번째 문»이라 오히려 헷갈렸다 —
+#   회원님 지적: "각 템플릿 카테고리에 적용을 시키라고 한 거였지."
+#   그래서 문은 없애고, AI 영상을 만들기 경로 «안»에 넣었다.
+#   여기 있던 세 시험은 그 반대를 못 박고 있어 tests/test_v136.py로 옮겼다
+#   (test_the_duplicate_front_door_is_gone / test_each_scene_can_become_an_ai_video).
 
 
 def test_the_hints_no_longer_point_at_a_screen_that_does_not_exist():
     """안내는 「🎞 구간 대본 영상」을 가리켰는데 첫 화면에 그 이름이 없었다."""
     assert "[🎞 구간 대본 영상]" not in HTML
     assert "구간 만들기의 [✨ AI 클립]" not in HTML
-    titles = re.findall(r'<span class="mc-title">([^<]+)</span>', HTML)
-    assert "AI로 영상 만들기" in titles
+    # v1.36: 「AI로 영상 만들기」 카드는 뺐다 (목록 72) — 이름 일치 검사만 남긴다
     nav = JS.split("const NAV_INFO = {")[1].split("};")[0]
     assert "🖥 긴 영상 (가로 16:9)" in nav, "첫 화면 카드 이름과 위 바 제목이 달랐다"
 
