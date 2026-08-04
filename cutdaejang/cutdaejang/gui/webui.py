@@ -12444,7 +12444,7 @@ function addSectionRow(title, narration){
     get: function(){
       return {dur: secDur(), s: parseMMSS(si.value), e: parseMMSS(ei.value)};
     },
-    set: function(s, e){ si.value = fmtMMSS(s); ei.value = fmtMMSS(e); updateSectionTimes(); },
+    set: function(s, e){ si.value = fmtMMSS(s); ei.value = fmtMMSS(e); },
     done: function(s, e, mode){
       const p = $('secPlayer'); if(!p || !p.src) return;
       p.currentTime = (mode === 's') ? s : Math.max(s, e - 3);   // 끝을 옮겼으면 그 앞 3초부터
@@ -12614,7 +12614,9 @@ function bandMake(o){
 }
 function bandDrag(band, mode, t){
   const g = band._get() || {};
-  const MIN = 0.3;                                  // 시작·끝이 겹치면 구간이 사라진다
+  // 숫자 칸은 «초» 단위로 적힌다 — 0.3초를 띄워 봐야 반올림하면 같은 초가 돼
+  // 길이 0짜리 구간이 만들어진다. 그래서 최소 간격은 1초다.
+  const MIN = 1;
   let s = (g.s == null ? 0 : g.s), e = (g.e == null ? g.dur : g.e);
   if(mode === 's'){ s = t; if(e < s + MIN) e = Math.min(g.dur, s + MIN); }
   else            { e = t; if(e < s + MIN) s = Math.max(0, e - MIN); }

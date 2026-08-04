@@ -100,7 +100,8 @@ def test_every_path_that_changes_the_times_repaints_the_band(fn):
 def test_the_handles_do_not_collapse_onto_each_other():
     """시작=끝이면 길이 0짜리 구간이 생겨 렌더가 이상해진다."""
     body = JS.split("function bandDrag(")[1].split("\n}")[0]
-    assert "const MIN = 0.3;" in body
+    # 숫자 칸이 «초» 단위라 0.3초로는 반올림하면 같은 초가 된다 — 1초여야 한다
+    assert "const MIN = 1;" in body
     assert "if(e < s + MIN) e = Math.min(g.dur, s + MIN);" in body
     assert "if(e < s + MIN) s = Math.max(0, e - MIN);" in body
 
