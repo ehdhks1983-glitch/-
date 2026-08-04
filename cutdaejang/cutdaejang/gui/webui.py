@@ -4105,6 +4105,56 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True})
             except Exception as e:  # noqa: BLE001
                 self._send_json({"error": f"다시 그리기 실패: {str(e)[:200]}"}, 500)
+        elif path == "/api/scene_clip":  # ✨ v1.36 (목록 72) — 이 장면을 AI «영상»으로
+            # 그림 대신 움직이는 영상을 그 장면 자리에 쓴다. 배경 조립이
+            # (그림, 길이) 목록이라 그 칸에 영상 경로를 넣기만 하면 된다
+            # (background_generator.scene_slideshow 가 영상 칸을 받는다).
+            job = _get_job(params.get("job_id", ""))
+            if not job or job.get("status") != "review_scenes":
+                self._send_json({"error": "장면 검토 중인 작업이 아닙니다"}, 400)
+                return
+            src = (params.get("path") or "").strip().strip('"')
+            try:
+                idx = int(params.get("index"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
+                return
+            scenes = job.get("scenes") or []
+            scene = next((s for s in scenes if s.get("i") == idx), None)
+            if scene is None:
+                self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
+                return
+            if not src or not Path(src).is_file():
+                self._send_json({"error": f"영상 파일을 찾을 수 없습니다: {src or '(비어 있음)'}"}, 400)
+                return
+            if not background_generator._is_video_span(src):
+                self._send_json({"error": "영상 파일(mp4/mov/webm 등)만 넣을 수 있습니다"}, 400)
+                return
+            scene["clip"] = str(src)
+            scene["ok"] = True
+            _set_job(job["id"], scenes=scenes)
+            self._send_json({"ok": True})
+        elif path == "/api/scene_clip_clear":  # ✨ v1.36 — 영상을 빼고 그림으로 되돌리기
+            job = _get_job(params.get("job_id", ""))
+            if not job or job.get("status") != "review_scenes":
+                self._send_json({"error": "장면 검토 중인 작업이 아닙니다"}, 400)
+                return
+            try:
+                idx = int(params.get("index"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
+                return
+            scenes = job.get("scenes") or []
+            scene = next((s for s in scenes if s.get("i") == idx), None)
+            if scene is None:
+                self._send_json({"error": "장면 번호가 잘못됐습니다"}, 400)
+                return
+            scene.pop("clip", None)
+            # 그림이 실제로 있는지 다시 본다 — 영상만 있던 장면이면 «없음»으로
+            png = Path(workdir) / job["id"] / "scenes" / f"scene_{idx + 1:02d}.png"
+            scene["ok"] = png.is_file()
+            _set_job(job["id"], scenes=scenes)
+            self._send_json({"ok": True, "has_image": scene["ok"]})
         elif path == "/api/scene_upload":  # ✍ 내 그림으로 장면 교체 (v0.51 — 파일 1장)
             job = _get_job(params.get("job_id", ""))
             if not job or job.get("status") != "review_scenes":
@@ -4201,8 +4251,15 @@ class _Handler(BaseHTTPRequestHandler):
             imgs = [None] * len(script.sentences)
             for s in (job.get("scenes") or []):
                 idx = int(s.get("i", -1))
+                if not (0 <= idx < len(imgs)):
+                    continue
+                # ✨ v1.36 (목록 72) — 그 장면을 AI 영상으로 바꿨으면 영상이 먼저다
+                clip = str(s.get("clip") or "")
+                if clip and Path(clip).is_file():
+                    imgs[idx] = clip
+                    continue
                 p = scenes_dir / f"scene_{idx + 1:02d}.png"
-                if 0 <= idx < len(imgs) and p.is_file():
+                if p.is_file():
                     imgs[idx] = str(p)
             _queue_job(job["id"], _run_pipeline,
                        job["id"], script, job.get("params", {}), workdir, imgs)  # 📋 v0.88
@@ -5878,16 +5935,18 @@ body.easy #easyBar { display: block; }
       </button>
     </div>
     <details class="home-more" id="homeMoreModes">
-      <summary>더 많은 만들기 도구 4개 <span class="hint">— AI 대본 · ✨ AI 영상 · 사진 · 블로그</span></summary>
+      <summary>더 많은 만들기 도구 3개 <span class="hint">— AI 대본 · 사진 · 블로그</span></summary>
       <div class="home-cards">
         <button class="modecard" onclick="openMode('gen')">
           <span class="mc-emoji">🤖</span><span class="mc-title">AI 영상 만들기</span>
           <span class="mc-desc">주제 한 줄만 쓰면<br>대본·목소리·자막·배경까지 자동</span>
         </button>
-        <button class="modecard" onclick="openMode('aiclip')" title="장면 설명을 적으면 AI가 짧은 영상을 만들어 줘요 (시댄스·Veo — 요금은 미리 보여드려요)">
-          <span class="mc-emoji">✨</span><span class="mc-title">AI로 영상 만들기</span>
-          <span class="mc-desc">찍은 게 없어도 됩니다<br>장면을 글로 적으면 AI가 영상으로</span>
-        </button>
+        <!-- ✨ v1.36 (목록 72) — 여기 있던 「AI로 영상 만들기」 카드를 뺐다.
+             그 카드는 「긴 영상 (가로 16:9)」과 «같은 화면»을 여는 두 번째 문이라
+             오히려 헷갈렸다. AI 영상은 이제 만들기 경로 «안»에 들어간다:
+               · 🤖 AI 영상 만들기 → 장면 검토에서 장면마다 [✨ AI 영상으로]
+               · 🖥 긴 영상 → 구간마다 [✨ AI 클립]  (예전부터)
+               · 사진·블로그·쇼핑 → 다음 판에서 같은 방식으로 -->
         <button class="modecard" onclick="openMode('photo')">
           <span class="mc-emoji">📸</span><span class="mc-title">사진으로 영상</span>
           <span class="mc-desc">사진 몇 장이면<br>내레이션 넣은 영상 완성</span>
@@ -8117,7 +8176,6 @@ const NAV_INFO = {
   photo:    ['📸 사진으로 영상', 'resetEditForm'],
   weblink:  ['🔗 블로그 글로 만들기', 'resetWeblinkCard'],
   sections: ['🖥 긴 영상 (가로 16:9)', 'resetSectionCard'],
-  aiclip:   ['✨ AI로 영상 만들기', 'resetSectionCard'],
   shop:     ['🛒 쇼핑 상품 영상', 'resetShopCard'],
   voice:    ['🎤 내 목소리 등록', ''],
   rip:      ['🎙→📃 대본 따오기', ''],
@@ -8139,10 +8197,8 @@ function resetCurrentCard(ev){
 
 function openMode(kind){
   closeDrawer();                             // 🗄 v1.35 화면을 옮기면 서랍은 닫는다
-  window._view = kind;                       // 'gen'|'edit'|'photo'|'weblink'|'sections'|'shop'|'aiclip'
-  // ✨ v1.35 (목록 68) — 'aiclip'은 «긴 영상» 화면을 그대로 쓰되 들어오는 문만
-  //   다르다. 카드를 보이고 숨기는 규칙은 sections와 똑같이 취급한다.
-  const view = (kind === 'aiclip') ? 'sections' : kind;
+  window._view = kind;                       // 'gen'|'edit'|'photo'|'weblink'|'sections'|'shop'
+  const view = kind;
   $('homeCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
   $('ripCard').classList.add('hidden');      // 🎙→📃 대본 따오기 (v1.01)
@@ -8153,20 +8209,7 @@ function openMode(kind){
   $('editCard').classList.toggle('hidden', view === 'gen' || view === 'weblink' || view === 'sections' || view === 'shop');
   updateNav(kind);
   if(kind === 'weblink'){ initWeblinkCard(); return; }
-  if(kind === 'sections' || kind === 'aiclip'){
-    initSectionCard();
-    // ✨ v1.35 (목록 68) — [✨ AI 클립] 버튼은 「구간마다 클립 따로」 모드의
-    //   구간 줄에만 붙는다. 기본값이 「풀영상 하나로」라 회원님 화면에선
-    //   그 버튼이 통째로 숨어 있었다. AI 입구로 들어오면 미리 맞춰 준다.
-    if(kind === 'aiclip'){
-      const r = document.querySelector("input[name='secSrcMode'][value='clips']");
-      if(r){ r.checked = true; applySecMode(); }
-      const rows = $('secRows');            // initSectionCard가 이미 한 줄 넣지만 안전하게
-      if(rows && !rows.children.length && typeof addSectionRow === 'function') addSectionRow();
-      const tip = $('secAiTip'); if(tip) tip.classList.remove('hidden');
-    }
-    return;
-  }
+  if(kind === 'sections'){ initSectionCard(); return; }
   if(kind === 'shop'){ initShopCard(); return; }
   if(kind !== 'gen'){
     window._editKind = kind;
@@ -9944,7 +9987,7 @@ const DRAWER_TITLES = {settingsCard:'⚙ 설정', productCard:'📇 내 제품',
 function _drawerNowLine(){
   const KO = {gen:'🤖 AI 영상 만들기', edit:'✂️ 내 영상 편집', photo:'📸 사진으로 영상',
               weblink:'🔗 블로그 글로 영상', sections:'🖥 긴 영상 (가로 16:9)',
-              shop:'🛒 쇼핑 상품 영상', aiclip:'✨ AI로 영상 만들기'};
+              shop:'🛒 쇼핑 상품 영상'};
   const v = KO[window._view];
   return v ? ('지금 만드는 중: ' + v + ' — 여기서 바꾼 값은 다음 영상부터 기본값이에요')
            : '여기 값은 모든 영상의 기본값이에요';
@@ -10061,10 +10104,16 @@ function aiClipEst(){
 function aiClipOpen(ev, row, vi, btn){
   if(ev) ev.preventDefault();
   _aiClipVi = vi; _aiClipBtn = btn;
+  window._aiClipDone = null; window._aiClipAspect = '';   // 구간은 «칸 채우기» (목록 72)
   const scr = row.querySelector('.sec-screen'), nar = row.querySelector('.sec-narr');
   const seed = ((scr && scr.value.trim())
     || (nar && (nar.value.trim().split('\\n')[0] || '')) || '').trim();
   if(seed && !$('aiClipPrompt').value.trim()) $('aiClipPrompt').value = seed;
+  _aiClipShow();
+}
+// ✨ v1.36 (목록 72) — 창을 띄우는 부분만 따로. 구간 경로와 장면 검토 경로가
+//   «같은 창»을 쓴다 (요금 안내·확인 절차가 갈라지지 않게).
+function _aiClipShow(){
   const sel = $('aiClipProv');
   const fill = function(){
     sel.innerHTML = '';
@@ -10075,6 +10124,31 @@ function aiClipOpen(ev, row, vi, btn){
   };
   if(_aiCost) fill(); else _loadAiCost().then(fill);
   $('aiClipBox').classList.remove('hidden');
+}
+// 🖼 장면 검토 화면: 이 장면을 그림 대신 «움직이는 영상»으로 (목록 72)
+function sceneAiClip(ev, i){
+  if(ev) ev.preventDefault();
+  _aiClipVi = null;
+  _aiClipBtn = (ev && ev.target) || null;
+  window._aiClipAspect = (window._jobOrient === 'wide') ? '16:9' : '9:16';
+  window._aiClipDone = async function(clipPath){
+    const r = await (await fetch('/api/scene_clip', {method:'POST',
+      body: JSON.stringify({job_id: currentJob, index: i, path: clipPath})})).json();
+    if(r.error){ alert(r.error); return; }
+    await refreshScenes();
+    uiBanner('✨ ' + (i + 1) + '번 장면을 AI 영상으로 바꿨어요');
+  };
+  const seed = (($('scnP' + i) || {}).value || '').trim();
+  if(seed && !$('aiClipPrompt').value.trim()) $('aiClipPrompt').value = seed;
+  _aiClipShow();
+}
+async function sceneClipClear(ev, i){
+  if(ev) ev.preventDefault();
+  const r = await (await fetch('/api/scene_clip_clear', {method:'POST',
+    body: JSON.stringify({job_id: currentJob, index: i})})).json();
+  if(r.error){ alert(r.error); return; }
+  await refreshScenes();
+  uiBanner(r.has_image ? '🖼 그림으로 되돌렸어요' : '⬜ 영상을 뺐어요 — 이 장면은 비어 있어요');
 }
 function aiClipClose(ev){ if(ev) ev.preventDefault(); $('aiClipBox').classList.add('hidden'); }
 async function aiClipGo(ev){
@@ -10093,7 +10167,8 @@ async function aiClipGo(ev){
     {prompt: prompt, provider: prov, duration_s: dur,
      // 🎞 v1.25 (목록 39-7): 구간이 세로 쇼츠면 세로로 — 가로 클립을 만들어
      // 화면 1/3만 채우고 위아래가 블러로 덮이던 낭비를 막는다 (유료 호출)
-     aspect: (pick('secLayout') === 'shorts' ? '9:16' : '16:9'),
+     aspect: (window._aiClipAspect
+              || (pick('secLayout') === 'shorts' ? '9:16' : '16:9')),
      gemini_key: key, save_key: true})})).json();
   if(d.error){ alert(d.error); return; }
   aiClipClose();
@@ -10108,8 +10183,13 @@ async function aiClipGo(ev){
       if(j.status === 'ok' && j.clip){
         clearInterval(timer);
         if(btn){ btn.disabled = false; btn.textContent = '✨ AI 클립'; }
-        if(vi){ vi.value = j.clip; vi.dispatchEvent(new Event('input', {bubbles:true})); }
         _loadAiCost().then(_renderAiSpend);
+        if(window._aiClipDone){                 // ✨ v1.36 장면 검토에서 부른 경우
+          const fn = window._aiClipDone; window._aiClipDone = null;
+          try{ await fn(j.clip); }catch(e){ alert('클립은 만들었는데 넣지 못했어요: ' + e); }
+          return;
+        }
+        if(vi){ vi.value = j.clip; vi.dispatchEvent(new Event('input', {bubbles:true})); }
         alert((j.note || '✨ AI 클립 완성!') + '\\n\\n구간의 클립 칸에 자동으로 넣어드렸어요.');
       } else if(j.status === 'failed'){
         clearInterval(timer);
@@ -11157,7 +11237,18 @@ function renderScenes(job){
     const wrap = document.createElement('div');
     wrap.style.cssText = 'position:relative;border-radius:10px;overflow:hidden;'
       + 'background:#0d0f14;aspect-ratio:' + (window._jobOrient === 'wide' ? '16/9' : '9/16');
-    if(s.ok){
+    if(s.clip){
+      // 🎬 v1.36 (목록 72) — 이 장면은 «움직이는 영상»이다. 자리표시로 그림 대신
+      //   영상임을 분명히 보여준다 (파일 자체는 회원님 PC에 있어 미리보기는 안 띄운다).
+      const ph = document.createElement('div');
+      ph.style.cssText = 'width:100%;height:100%;display:flex;flex-direction:column;'
+        + 'align-items:center;justify-content:center;gap:6px;color:#bcd0ff;font-size:13px;'
+        + 'background:linear-gradient(160deg,#141a2b,#1d2540)';
+      ph.innerHTML = '<div style="font-size:30px">🎬</div><b>AI 영상</b>'
+        + '<div class="hint" style="text-align:center;padding:0 10px;word-break:break-all">'
+        + (s.clip.split(/[\\/]/).pop() || '') + '</div>';
+      wrap.appendChild(ph);
+    } else if(s.ok){
       const img = document.createElement('img');
       img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block';
       img.src = '/scene/' + encodeURIComponent(job.id) + '/' + s.i + '?t=' + Date.now();
@@ -12313,6 +12404,9 @@ function secZoomClose(ev){
 // 🎥 영상 넣는 방식 전환 (v0.84) — 풀영상 하나 vs 구간마다 클립
 function applySecMode(){
   const full = (pick('secSrcMode') || 'full') === 'full';
+  // ✨ v1.36 (목록 72) — 안내를 «들어온 문»이 아니라 «지금 모드»에 매단다.
+  //   클립 모드일 때만 [✨ AI 클립] 버튼이 보이므로 그때만 알려 준다.
+  const tip = $('secAiTip'); if(tip) tip.classList.toggle('hidden', full);
   const fb = $('secFullBox'); if(fb) fb.classList.toggle('hidden', !full);
   [...(($('secRows')||{}).children || [])].forEach(function(d){
     const c = d.querySelector('.sec-cliprow');
