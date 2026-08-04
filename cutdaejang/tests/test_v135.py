@@ -24,7 +24,7 @@ JS = "\n".join(re.findall(r"<script>(.*?)</script>", HTML, re.S))
 
 
 def test_version():
-    assert __version__ == "1.36.0"
+    assert __version__ == "1.37.0"
 
 
 # ── 66: 「🔊 소리 점검용 목소리(삐-)」 라디오 ──────────────────

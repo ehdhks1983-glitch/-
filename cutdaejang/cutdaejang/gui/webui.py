@@ -5802,6 +5802,18 @@ _HTML = """<!doctype html>
   .shortsbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:10px;
                padding:8px 10px; border:1px dashed #3a4157; border-radius:10px; }
   .shortsbar button { margin:0; }
+  /* 🎚 끌어서 구간 정하는 띠 (v1.37 · 목록 74) — 숫자 칸과 «서로» 연동된다 */
+  .rband { position:relative; flex:1 0 100%; height:36px; margin:2px 0 4px;
+    border:1px solid #3a4157; border-radius:9px; background:#232838;
+    cursor:pointer; touch-action:none; user-select:none; overflow:hidden; }
+  .rb-fill { position:absolute; top:0; bottom:0; background:rgba(122,155,255,.28); }
+  .rb-h { position:absolute; top:0; bottom:0; width:16px; margin-left:-8px;
+    background:#7a9bff; border-radius:5px; cursor:ew-resize; box-shadow:0 0 0 1px rgba(0,0,0,.35); }
+  .rb-lab { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:12.5px; font-weight:700; color:#e7ecf8; pointer-events:none;
+    text-shadow:0 1px 3px rgba(0,0,0,.85); }
+  .rb-off { opacity:.55; cursor:default; }
+  .rb-off .rb-fill, .rb-off .rb-h { display:none; }
   .keepchk { width:18px; height:18px; margin-top:8px; flex:none; cursor:pointer; accent-color:#4266d5; }
   .subrow.dropped { opacity:0.4; }
   .subrow.dropped input[type=text] { text-decoration:line-through; }
@@ -5886,7 +5898,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.36.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.37.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -7357,6 +7369,7 @@ body.easy #easyBar { display: block; }
         <button class="ghost" onclick="setTrimEnd(event)">⏭ 여기서 끝</button>
         <span class="hint" id="trimInfo" style="color:#7a9bff;font-weight:700">전체 사용</span>
         <button class="ghost" onclick="clearTrim(event)">해제</button>
+        <div id="trimBandBox" style="flex:1 0 100%"></div>
       </div>
       <div class="shortsbar">
         <b style="font-size:13px">✂️ 쇼츠로 줄이기</b>
@@ -9335,6 +9348,47 @@ function updateTrimInfo(){
   const el=$('trimInfo'); if(!el) return;
   const t0=window._trimStart||0, t1=window._trimEnd||0;
   el.textContent=(!t0 && !t1) ? '전체 사용' : '사용: '+fmtTime(t0)+' ~ '+(t1?fmtTime(t1):'끝');
+  bandPaint(window._trimBand);                       // 🎚 버튼으로 고쳐도 띠가 따라온다
+}
+
+// 🎚 앞뒤 트림도 끌어서 (v1.37 · 목록 74) — 버튼은 그대로 둔다
+function cutDur(){
+  const p = $('cutPlayer');
+  return (p && isFinite(p.duration) && p.duration > 0) ? p.duration : 0;
+}
+function initTrimBand(){
+  const box = $('trimBandBox'); if(!box) return;
+  if(!box._init){
+    box._init = true;
+    window._trimBand = bandMake({
+      empty: '영상이 준비되면 여기를 끌어 앞뒤를 자를 수 있어요',
+      get: function(){
+        const dur = cutDur();
+        return {dur: dur,
+                s: (window._trimStart || 0) / 1e6,
+                e: window._trimEnd ? window._trimEnd / 1e6 : dur};
+      },
+      set: function(s, e){
+        const dur = cutDur();
+        window._trimStart = Math.round(Math.max(0, s) * 1e6);
+        // 끝을 «영상 끝»까지 끌면 0 — 기존 코드에서 0은 «끝까지»라는 뜻이다
+        window._trimEnd = (dur && e < dur - 0.05) ? Math.round(e * 1e6) : 0;
+      },
+      done: function(s, e, mode){
+        applyTrimMarks();
+        const p = $('cutPlayer'); if(!p || !p.src) return;
+        p.currentTime = (mode === 's') ? s : Math.max(0, e - 3);
+        p.play();
+      },
+    });
+    box.appendChild(window._trimBand);
+    const p = $('cutPlayer');
+    if(p && !p._bandHooked){                         // 길이는 나중에 알려진다
+      p._bandHooked = true;
+      p.addEventListener('loadedmetadata', function(){ bandPaint(window._trimBand); });
+    }
+  }
+  bandPaint(window._trimBand);
 }
 function addSubRow(ev){
   ev.preventDefault();
@@ -12385,14 +12439,29 @@ function addSectionRow(title, narration){
   const ei = document.createElement('input');
   ei.type = 'text'; ei.className = 'sec-end'; ei.placeholder = '끝 0:20';
   ei.style.cssText = 'width:82px';
+  // 🎚 끌어서 구간 정하기 (v1.37 · 목록 74) — 숫자 칸은 그대로 두고 «서로» 연동
+  const band = bandMake({
+    get: function(){
+      return {dur: secDur(), s: parseMMSS(si.value), e: parseMMSS(ei.value)};
+    },
+    set: function(s, e){ si.value = fmtMMSS(s); ei.value = fmtMMSS(e); updateSectionTimes(); },
+    done: function(s, e, mode){
+      const p = $('secPlayer'); if(!p || !p.src) return;
+      p.currentTime = (mode === 's') ? s : Math.max(s, e - 3);   // 끝을 옮겼으면 그 앞 3초부터
+      window._secStopAt = e;
+      p.play();
+    },
+  });
+  si.oninput = function(){ bandPaint(band); };      // 🔗 숫자 칸 → 띠
+  ei.oninput = function(){ bandPaint(band); };
   const bs = document.createElement('button');
   bs.className = 'ghost'; bs.textContent = '▶ 여기부터'; bs.style.cssText = 'padding:4px 8px';
   bs.title = '위 플레이어의 현재 위치를 이 구간의 시작으로';
-  bs.onclick = function(ev){ ev.preventDefault(); si.value = fmtMMSS((($('secPlayer')||{}).currentTime)||0); };
+  bs.onclick = function(ev){ ev.preventDefault(); si.value = fmtMMSS((($('secPlayer')||{}).currentTime)||0); bandPaint(band); };
   const be = document.createElement('button');
   be.className = 'ghost'; be.textContent = '⏹ 여기까지'; be.style.cssText = 'padding:4px 8px';
   be.title = '위 플레이어의 현재 위치를 이 구간의 끝으로';
-  be.onclick = function(ev){ ev.preventDefault(); ei.value = fmtMMSS((($('secPlayer')||{}).currentTime)||0); };
+  be.onclick = function(ev){ ev.preventDefault(); ei.value = fmtMMSS((($('secPlayer')||{}).currentTime)||0); bandPaint(band); };
   const bp = document.createElement('button');
   bp.className = 'ghost'; bp.textContent = '👁 이 구간 재생'; bp.style.cssText = 'padding:4px 8px';
   bp.onclick = function(ev){
@@ -12403,6 +12472,7 @@ function addSectionRow(title, narration){
     p.currentTime = s; window._secStopAt = (e != null && e > s) ? e : null; p.play();
   };
   // 자동 배속(핵심 몽타주) 셀렉트는 두 모드 공용 — 범위 줄에도 같이 보임
+  rrow.appendChild(band);                          // 🎚 띠가 먼저, 숫자 칸이 그 아래
   rrow.appendChild(rl); rrow.appendChild(si); rrow.appendChild(dash); rrow.appendChild(ei);
   rrow.appendChild(bs); rrow.appendChild(be); rrow.appendChild(bp);
   // 🎬 화면 메모 (v1.13) — 촬영 참고용. 낭독도, 화면 표시도 안 된다
@@ -12458,6 +12528,18 @@ function secZoomClose(ev){
   window._zoomT = null;
 }
 
+// 📏 풀영상 길이 (v1.37) — 브라우저가 재생을 못 해도 서버가 잰 길이로 띠가 돈다
+function secDur(){
+  const p = $('secPlayer');
+  if(p && isFinite(p.duration) && p.duration > 0) return p.duration;
+  return window._secFullDur || 0;
+}
+function secBandsPaint(){
+  [...(($('secRows')||{}).children || [])].forEach(function(d){
+    bandPaint(d.querySelector('.rband'));
+  });
+}
+
 // 🎥 영상 넣는 방식 전환 (v0.84) — 풀영상 하나 vs 구간마다 클립
 function applySecMode(){
   const full = (pick('secSrcMode') || 'full') === 'full';
@@ -12478,6 +12560,90 @@ function applySecMode(){
       if(spSel && spSel.parentElement !== c) c.appendChild(spSel);
     }
   });
+  secBandsPaint();
+}
+
+// ═══ 🎚 끌어서 구간 정하기 (v1.37 · 목록 74) ════════════════════════
+// 회원님 34차: 다른 프로그램은 «띠를 끌어» 구간을 잡는다.
+// 숫자 칸은 «그대로 둔다» — 정확히 맞추고 싶은 분을 위해. 둘은 서로 연동된다.
+// get() → {dur, s, e} (초) · set(s,e) → 숫자 칸 쓰기 · done(s,e,mode) → 놓았을 때
+function bandMake(o){
+  const band = document.createElement('div');
+  band.className = 'rband';
+  band.title = '끌어서 구간을 정하세요 — 숫자 칸과 같이 움직여요';
+  band.innerHTML = '<div class="rb-fill"></div>'
+                 + '<div class="rb-h rb-s" data-h="s"></div>'
+                 + '<div class="rb-h rb-e" data-h="e"></div>'
+                 + '<div class="rb-lab"></div>';
+  band._get = o.get;
+  band._set = o.set;
+  band._done = o.done || function(){};
+  band.dataset.empty = o.empty || '영상을 먼저 고르면 여기를 끌어 구간을 정할 수 있어요';
+  let mode = null;
+  const at = function(x){
+    const r = band.getBoundingClientRect();
+    const g = band._get() || {};
+    if(!(g.dur > 0) || r.width <= 0) return null;
+    return Math.max(0, Math.min(g.dur, ((x - r.left) / r.width) * g.dur));
+  };
+  band.addEventListener('pointerdown', function(e){
+    const t = at(e.clientX); if(t == null) return;
+    e.preventDefault();
+    const g = band._get() || {};
+    const h = (e.target && e.target.dataset) ? e.target.dataset.h : '';
+    // 🖐 손잡이를 «정확히» 안 잡아도 가까운 쪽이 잡힌다 — 손 떨리는 분도 쓸 수 있게
+    const s0 = (g.s == null ? 0 : g.s), e0 = (g.e == null ? g.dur : g.e);
+    mode = h || (Math.abs(t - s0) <= Math.abs(t - e0) ? 's' : 'e');
+    band.setPointerCapture(e.pointerId);
+    bandDrag(band, mode, t);
+  });
+  band.addEventListener('pointermove', function(e){
+    if(!mode) return;
+    const t = at(e.clientX); if(t == null) return;
+    bandDrag(band, mode, t);
+  });
+  const up = function(){
+    if(!mode) return;
+    const m = mode; mode = null;
+    const g = band._get() || {};
+    band._done((g.s == null ? 0 : g.s), (g.e == null ? g.dur : g.e), m);
+  };
+  band.addEventListener('pointerup', up);
+  band.addEventListener('pointercancel', up);
+  return band;
+}
+function bandDrag(band, mode, t){
+  const g = band._get() || {};
+  const MIN = 0.3;                                  // 시작·끝이 겹치면 구간이 사라진다
+  let s = (g.s == null ? 0 : g.s), e = (g.e == null ? g.dur : g.e);
+  if(mode === 's'){ s = t; if(e < s + MIN) e = Math.min(g.dur, s + MIN); }
+  else            { e = t; if(e < s + MIN) s = Math.max(0, e - MIN); }
+  band._set(s, e);                                  // 🔗 숫자 칸이 «자동으로» 채워진다
+  bandPaint(band);
+}
+function bandPaint(band){
+  if(!band || !band._get) return;
+  const g = band._get() || {};
+  const fill = band.querySelector('.rb-fill');
+  const hs = band.querySelector('.rb-s'), he = band.querySelector('.rb-e');
+  const lab = band.querySelector('.rb-lab');
+  if(!(g.dur > 0)){
+    band.classList.add('rb-off');
+    if(lab) lab.textContent = band.dataset.empty;
+    return;
+  }
+  band.classList.remove('rb-off');
+  const s = Math.max(0, Math.min(g.dur, g.s == null ? 0 : g.s));
+  const e = Math.max(s, Math.min(g.dur, g.e == null ? g.dur : g.e));
+  const pc = function(v){ return (v / g.dur * 100) + '%'; };
+  if(fill){ fill.style.left = pc(s); fill.style.width = pc(e - s); }
+  if(hs) hs.style.left = pc(s);
+  if(he) he.style.left = pc(e);
+  if(lab){
+    lab.textContent = (g.s == null && g.e == null)
+      ? '↔ 끌어서 이 구간의 시작·끝을 정하세요'
+      : fmtMMSS(s) + ' ~ ' + fmtMMSS(e) + '  (' + fmtMMSS(e - s) + ')';
+  }
 }
 
 function parseMMSS(v){
@@ -12517,6 +12683,8 @@ async function loadFullVideo(){
         }
       });
     }
+    window._secFullDur = d.duration_s || 0;      // 🎚 띠 기준 길이 (v1.37)
+    secBandsPaint();
     $('secFullDur').textContent = '⏱ 풀영상 길이 ' + fmtMMSS(d.duration_s) +
       ' — [🪄 자동으로 나누기]를 누르면 구간별 시간이 채워져요. 재생하며 [▶ 여기부터]/[⏹ 여기까지]로 손보세요.';
   } catch(e){ alert('영상 불러오기 오류: ' + e); }
@@ -12617,7 +12785,7 @@ function fillSectionsForm(d){
     autoGrow(div.querySelector('.sec-narr')); autoGrow(div.querySelector('.sec-screen'));
   });
   if(!(d.sections || []).length) addSectionRow();
-  applySecMode(); updateSectionTimes();
+  applySecMode(); updateSectionTimes(); secBandsPaint();
 }
 
 // ✏ 완성한 구간 영상을 폼으로 불러와 일부만 고쳐 다시 만들기 (v0.85)
@@ -12655,6 +12823,7 @@ async function suggestSecRanges(ev, silent){
       if(si2) si2.value = fmtMMSS(r[0] / 1e6);
       if(ei2) ei2.value = fmtMMSS(r[1] / 1e6);
     });
+    secBandsPaint();                                 // 🎚 채운 시간을 띠에도 (v1.37)
     if(!silent) alert('🪄 구간 ' + (d.ranges || []).length + '개의 시간을 채웠어요' +
       (d.snapped ? ' (화면이 바뀌는 지점에 맞춤)' : '') +
       '\\n어긋난 구간은 재생하면서 [▶ 여기부터]/[⏹ 여기까지]로 고치면 돼요');
@@ -13111,6 +13280,7 @@ async function poll(){
     window._trimStart = 0; window._trimEnd = 0;
     if($('trimInfo')) $('trimInfo').textContent = '전체 사용';
     resetSubPosBar(((window._settings||{}).subtitle||{}).margin_v);  // ↕ 자막 위치 (v0.49)
+    initTrimBand();                                                 // 🎚 앞뒤 트림 띠 (v1.37)
     // 강조 단어가 있으면 "문장 | 단어" 형태로 보여줘 그 자리에서 수정 가능
     window._subs = (job.subtitles || []).map(s => ({
       text: s.highlight ? (s.text + ' | ' + s.highlight) : s.text,
