@@ -33,7 +33,7 @@ TARGET_MS = 250      # 문장 사이에 «들려야» 하는 정적
 
 
 def test_version():
-    assert __version__ == "1.37.0"
+    assert __version__ == "1.38.0"
 
 
 @pytest.fixture(scope="module")

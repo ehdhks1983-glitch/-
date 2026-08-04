@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_version():
-    assert __version__ == "1.37.0"
+    assert __version__ == "1.38.0"
 
 
 # ── 프롬프트 규칙 ────────────────────────────────────────────────

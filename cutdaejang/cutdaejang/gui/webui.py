@@ -4843,7 +4843,10 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 r = ffonts.fetch_all()
                 self._send_json({"ok": True, "got": r["got"], "skip": r["skip"],
-                                 "fail": r["fail"], "fonts": ffonts.installed()})
+                                 "fail": r["fail"],
+                                 # 🔎 v1.38 — 받았는데 «이름표»가 달라 자막에 안 먹는 것
+                                 "mismatch": r.get("mismatch") or [],
+                                 "fonts": ffonts.installed()})
             except Exception as e:  # noqa: BLE001
                 self._send_json({"error": f"글씨체 받기 실패: {str(e)[:200]}"}, 500)
         elif path == "/api/desub_preview":   # 🧹 원본 자막 어디를 지울지 (v1.28)
@@ -5904,7 +5907,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.37.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.38.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -10530,13 +10533,17 @@ function fillFontSels(installed){
 async function fetchFonts(ev){
   ev.preventDefault();
   const btn = ev.target;
-  btn.disabled = true; const old = btn.textContent; btn.textContent = '받는 중… (약 8MB)';
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '받는 중… (약 19MB)';
   try {
     const d = await (await fetch('/api/fetch_fonts', {method:'POST', body:'{}'})).json();
     if(d.error){ alert(d.error); return; }
     fillFontSels(d.fonts || []);
     let msg = '무료 글씨체 준비 완료! 이제 글씨체 목록에서 고를 수 있어요.';
     if((d.fail || []).length) msg += String.fromCharCode(10) + '실패: ' + d.fail.join(', ') + ' — 인터넷 확인 후 다시';
+    // 🔎 v1.38 — 받긴 받았는데 파일 «이름표»가 우리가 부르는 이름과 다르면
+    //   자막에 그 글씨가 안 나오고 기본 글씨로 그려진다. 조용히 넘기지 않는다.
+    if((d.mismatch || []).length) msg += String.fromCharCode(10) +
+      '⚠ ' + d.mismatch.join(', ') + ' 은(는) 받았지만 자막에 안 나올 수 있어요 — 알려주시면 고칠게요';
     alert(msg);
   } finally { btn.disabled = false; btn.textContent = old; }
 }

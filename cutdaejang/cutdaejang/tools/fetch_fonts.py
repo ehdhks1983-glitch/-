@@ -1,4 +1,4 @@
-"""무료 한글 글씨체 자동 받기 (v0.63 → v1.38 8종) — 전부 «재배포 허용»만.
+"""무료 한글 글씨체 자동 받기 (v0.63 → v1.38 10종) — 전부 «재배포 허용»만.
 
 fetch_bgm과 같은 패턴: 이미 있으면 건너뛰고, 받은 파일은 resources/fonts에.
 URL은 배포처의 버전 고정 주소라 수년간 안정적이다.
@@ -14,6 +14,7 @@ URL은 배포처의 버전 고정 주소라 수년간 안정적이다.
 
 from __future__ import annotations
 
+import struct
 import urllib.request
 from pathlib import Path
 
@@ -77,8 +78,59 @@ def fetch(url: str, dest: Path) -> bool:
     return True
 
 
+def font_names(path) -> set:
+    """폰트 파일이 «스스로 말하는» 이름들 (패밀리 + 풀네임).
+
+    🔴 v1.38 (목록 76) — 이게 왜 필요한가.
+    자막을 그리는 libass는 «이름»으로 폰트를 찾는다. 이름이 한 글자라도 다르면
+    오류를 내지 않고 **조용히 기본 글씨로 그린다.** 회원님은 글씨체를 골랐는데
+    영상만 다르게 나온다 — 무엇이 잘못됐는지 알 길이 없다.
+    실제로 그런 게 두 개 있었다(Pretendard-Bold · 나눔손글씨 펜).
+    그래서 받은 파일에서 이름을 직접 읽어 별칭과 맞는지 확인한다.
+
+    표준 라이브러리만 쓴다(struct). 못 읽으면 빈 집합 — 확인을 못 할 뿐 막지 않는다.
+    """
+    try:
+        b = Path(path).read_bytes()
+        num = struct.unpack(">H", b[4:6])[0]
+        tables = {}
+        for i in range(num):
+            s = 12 + i * 16
+            tag, _, off, ln = struct.unpack(">4sIII", b[s:s + 16])
+            tables[tag] = (off, ln)
+        off, _ = tables[b"name"]
+        _, cnt, so = struct.unpack(">HHH", b[off:off + 6])
+        out = set()
+        for i in range(cnt):
+            s = off + 6 + i * 12
+            pid, _eid, lid, nid, ln, no = struct.unpack(">HHHHHH", b[s:s + 12])
+            if pid == 3 and lid == 0x409 and nid in (1, 4):   # 영문 패밀리·풀네임
+                out.add(b[off + so + no:off + so + no + ln].decode("utf-16-be", "ignore"))
+        return out
+    except Exception:  # noqa: BLE001 — 확인용이라 실패해도 받기는 계속된다
+        return set()
+
+
+def check_names(fonts_dir=None) -> list:
+    """별칭과 파일의 실제 이름이 어긋난 글씨체 목록 [(스템, 별칭, 실제이름들)]."""
+    from .. import presets  # noqa: PLC0415
+
+    out = Path(fonts_dir) if fonts_dir else Path(DEFAULT_FONTS_DIR)
+    bad = []
+    for fname, _label, _url in FONTS:
+        p = out / fname
+        if not p.is_file():
+            continue
+        stem = Path(fname).stem
+        alias = presets.FONT_FAMILY_ALIASES.get(stem)
+        names = font_names(p)
+        if alias and names and alias not in names:
+            bad.append((stem, alias, sorted(names)))
+    return bad
+
+
 def fetch_all(fonts_dir=None, progress=None) -> dict:
-    """글씨체 전부 받기 — 반환 {"got": n, "skip": n, "fail": [이름...]}"""
+    """글씨체 전부 받기 — 반환 {"got", "skip", "fail": [이름...], "mismatch": [...]}"""
     out = Path(fonts_dir) if fonts_dir else Path(DEFAULT_FONTS_DIR)
     out.mkdir(parents=True, exist_ok=True)
     got, skip, fail = 0, 0, []
@@ -98,7 +150,10 @@ def fetch_all(fonts_dir=None, progress=None) -> dict:
         (out / "무료글씨체_라이선스.txt").write_text(_LICENSE_NOTE, encoding="utf-8")
     except OSError:
         pass
-    return {"got": got, "skip": skip, "fail": fail}
+    # 🔎 받은 파일이 «우리가 부르는 이름»을 정말 갖고 있는지 (위 font_names 설명 참고).
+    #    배포처가 나중에 이름을 바꿔도 «조용한 실패»가 아니라 눈에 보이게 된다.
+    return {"got": got, "skip": skip, "fail": fail,
+            "mismatch": [s for s, _a, _n in check_names(out)]}
 
 
 def installed(fonts_dir=None) -> list:
