@@ -227,19 +227,97 @@ def pack_ko_lines(text: str, limit: int) -> List[str]:
     return lines
 
 
+# ── 🇰🇷 v1.39 (목록 78) — «어디서 자를까»를 고르는 규칙 ─────────────
+# 한 문장이 한 줄 한도보다 길면 어차피 잘라야 한다. 예전엔 «들어가는 데까지»
+# 넣고 잘랐는데, 그러면 회원님이 보내 주신 그 모양이 된다:
+#   특히 … 2023개나 쌓인 / 게 있어.        ← 의존명사와 서술어가 갈림
+#   … 듀플렉스 에어 / 서큘레이터에요.      ← 한 낱말이 갈림
+#   … 평이 엄청 / 좋거든요.               ← 부사와 꾸밈받는 말이 갈림
+# 그래서 «자를 수 있는 자리»마다 점수를 매겨 제일 나은 곳에서 자른다.
+
+# 뒤에서 자르면 안 되는 말 — 다음 말을 꾸미거나 다음 말과 한 덩어리다
+_NO_BREAK_AFTER = frozenset("""
+엄청 정말 진짜 너무 아주 매우 굉장히 되게 조금 좀 훨씬 더 가장 제일 다 잘 못 안
+꼭 계속 바로 곧 이미 아직 벌써 다시 함께 같이 특히 무려 거의 완전 별로 전혀 딱 막
+늘 항상 자주 가끔 살짝 푹 확 그냥 오히려 심지어 역시 결국 드디어 마침내 반드시
+절대 워낙 하도 꽤 상당히 무척 참 약 총 대략 최대 최소 단 오직 겨우 무조건
+이 그 저 이런 그런 저런 어떤 무슨 각 매 온갖 여러 모든
+""".split())
+
+# 앞에 붙는 말 — 이 앞에서 자르면 홀로 남는다 (의존명사·보조용언)
+_NO_BREAK_BEFORE = frozenset("""
+것 게 걸 것을 것이 것은 수 줄 리 바 데 뿐 만큼 채 등 및 때 적 뻔 터 셈 척 편 김 통 나름
+있어 있어요 있다 있는 있고 있으면 있습니다 없어 없어요 없다 없는 없습니다
+합니다 한다 해요 했어요 됩니다 된다 돼요 봐요 본다 봅니다 줍니다 준다 주세요
+싶어요 싶다 같아요 같습니다 거예요 거에요 겁니다
+""".split())
+
+_PARTICLE_END = ("은", "는", "이", "가", "을", "를", "에", "에서", "에게", "으로", "로",
+                 "도", "만", "까지", "부터", "보다", "나", "이나", "라도", "마다")
+# ⚠ 한 글자 어미(고·면·며·자·든·듯)는 넣지 않는다 — 낱말 끝에도 흔히 산다
+#   (실사용«자» · 화«면» · 최«고» · 정«도»). v1.37의 «노래가요» 함정과 같은 종류다.
+_LINK_END = ("지만", "는데", "은데", "아서", "어서", "여서", "니까", "라서",
+             "다가", "거나", "든지", "면서", "지요", "구요", "잖아")
+_MOD_END = ("의", "와", "과", "및")            # 다음 말에 붙는 말 — 여기서 자르면 안 된다
+_ADNOMINAL_END = ("는", "은", "ㄴ", "을", "ㄹ", "던")   # 관형형 — 뒤의 명사를 꾸민다
+
+
+def _break_score(words: List[str], k: int) -> int:
+    """words를 k 앞에서 자를 때의 «자연스러움» 점수 (높을수록 좋다)."""
+    prev = words[k - 1].rstrip()
+    nxt = words[k] if k < len(words) else ""
+    bare = prev.rstrip(".,!?…\"')]}")           # 문장부호 뗀 형태로 어미를 본다
+    score = 0
+    if prev.endswith((",", "،")):
+        score += 3                              # 쉼표 뒤가 제일 좋다
+    if bare.endswith(_LINK_END):
+        score += 2                              # 연결어미(…고 …지만 …는데) 뒤
+    if bare.endswith(_PARTICLE_END):
+        score += 1                              # 조사 뒤 = 한 마디가 끝난 자리
+    if bare in _NO_BREAK_AFTER:
+        score -= 4                              # 부사·관형사 뒤 (엄청 / 좋거든요)
+    if bare.endswith(_MOD_END):
+        score -= 3                              # …의 / …와 뒤는 다음 말에 붙는다
+    elif bare.endswith(_ADNOMINAL_END):
+        score -= 1                              # 관형형과 꾸밈받는 명사는 붙여 쓴다
+    if bare in _NO_BREAK_BEFORE:
+        score -= 4                              # 의존명사만 남기고 서술어를 떼면 안 된다
+    if nxt.rstrip(".,!?…\"')]}") in _NO_BREAK_BEFORE:
+        score -= 4                              # 게 / 있어  ·  쌓인 / 게
+    return score
+
+
 def _chunk_by_words(text: str, limit: int) -> List[str]:
-    """단어 경계로 limit자 이하 조각들로 분할 (edit_mode.split_long_subtitles와 동일 규칙)."""
+    """단어 경계로 limit자 이하 조각들로 분할 — «끊기 좋은 자리»를 골라서 (v1.39).
+
+    한도 안에서 자를 수 있는 자리마다 _break_score로 점수를 매기고,
+    ①점수가 제일 높은 곳 ②그중 두 줄이 고르게 나뉘는 곳을 고른다.
+    ②가 없으면 «좋거든요.»처럼 한 마디만 남는 짧은 줄이 생긴다.
+    """
+    words = text.split()
+    if not words:
+        return []
     chunks: List[str] = []
-    cur = ""
-    for w in text.split():
-        cand = f"{cur} {w}".strip()
-        if len(cand) > limit and cur:
-            chunks.append(cur)
-            cur = w
-        else:
-            cur = cand
-    if cur:
-        chunks.append(cur)
+    i = 0
+    while i < len(words):
+        j, used = i, 0
+        while j < len(words) and used + len(words[j]) + (1 if j > i else 0) <= limit:
+            used += len(words[j]) + (1 if j > i else 0)
+            j += 1
+        if j == i:                              # 단어 하나가 한도보다 길다
+            j = i + 1
+        if j < len(words):                      # 마지막 줄이 아니면 자리를 고른다
+            rest = len(" ".join(words[i:]))
+            half = rest / 2 if rest <= limit * 2 else limit   # 두 줄이면 반으로
+            best, best_key = j, None
+            for k in range(i + 1, j + 1):
+                ln = len(" ".join(words[i:k]))
+                key = (_break_score(words, k), -abs(ln - half), ln)
+                if best_key is None or key > best_key:
+                    best, best_key = k, key
+            j = best
+        chunks.append(" ".join(words[i:j]))
+        i = j
     fixed: List[str] = []  # 공백 없는 초장문은 단어 분할이 안 됨 → 글자 단위 강제 분할
     for c in chunks:
         while len(c) > limit:

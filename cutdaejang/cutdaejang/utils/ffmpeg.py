@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections import deque
@@ -283,3 +284,58 @@ def escape_filter_value(value: str) -> str:
     v = value.replace("\\", "/")
     v = v.replace(":", "\\:")  # ② 옵션 파서용 — 따옴표가 벗겨진 뒤에도 콜론 보호
     return "'" + v.replace("'", r"'\''") + "'"  # ① 그래프 파서용
+
+
+# ── 🎵 BGM 음량 고르기 (v1.39 · 목록 77) ─────────────────────────────
+# 회원님 37차: "배경음악을 랜덤으로 하니 어떤 건 소리가 들리고 어떤 건 안 들린다."
+#
+# 원인은 «랜덤»이 아니라 **곡마다 원래 녹음된 크기가 다르기 때문**이다.
+# 목소리(TTS)는 받자마자 -16 LUFS로 맞춰 놓는데(tts_engine), BGM은 그런 게
+# 없이 «파일 크기 그대로»에서 몇 dB 낮추기만 했다. 그래서 원래 큰 곡은 잘
+# 들리고 원래 작은 곡은 목소리에 묻힌다 — 게다가 덕킹까지 걸려 더 묻힌다.
+#
+# → 곡의 실제 크기를 재서 «같은 자리»로 맞춘 뒤 낮춘다. 어느 곡을 골라도
+#   목소리와의 간격이 같아진다.
+VOICE_LUFS = -16.0       # 목소리가 맞춰지는 값 (tts_engine의 기본과 같다)
+_LUFS_CACHE: dict = {}
+
+
+def measure_lufs(path: str) -> Optional[float]:
+    """음원의 통합 라우드니스(LUFS). 못 재면 None — 재기 실패로 작업을 세우지 않는다."""
+    try:
+        st = os.stat(path)
+        key = (str(path), st.st_size, int(st.st_mtime))
+    except OSError:
+        return None
+    if key in _LUFS_CACHE:
+        return _LUFS_CACHE[key]
+    val = None
+    try:
+        p = subprocess.run(
+            [ffmpeg_bin(), "-nostdin", "-hide_banner", "-i", str(path),
+             "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json",
+             "-f", "null", "-"],
+            capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
+        blob = p.stderr or ""
+        m = re.findall(r'"input_i"\s*:\s*"(-?[\d.]+)"', blob)
+        if m:
+            val = float(m[-1])
+            if val < -70:      # 사실상 무음 — 맞출 수 없다
+                val = None
+    except Exception:  # noqa: BLE001
+        val = None
+    _LUFS_CACHE[key] = val
+    return val
+
+
+def bgm_gain_db(path: str, bgm_db: float, limit: float = 20.0) -> float:
+    """곡의 원래 크기를 목소리 기준으로 맞춘 뒤 bgm_db만큼 낮춘 최종 dB.
+
+    못 재면 예전 그대로(bgm_db)를 돌려준다. 보정은 ±limit dB(기본 20)로 묶는다 —
+    일부러 아주 조용하게 만든 앰비언스를 크게 키워 버리면 그것도 이상하다.
+    """
+    i = measure_lufs(path)
+    if i is None:
+        return float(bgm_db)
+    corr = max(-limit, min(limit, VOICE_LUFS - i))
+    return float(bgm_db) + corr

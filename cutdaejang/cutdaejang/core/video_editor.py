@@ -732,7 +732,8 @@ def mix_bgm(video: str, bgm: str, out_path: str, bgm_db: float = -16.0,
     덕킹(sidechaincompress).
     """
     dur_s = ff.probe_duration_us(video) / 1e6
-    gain = 10 ** (bgm_db / 20)
+    # 🎵 v1.39 (목록 77) — 곡마다 원래 크기가 달라 «어떤 건 안 들리던» 것
+    gain = 10 ** (ff.bgm_gain_db(str(bgm), bgm_db) / 20)
     fade_st = max(0.0, dur_s - 1.2)
     parts = []
     if ff.has_audio_stream(video):

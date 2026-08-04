@@ -6131,7 +6131,7 @@ body.easy #easyBar { display: block; }
     </details>
 
     <details class="opt" id="optHook">
-      <summary>🪝 상단 제목 넣기 <span class="hint">— 화면 위에 크게 박히는 한 줄 (AI 추천·색·글씨 스타일)</span></summary>
+      <summary>🪝 상단 제목 넣기 <span class="hint">— 화면 위에 크게 박히는 한 줄 (AI 추천 · 색 · 크기 · 글씨체)</span></summary>
       <div style="display:flex;gap:6px;margin-top:4px">
         <input type="text" id="editHookTopic" style="flex:1" placeholder="① 주제 키워드 입력 (예: 블로그 자동화) → AI 추천을 받거나, 아래에 직접 쓰세요">
         <button class="ghost" style="white-space:nowrap" onclick="suggestHooks(event,'editHookTopic','editHook')">✨ AI 제목 추천</button>
@@ -6152,7 +6152,7 @@ body.easy #easyBar { display: block; }
           <option value="1.2">크게</option>
           <option value="1.4">아주 크게</option>
         </select>
-        <span class="hint">· 글씨 스타일</span>
+        <span class="hint">· 글씨 스타일 <span style="opacity:.75">(「🎨 꾸미기」에 있어요)</span></span>
         <select id="hookStyleSel" style="width:auto;padding:4px 8px" onchange="renderHookPreview()">
           <option value="기본" selected>기본 (흰 글자+띠)</option>
           <option value="예능 노랑">예능 노랑 (노랑+검정 테두리)</option>
@@ -10966,8 +10966,24 @@ function mountDeco(key){
     // 저장·복원·페이로드 코드는 한 줄도 안 바뀐다.
     set.ids.forEach(id => {
       const el = $(id); if(!el) return;
-      const row = (el.parentElement && el.parentElement.querySelector('label')) ? el.parentElement : el;
-      inner.appendChild(row);
+      const p = el.parentElement;
+      const nCtrl = p ? p.querySelectorAll('select,input,textarea,button').length : 0;
+      if(p && nCtrl === 1 && p.querySelector('label')){
+        inner.appendChild(p);            // 「이름표 + 칸」 한 줄짜리는 통째로
+        return;
+      }
+      // 🔴 v1.39 (목록 79) — 조작이 여러 개 든 줄을 통째로 가져오면 그 줄의
+      //   «다른 기능»까지 같이 사라진다. 실제로 그랬다: 「상단 제목 넣기」의
+      //   색 칩·색 지우기·크기·글씨체·비스듬히가 한 줄(#hookStudio)에 있는데
+      //   글씨 스타일 하나를 가져오면서 그 줄이 통째로 딸려 왔다.
+      //   → 칸과 «바로 앞 이름표»만 데려온다.
+      const lbl = el.previousElementSibling;
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap';
+      if(lbl && !lbl.querySelector('select,input,textarea,button')
+            && (lbl.tagName === 'SPAN' || lbl.tagName === 'LABEL')) wrap.appendChild(lbl);
+      wrap.appendChild(el);
+      inner.appendChild(wrap);
     });
     let anchor = set.before ? $(set.before) : null;   // 카드 «직속 자식»까지 타고 올라간다
     while(anchor && anchor.parentElement && anchor.parentElement !== host) anchor = anchor.parentElement;

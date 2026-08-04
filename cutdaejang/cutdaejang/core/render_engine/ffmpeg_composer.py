@@ -149,8 +149,11 @@ def build_command(
         bgm_idx = next_input
         next_input += 1
         fade_out_st = max(0.0, spec.duration_us / US_PER_SECOND - 1.5)
+        # 🎵 v1.39 (목록 77) — 곡마다 원래 크기가 달라 «어떤 건 소리가 안 들리던» 것.
+        #    목소리는 -16 LUFS로 맞춰져 있으니 BGM도 같은 기준으로 맞춘 뒤 낮춘다.
+        bgm_vol = ff.bgm_gain_db(str(spec.bgm.path), float(spec.bgm.volume_db))
         bgm_chain = (
-            f"[{bgm_idx}:a]volume={spec.bgm.volume_db}dB,atrim=0:{dur_s},"
+            f"[{bgm_idx}:a]volume={bgm_vol:.2f}dB,atrim=0:{dur_s},"
             f"afade=t=in:d=0.5,afade=t=out:st={fade_out_st:.3f}:d=1.5"
         )
         if spec.bgm.duck:

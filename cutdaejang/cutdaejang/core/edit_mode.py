@@ -189,8 +189,10 @@ def _atempo_chain(speed: float) -> str:
 _DUCK = "sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300"
 
 
-def _bgm_filter(idx: int, dur_s: float, bgm_db: float) -> str:
-    gain = 10 ** (bgm_db / 20)
+def _bgm_filter(idx: int, dur_s: float, bgm_db: float, bgm_path: str = "") -> str:
+    # 🎵 v1.39 (목록 77) — 곡의 실제 크기를 재서 목소리 기준으로 맞춘 뒤 낮춘다.
+    #    안 그러면 원래 조용한 곡은 목소리+덕킹에 묻혀 «안 들린다».
+    gain = 10 ** ((ff.bgm_gain_db(bgm_path, bgm_db) if bgm_path else bgm_db) / 20)
     fade_st = max(0.0, dur_s - 1.2)
     return (f"[{idx}:a]volume={gain:.4f},atrim=0:{dur_s:.3f},"
             f"afade=t=in:d=0.8,afade=t=out:st={fade_st:.3f}:d=1.2[abgm]")
@@ -461,7 +463,7 @@ def render_edited(
             streams.append("[anar]")
         if bgm_path:
             bgm_idx = nar_idx + (1 if narration_wav else 0)
-            aparts.append(_bgm_filter(bgm_idx, dur_s, bgm_db))
+            aparts.append(_bgm_filter(bgm_idx, dur_s, bgm_db, str(bgm_path)))
             if bgm_duck:
                 # 목소리(원본+내레이션)를 먼저 합치고 → BGM은 목소리가 나올 때
                 # 자동으로 줄어들게(sidechaincompress) 한 뒤 합성 (v0.44 덕킹)
@@ -1294,7 +1296,7 @@ def swap_narration(done_mp4: str, out_path: str, narration_wav: str, *,
     last = "[anar]"
     if bgm_path:
         args += ["-stream_loop", "-1", "-i", str(bgm_path)]
-        parts.append(_bgm_filter(2, dur_s, bgm_db))       # 렌더와 같은 식
+        parts.append(_bgm_filter(2, dur_s, bgm_db, str(bgm_path)))   # 렌더와 같은 식
         if bgm_duck:
             parts.append("[anar]asplit[vmain][vside]")
             parts.append(f"[abgm][vside]{_DUCK}[abgmd]")
