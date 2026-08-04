@@ -30,7 +30,7 @@ HTML = webui._apply_links(webui._HTML)
 
 
 def test_version():
-    assert __version__ == "1.35.1"
+    assert __version__ == "1.36.0"
 
 
 # ── 목록 59: 말 속도가 «뒤에서» 실제로 쓰이나 ───────────────────

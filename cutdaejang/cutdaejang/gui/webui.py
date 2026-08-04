@@ -5886,7 +5886,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.35.1)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.36.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -10172,7 +10172,7 @@ async function aiClipGo(ev){
      gemini_key: key, save_key: true})})).json();
   if(d.error){ alert(d.error); return; }
   aiClipClose();
-  if(btn){ btn.disabled = true; btn.textContent = '✨ 만드는 중…'; }
+  if(btn){ btn.dataset.orig = btn.textContent; btn.disabled = true; btn.textContent = '✨ 만드는 중…'; }
   let waited = 0;
   const timer = setInterval(async function(){
     waited += 3;
@@ -10182,7 +10182,7 @@ async function aiClipGo(ev){
       if(!j) return;
       if(j.status === 'ok' && j.clip){
         clearInterval(timer);
-        if(btn){ btn.disabled = false; btn.textContent = '✨ AI 클립'; }
+        if(btn){ btn.disabled = false; btn.textContent = btn.dataset.orig || '✨ AI 클립'; }
         _loadAiCost().then(_renderAiSpend);
         if(window._aiClipDone){                 // ✨ v1.36 장면 검토에서 부른 경우
           const fn = window._aiClipDone; window._aiClipDone = null;
@@ -10193,11 +10193,11 @@ async function aiClipGo(ev){
         alert((j.note || '✨ AI 클립 완성!') + '\\n\\n구간의 클립 칸에 자동으로 넣어드렸어요.');
       } else if(j.status === 'failed'){
         clearInterval(timer);
-        if(btn){ btn.disabled = false; btn.textContent = '✨ AI 클립'; }
+        if(btn){ btn.disabled = false; btn.textContent = btn.dataset.orig || '✨ AI 클립'; }
         alert('❌ AI 클립 실패: ' + ((j.errors || [])[0] || '알 수 없는 오류'));
       } else if(waited > 480){
         clearInterval(timer);
-        if(btn){ btn.disabled = false; btn.textContent = '✨ AI 클립'; }
+        if(btn){ btn.disabled = false; btn.textContent = btn.dataset.orig || '✨ AI 클립'; }
         alert('⏱ 8분이 지나도 끝나지 않았어요 — 완성되면 📋 진행·대기 목록에 남아요');
       }
     }catch(e){}
@@ -11293,7 +11293,24 @@ function renderScenes(job){
     up.textContent = '📁 내 그림';
     up.title = '직접 만든 그림 파일을 이 장면에 넣기 (자동으로 쇼츠 크기에 맞춰져요)';
     up.onclick = (e) => sceneUpload(e, s.i);
-    row.append(btn, up);
+    // ✨ v1.36 (목록 72) — «각 만들기 경로에» AI 영상. 여기가 그 첫 자리다.
+    //   예전에는 긴 영상(구간 대본) 화면에만 있었다.
+    const av = document.createElement('button');
+    av.className = 'ghost';
+    av.style.cssText = 'padding:5px 10px;font-size:12px';
+    av.textContent = s.clip ? '✨ 영상 다시' : '✨ AI 영상으로';
+    av.title = '이 장면만 «움직이는 영상»으로 만들어요 — 만들기 전에 예상 요금을 보여드려요';
+    av.onclick = (e) => sceneAiClip(e, s.i);
+    row.append(btn, up, av);
+    if(s.clip){                       // 영상을 뺄 수 있게
+      const rm = document.createElement('button');
+      rm.className = 'ghost';
+      rm.style.cssText = 'padding:5px 10px;font-size:12px';
+      rm.textContent = '↩ 그림으로';
+      rm.title = 'AI 영상을 빼고 원래 그림으로 되돌려요 (만든 영상은 지워지지 않아요)';
+      rm.onclick = (e) => sceneClipClear(e, s.i);
+      row.append(rm);
+    }
     cell.append(cap, lab, row);
     grid.appendChild(cell);
   });

@@ -39,7 +39,7 @@ JS = "\n".join(re.findall(r"<script>(.*?)</script>", HTML, re.S))
 
 
 def test_version():
-    assert __version__ == "1.35.1"
+    assert __version__ == "1.36.0"
 
 
 # ── ① 깨진 선택 부품이 프로그램 전체를 죽이지 않는다 ──────────────

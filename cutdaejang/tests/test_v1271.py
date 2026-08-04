@@ -22,7 +22,7 @@ HTML = webui._apply_links(webui._HTML)
 
 
 def test_version():
-    assert __version__ == "1.35.1"
+    assert __version__ == "1.36.0"
 
 
 # ── 🏠 따라오는 되돌아가기 바 ──────────────────────────────────
