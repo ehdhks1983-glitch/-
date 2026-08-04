@@ -572,7 +572,8 @@ def test_v063_keys_fonts_timecode(server):
     # ── 설치 글씨체 목록 + 받기 (이 환경엔 받아져 있어 skip, 새 클론이면 1회 다운로드) ──
     assert isinstance(st.get("fonts"), list)
     r = _post(server, "/api/fetch_fonts", {})
-    assert r["ok"] and not r["fail"] and (r["skip"] + r["got"]) == 5
+    from cutdaejang.tools import fetch_fonts as _ff  # v1.38: 종수가 늘어도 안 깨지게
+    assert r["ok"] and not r["fail"] and (r["skip"] + r["got"]) == len(_ff.FONTS)
 
     # ── 타임코드 콘티 대본 → 자막에서 제거 + 길이 맞춤 ──
     res = _post(server, "/api/generate", {

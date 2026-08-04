@@ -79,6 +79,10 @@ def test_fetch_fonts_skip_and_installed(tmp_path):
     for fname, _, _ in fetch_fonts.FONTS:  # 받은 것처럼 가짜 TTF(>10KB) 배치
         (tmp_path / fname).write_bytes(b"0" * 20_000)
     r = fetch_fonts.fetch_all(tmp_path)
-    assert r["got"] == 0 and r["skip"] == 5 and not r["fail"]  # 있으면 재다운로드 없음
-    assert len(fetch_fonts.installed(tmp_path)) == 5
+    # v1.38: 글씨체가 5종 → 10종으로 늘었다. 숫자를 박아 두면 늘릴 때마다 깨진다
+    n = len(fetch_fonts.FONTS)
+    assert r["got"] == 0 and r["skip"] == n and not r["fail"]  # 있으면 재다운로드 없음
+    assert len(fetch_fonts.installed(tmp_path)) == n
+    # 🔎 v1.38 — 폰트가 아닌 가짜 파일이라도 «이름표 확인»이 오작동하면 안 된다
+    assert r["mismatch"] == [], "읽을 수 없는 파일을 «이름이 틀렸다»고 하면 안 된다"
     assert (tmp_path / "무료글씨체_라이선스.txt").exists()  # OFL 고지 파일
