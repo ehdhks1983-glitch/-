@@ -154,6 +154,73 @@ class Script:
 _COLOR_MARKUP_RE = re.compile(r"\[[가-힣A-Za-z]+\]|\[/[가-힣A-Za-z]*\]")  # [노랑]…[/] 자막 색
 
 
+# 🇰🇷 v1.37 (목록 75) — 한국어는 «마침표 없이» 말이 끝나는 경우가 흔하다.
+#   받아쓴 자막도, 붙여넣은 대본도, AI가 다듬은 문장도 마침표가 없을 수 있다.
+#   그러면 문장부호 분할이 통째로 헛돌고, 남은 건 «글자 수로 자르기»뿐이라
+#   말 한가운데서 줄이 바뀐다 (회원님 35차: "중간에 내려오고").
+#   → 종결어미를 «절 경계»로 인정한다.
+_KO_ENDER_RE = re.compile(
+    r"(?<=[가-힣])"
+    r"(?:입니다|습니다|합니다|됩니다|드립니다|겠습니다|랍니다|"
+    r"하세요|주세요|세요|십시오|"
+    r"이에요|예요|에요|네요|해요|어요|아요|고요|데요|거든요|더라고요|"
+    r"잖아요|군요|구요|나요|까요|이죠|죠|이다|한다|된다|있다|없다)"
+    r"(?=[\s,]|$)")
+
+
+def split_ko_clauses(text: str) -> List[str]:
+    """문장부호 + 한국어 종결어미로 «말 단위» 나누기.
+
+    "안녕하세요 더브라운호텔입니다 여기가 좋은점은 뭐뭐 입니다"
+      → ["안녕하세요", "더브라운호텔입니다", "여기가 좋은점은 뭐뭐 입니다"]
+    """
+    out: List[str] = []
+    for piece in _split_by_punct(text):
+        start = 0
+        for m in _KO_ENDER_RE.finditer(piece):
+            seg = piece[start:m.end()].strip()
+            if seg:
+                out.append(seg)
+            start = m.end()
+        tail = piece[start:].strip()
+        if tail:
+            out.append(tail)
+    return [c for c in out if c]
+
+
+def pack_ko_lines(text: str, limit: int) -> List[str]:
+    """말 단위로 나눈 뒤 limit자까지 «다시 묶어» 줄을 만든다.
+
+    ⚠ 절을 «쪼개지» 않는 것이 요점이다. 한도에 맞추려고 절 한가운데를 자르면
+    회원님이 지적하신 바로 그 모양이 된다. 한 절이 혼자서도 한도를 넘을 때만
+    단어 경계로 자른다.
+
+    "안녕하세요 더브라운호텔입니다 여기가 좋은점은 뭐뭐 입니다" (limit 16)
+      → ["안녕하세요 더브라운호텔입니다", "여기가 좋은점은 뭐뭐 입니다"]
+        (5자 + 10자 = 15자라 한 줄로 묶이고, 다음 절은 새 줄)
+    """
+    if limit <= 0:
+        return [text.strip()] if text.strip() else []
+    lines: List[str] = []
+    cur = ""
+    for clause in split_ko_clauses(text):
+        if len(clause) > limit:              # 절 하나가 한도를 넘음 — 어쩔 수 없이 자른다
+            if cur:
+                lines.append(cur)
+                cur = ""
+            lines += _chunk_by_words(clause, limit)
+            continue
+        cand = f"{cur} {clause}".strip()
+        if cur and len(cand) > limit:
+            lines.append(cur)
+            cur = clause
+        else:
+            cur = cand
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 def _chunk_by_words(text: str, limit: int) -> List[str]:
     """단어 경계로 limit자 이하 조각들로 분할 (edit_mode.split_long_subtitles와 동일 규칙)."""
     chunks: List[str] = []
@@ -225,9 +292,9 @@ def split_long_sentences(script: Script, limit: int = 32) -> Script:
             continue
         changed = True
         placed_hl = False
-        chunks = []
-        for s in _split_by_punct(text):        # ① 진짜 문장 경계 우선
-            chunks += _chunk_by_words(s, limit) if len(s) > limit else [s]
+        # v1.37 (목록 75): 문장부호 + «한국어 종결어미»로 나눈 뒤 한도까지 다시 묶는다.
+        #   마침표가 없는 한국어 대본에서 글자 수로만 자르면 말 한가운데서 끊긴다.
+        chunks = pack_ko_lines(text, limit)
         for j, c in enumerate(chunks):
             sents.append(c)
             if hl and not placed_hl and hl in c:
@@ -848,6 +915,10 @@ POLISH_PROMPT = """\
 - 명사형(개조식) 종결을 완결된 구어체 어미로 ("확인 필수" → "꼭 확인하세요").
 - 다 짧아서 툭툭 끊기면 **짧은 문장과 조금 긴 문장을 섞어** 리듬을 준다.
 - 같은 말이 반복되면 다른 표현으로.
+- 🔴 **한 줄은 «말이 끝나는 곳»에서 끝나야 한다.** 그 줄만 읽어도 말이 완결돼야 해.
+  줄 끝이 «…있는», «…그래서», «…뭐뭐» 처럼 다음 말에 붙는 조각이면 안 된다.
+  (이 줄은 화면에 자막 한 장으로 통째로 뜬다 — 중간이 잘리면 읽다 만 것처럼 보인다)
+  예) ✅ "안녕하세요 더브라운호텔입니다"   ❌ "안녕하세요 더브라운호텔입니다 여기가"
 
 [절대 하지 말 것]
 - 🔴 **없는 사실·숫자·기능·효능을 지어내지 마.** 있는 말만 다듬는다.

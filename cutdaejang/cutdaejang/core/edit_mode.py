@@ -975,25 +975,13 @@ def split_long_subtitles(subs: List[Subtitle], wrap_chars: int = 16,
         if len(text) <= limit:
             out.append(s)
             continue
-        chunks: List[str] = []
-        cur = ""
-        for w in text.split():
-            cand = f"{cur} {w}".strip()
-            if len(cand) > limit and cur:
-                chunks.append(cur)
-                cur = w
-            else:
-                cur = cand
-        if cur:
-            chunks.append(cur)
-        # 공백 없는 초장문(연속 문자열)은 단어 분할이 안 됨 → 글자 단위로 강제 분할
-        fixed: List[str] = []
-        for c in chunks:
-            while len(c) > limit:
-                fixed.append(c[:limit])
-                c = c[limit:]
-            fixed.append(c)
-        chunks = [c for c in fixed if c]
+        # 🇰🇷 v1.37 (목록 75) — 예전엔 «글자 수»로만 잘라 말 한가운데서 끊겼다
+        #   (회원님 35차: "중간에 내려오고"). 이제 문장부호 + 한국어 종결어미로
+        #   «말 단위»를 만든 뒤 한도까지 다시 묶는다. 절 하나가 한도를 넘을 때만
+        #   단어 경계로 자른다 (그 폴백은 pack_ko_lines 안에 그대로 있다).
+        from .script_generator import pack_ko_lines  # noqa: PLC0415
+
+        chunks = pack_ko_lines(text, limit)
         span = max(1, s.end_us - s.start_us)
         total_chars = sum(len(c) for c in chunks) or 1
         t = s.start_us
