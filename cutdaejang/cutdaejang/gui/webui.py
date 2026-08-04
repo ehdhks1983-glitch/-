@@ -2049,14 +2049,19 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
                    cut_video: str, workdir: str, target_sec: float = 30.0,
                    speed: float = 1.0, speed_mode: str = "all",
                    quality: str = "standard",
-                   denoise=False, trim=(0, 0)) -> None:
-    """긴 영상을 목표 길이 단위 쇼츠 여러 개로 분할 렌더 (edited_1..N.mp4).
+                   denoise=False, trim=(0, 0), mode: str = "seq",
+                   n_clips: int = 3) -> None:
+    """긴 영상을 쇼츠 여러 개로 분할 렌더 (edited_1..N.mp4).
 
-    자막이 있으면 자막 흐름 단위로, 없으면 시간 기준 균등 분할(v0.38 완전 자동용).
+    mode="seq"  — 자막을 «순서대로» 목표 길이 단위로 (v0.38부터의 동작)
+    mode="best" — 🎬 v1.40 (목록 82): 좋은 대목 n_clips군데만 골라 낸다.
+                  회원님 40차 지적 — 여러 개는 «그냥 줄여서» 나오고 있었다.
+    자막이 없으면 시간 기준 균등 분할(둘 다 동일 — 고를 근거가 없다).
     편집 폼에서 정한 원본 소리·BGM·워터마크도 각 쇼츠에 그대로 적용된다.
     """
     try:
         from ..core import edit_mode, video_editor  # noqa: PLC0415
+        from ..core import script_generator as sg  # noqa: PLC0415
         from ..core.orchestrator import build_style  # noqa: PLC0415
         from ..utils import ffmpeg as ff  # noqa: PLC0415
 
@@ -2074,7 +2079,35 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         if trim_note:
             prev = (_get_job(job_id) or {}).get("tts_warn") or ""
             _set_job(job_id, tts_warn=f"{prev} · {trim_note}" if prev else trim_note)
-        groups = edit_mode.split_into_clips(subs, target_sec=target_sec)
+        titles: list = []
+        if mode == "best" and subs:
+            # 🎬 v1.40 (목록 82) — 좋은 대목만. AI가 안 되면 후킹 점수로 대체한다
+            #   (1개짜리 핵심 추천과 똑같은 폴백 구조 — 키가 없어도 «그냥 자르기»보다 낫다).
+            subs_d = edit_mode.subtitles_to_dicts(subs)
+            want = max(1, min(_SPLIT_MAX, int(n_clips or 3)))
+            try:
+                pick = sg.suggest_multi_highlights(subs_d, target_sec=int(target_sec), n=want)
+                how = "AI"
+            except Exception as pe:  # noqa: BLE001
+                logging.getLogger("cutdaejang").warning(
+                    "AI 여러-핵심 추천 무효/실패 → 후킹 점수 방식으로 대체: %s", pe)
+                pick = sg.suggest_multi_highlights_heuristic(
+                    subs_d, target_sec=int(target_sec), n=want)
+                how = "후킹 점수"
+            groups = [c["keep"] for c in pick.get("clips") or []]
+            titles = [str(c.get("title") or "") for c in pick.get("clips") or []]
+            if groups:
+                used = sum(len(g) for g in groups)
+                w = (f"✨ {how} 방식으로 «좋은 대목» {len(groups)}군데만 골랐어요 "
+                     f"(자막 {len(subs)}줄 중 {used}줄 사용) — {pick.get('reason', '')}")
+                _set_job(job_id, note=w)
+                prev = (_get_job(job_id) or {}).get("tts_warn") or ""
+                _set_job(job_id, tts_warn=f"{prev} · {w}" if prev else w)
+            else:  # 고를 게 없으면 «아무것도 안 나오는» 것보다 순서대로가 낫다
+                groups = edit_mode.split_into_clips(subs, target_sec=target_sec)
+                _set_job(job_id, tts_warn="ℹ 고를 만한 대목을 못 찾아 순서대로 나눴어요")
+        else:
+            groups = edit_mode.split_into_clips(subs, target_sec=target_sec)
         plan: list = [("subs", g) for g in groups]
         if not plan:  # 자막 없음 → 시간 기준 균등 분할
             total_us = ff.probe_duration_us(cut_video)
@@ -2140,8 +2173,10 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
         except (TypeError, ValueError):
             pass
         for gi, (kind, item) in enumerate(plan, 1):
+            tl = (titles[gi - 1] if gi - 1 < len(titles) else "").strip()
             _set_job(job_id, status="running", stage="render", frac=(gi - 1) / len(plan),
-                     note=f"쇼츠 {gi}/{len(plan)} 만드는 중…{note_extra}")
+                     note=(f"쇼츠 {gi}/{len(plan)} 만드는 중…{note_extra}"
+                           + (f"  「{tl[:30]}」" if tl else "")))
             try:
                 if kind == "subs":
                     clip_video, clip_subs = edit_mode.rebuild_from_keep(
@@ -3878,12 +3913,19 @@ class _Handler(BaseHTTPRequestHandler):
                         int(params.get("trim_end_us") or 0))
             except (TypeError, ValueError):
                 trim = (0, 0)
+            _apply_keys(params)          # 🎬 v1.40: 핵심 고르기에 제미나이 키가 쓰인다
+            split_mode = "best" if params.get("mode") == "best" else "seq"
+            try:
+                n_clips = max(1, min(_SPLIT_MAX, int(params.get("n_clips") or 3)))
+            except (TypeError, ValueError):
+                n_clips = 3
             _queue_job(job["id"], _do_edit_split,
                        job["id"], params.get("subtitles") or [],
                        params.get("hook", ep.get("hook", "")),
                        ep.get("layout", "shorts"), job.get("cut_video"), workdir,
                        target, speed, speed_mode, params.get("quality") or "standard",
-                       ep.get("denoise") or False, trim)  # 📋 작업 큐 (v0.88)
+                       ep.get("denoise") or False, trim,
+                       split_mode, n_clips)  # 📋 작업 큐 (v0.88)
             self._send_json({"ok": True})
         elif path == "/api/suggest_thumbnail":
             _apply_keys(params)
@@ -7435,7 +7477,14 @@ body.easy #easyBar { display: block; }
         <input type="number" id="hlTarget" value="30" min="5" max="90" style="width:54px;padding:6px">
         <span class="hint">초</span>
         <button class="ghost" onclick="aiHighlights(event)" title="AI가 핵심 구간을 골라 체크해줍니다">✨ AI 핵심 추천</button>
-        <button class="ghost" onclick="renderSplit(event)" title="전체를 목표 길이 단위로 잘라 쇼츠 여러 개로 저장">🎬 여러 쇼츠로 나누기</button>
+        <select id="splitMode" style="width:auto;padding:6px 8px" onchange="applySplitMode()"
+                title="핵심만 고르면 지루한 데를 버리고 좋은 대목으로만 만들어요">
+          <option value="best" selected>✨ 핵심만 골라 여러 개</option>
+          <option value="seq">⏱ 처음부터 순서대로 나누기</option>
+        </select>
+        <span class="hint" id="splitCountBox">몇 개</span>
+        <input type="number" id="splitCount" value="3" min="1" max="30" style="width:52px;padding:6px">
+        <button class="ghost" onclick="renderSplit(event)" title="긴 영상에서 쇼츠 여러 개를 한 번에 만들어 저장해요">🎬 여러 쇼츠로 나누기</button>
         <button class="ghost" id="cleanRepeatsBtn" style="display:none;color:#f0a020" onclick="cleanRepeats(event)" title="↻ 표시된 반복(NG) 테이크를 지우고 마지막 테이크만 남깁니다 (영상도 함께 컷)">↻ 반복 정리</button>
       </div>
       <div class="hint" id="hlReason" style="margin-top:4px"></div>
@@ -9468,18 +9517,36 @@ async function pronounceSubs(ev){
   if(data.lines){ data.lines.forEach((t,i)=>{ if(window._subs[i]) window._subs[i].text=t; }); renderSubRows(); }
 }
 // 전체를 목표 길이 단위로 잘라 쇼츠 여러 개 생성
+// 🎬 v1.40 — 「순서대로」면 개수를 못 정한다 (길이로 정해지므로)
+function applySplitMode(){
+  const best=((($('splitMode')||{}).value)||'best') === 'best';
+  ['splitCountBox','splitCount'].forEach(function(id){
+    const el=$(id); if(el) el.classList.toggle('hidden', !best);
+  });
+}
 async function renderSplit(ev){
   if(ev)ev.preventDefault();
   const subs=(window._subs||[]).filter(s=>(s.text||'').trim());
   if(subs.length<2){ alert('나눌 자막이 부족합니다 (2개 이상 필요)'); return; }
   const target=parseInt($('hlTarget').value||'30');
-  if(!confirm('전체를 약 '+target+'초 단위 쇼츠 여러 개로 나눠 저장합니다. 계속할까요?')) return;
+  // 🎬 v1.40 (목록 82) — «그냥 자르기»와 «핵심만»을 회원님이 고른다
+  const mode=(($('splitMode')||{}).value)||'best';
+  const nClips=Math.max(1, Math.min(30, parseInt(($('splitCount')||{}).value||'3')));
+  const msg = (mode === 'best')
+    ? ('영상에서 «좋은 대목» ' + nClips + '군데를 골라 약 ' + target + '초짜리 쇼츠 '
+       + nClips + '개로 만듭니다.' + String.fromCharCode(10)
+       + '지루한 부분은 버려요. 계속할까요?')
+    : ('전체를 약 ' + target + '초 단위로 «처음부터 순서대로» 나눠 저장합니다.'
+       + String.fromCharCode(10) + '버리는 부분 없이 전부 쇼츠가 돼요. 계속할까요?');
+  if(!confirm(msg)) return;
   const speed=parseFloat(($('outSpeed')||{}).value||'1');
   const speed_mode=(($('outSpeedMode')||{}).value)||'all';
   const quality=($('outQuality')||{}).value||'standard';
   const res=await fetch('/api/edit_split',{method:'POST',body:JSON.stringify(
     {job_id:currentJob, subtitles:subs, target_sec:target, hook:$('editHook').value,
-     speed, speed_mode, quality, trim_start_us:Math.round(window._trimStart||0),
+     speed, speed_mode, quality, mode, n_clips:nClips,
+     gemini_key:(mode === 'best' ? ensureGeminiKey() : ''),
+     trim_start_us:Math.round(window._trimStart||0),
      trim_end_us:Math.round(window._trimEnd||0), margin_v:window._subMarginV||0})});
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
@@ -13373,6 +13440,7 @@ async function poll(){
     if($('trimInfo')) $('trimInfo').textContent = '전체 사용';
     resetSubPosBar(((window._settings||{}).subtitle||{}).margin_v);  // ↕ 자막 위치 (v0.49)
     initTrimBand();                                                 // 🎚 앞뒤 트림 띠 (v1.37)
+    applySplitMode();                                               // 🎬 여러 쇼츠 방식 (v1.40)
     // 강조 단어가 있으면 "문장 | 단어" 형태로 보여줘 그 자리에서 수정 가능
     window._subs = (job.subtitles || []).map(s => ({
       text: s.highlight ? (s.text + ' | ' + s.highlight) : s.text,
