@@ -2291,6 +2291,8 @@ def _kit_text(kit: dict, title: str) -> str:
                   "무료 BGM(Kevin MacLeod)은 «저작자 표시(CC BY)»가 사용 조건이에요.",
                   "안 적어도 영상은 올라가지만, 나중에 저작권 신고를 받을 수 있어요.",
                   "내 음원을 쓰셨다면 이 칸 자체가 안 나옵니다.",
+                  "매번 번거로우시면 «저작자 표시가 필요 없는» 곡을 resources/bgm 폴더에",
+                  "넣어 쓰세요 — 그 곡으로 만들면 이 칸이 아예 안 나옵니다.",
                   "", kit["bgm_credit"]]
     tk = kit.get("tiktok") or {}
     if tk.get("caption"):
@@ -7579,6 +7581,10 @@ body.easy #easyBar { display: block; }
           <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitBgm')">📋 복사</button>
         </div>
         <textarea id="kitBgm" style="min-height:76px;margin-top:4px" readonly></textarea>
+        <div class="hint" style="margin-top:4px">🙅 <b>이 칸이 매번 번거로우시면</b> — 저작자 표시가 «필요 없는» 곡
+          (예: 유튜브 스튜디오 → 오디오 보관함에서 «저작자 표시 필요 없음»으로 거른 곡)을
+          <code>cutdaejang/resources/bgm</code> 폴더에 넣어 쓰세요.
+          목록에 바로 뜨고, <b>그 곡으로 만들면 이 칸이 아예 안 나옵니다.</b></div>
       </div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
             <b style="font-size:13px">🏷️ 태그</b>
