@@ -373,6 +373,17 @@ def _mismatched_aspect(img: str, w: int, h: int) -> bool:
         return False
 
 
+# 🎬 v1.36 (목록 72) — 한 칸을 «영상»으로도 받는다.
+#   AI 클립을 장면 하나에 끼우려고 배경 조립을 갈아엎을 필요가 없었다.
+#   배경은 원래 (그림, 길이) 목록으로 만드는 영상 트랙이라, 그 칸에 영상이
+#   들어와도 되게만 하면 된다.
+_VIDEO_EXT = (".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi")
+
+
+def _is_video_span(path) -> bool:
+    return Path(str(path)).suffix.lower() in _VIDEO_EXT
+
+
 def scene_slideshow(
     images_spans: list,
     out_path: str,
@@ -381,9 +392,11 @@ def scene_slideshow(
     motion_amount: float = 0.08,
     fade_s: float = 0.3,
 ) -> str:
-    """[(이미지, 구간 μs)] → 문장 타이밍에 맞춰 넘어가는 배경 영상 (무음).
+    """[(그림 또는 영상, 구간 μs)] → 문장 타이밍에 맞춰 넘어가는 배경 영상 (무음).
 
-    장면마다 살짝 줌(켄번즈) + 경계 페이드로 이어 붙인다. 전체 길이 = 구간 합.
+    그림 칸은 살짝 줌(켄번즈), **영상 칸은 그대로** — 이미 움직이므로 줌을 겹치면
+    어지럽다. 짧은 영상은 이어 붙여 칸을 채우고, 긴 영상은 앞에서 잘라 쓴다.
+    경계 페이드와 전체 길이(= 구간 합)는 두 경우 모두 같다.
     """
     if not images_spans:
         raise BackgroundError("장면 이미지가 없습니다")
@@ -394,8 +407,13 @@ def scene_slideshow(
     n = len(images_spans)
     for i, (img, dur_us) in enumerate(images_spans):
         dur_s = max(0.15, dur_us / 1e6)
-        # -framerate 필수: 이미지 loop 기본은 25fps라 캔버스 fps와 어긋나 길이가 줄어든다
-        args += ["-framerate", str(fps), "-loop", "1", "-t", f"{dur_s:.3f}", "-i", str(img)]
+        is_vid = _is_video_span(img)
+        if is_vid:
+            # 🎬 영상 칸 — 짧으면 이어 붙여 채우고(-stream_loop -1), 길면 -t 로 자른다.
+            args += ["-stream_loop", "-1", "-t", f"{dur_s:.3f}", "-i", str(img)]
+        else:
+            # -framerate 필수: 이미지 loop 기본은 25fps라 캔버스 fps와 어긋나 길이가 줄어든다
+            args += ["-framerate", str(fps), "-loop", "1", "-t", f"{dur_s:.3f}", "-i", str(img)]
         frames = max(1, int(dur_s * fps))
         if _mismatched_aspect(str(img), w, h):
             # 🖼 가로 사진을 세로 캔버스에(또는 반대) — 꽉 채우면 대부분이 잘려
@@ -411,7 +429,10 @@ def scene_slideshow(
         else:
             chain = (f"[{i}:v]scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
                      f"crop={up_w}:{up_h}")
-        if motion in ("zoom_in", "zoom_out"):
+        if is_vid:
+            # 이미 움직이는 화면에 켄번즈를 겹치면 어지럽다 — 크기만 맞춘다
+            chain += f",scale={w}:{h},fps={fps}"
+        elif motion in ("zoom_in", "zoom_out"):
             amt = max(0.02, min(0.2, motion_amount))
             if motion == "zoom_in":
                 z = f"min(1+{amt}*on/{frames},1+{amt})"
