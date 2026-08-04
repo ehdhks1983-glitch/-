@@ -2260,7 +2260,7 @@ def _bgm_credit(bgm_name: str) -> str:
                     "http://creativecommons.org/licenses/by/4.0/")
     except Exception:
         pass
-    return f"🎵 BGM: {stem}"
+    return ""      # 🎵 v1.36: 내 음원이면 표시할 «의무»가 없다 — 잡음만 된다 (목록 73)
 
 
 def _kit_text(kit: dict, title: str) -> str:
@@ -2282,6 +2282,12 @@ def _kit_text(kit: dict, title: str) -> str:
                   kit["pinned_comment"]]
     lines += ["", "── 카테고리 ──",
               f"{kit.get('category', '')} — {kit.get('category_reason', '')}"]
+    if kit.get("bgm_credit"):   # 🎵 v1.36 (목록 73) — 설명문과 «따로» 둔다
+        lines += ["", "── 🎵 음원 크레딧 (설명란 맨 아래에 붙여넣기) ──",
+                  "무료 BGM(Kevin MacLeod)은 «저작자 표시(CC BY)»가 사용 조건이에요.",
+                  "안 적어도 영상은 올라가지만, 나중에 저작권 신고를 받을 수 있어요.",
+                  "내 음원을 쓰셨다면 이 칸 자체가 안 나옵니다.",
+                  "", kit["bgm_credit"]]
     tk = kit.get("tiktok") or {}
     if tk.get("caption"):
         lines += ["", "【틱톡】 올리기 → https://www.tiktok.com/tiktokstudio/upload",
@@ -5103,10 +5109,17 @@ class _Handler(BaseHTTPRequestHandler):
         if _nc.get("tags"):
             _nc["tags"] = tidy_naver_tags(_nc.get("title") or "", _nc["tags"])
             kit["naver_clip"] = _nc
-        # BGM 크레딧 자동 삽입 — 어떤 곡을 썼는지 컷대장이 아니까 (CC BY 표기 의무)
+        # 🎵 v1.36 (목록 73) — 예전엔 이 크레딧을 «유튜브 설명문 안»에 이어 붙였다.
+        #   회원님 요청: 설명문에는 넣지 말 것. 그래서 설명문은 깨끗하게 두고,
+        #   크레딧은 키트의 «따로 칸»으로 뺀다.
+        #   ⚠ 다만 지우지는 않는다 — 무료 BGM(Kevin MacLeod)은 CC BY라
+        #     «저작자 표시»가 라이선스 조건이다. 안 적으면 수익화에서 문제가 될 수 있어
+        #     따로 보여주고 «어디에 넣어야 하는지»까지 알려 준다.
+        #   ⚠ 내 음원·직접 넣은 파일이면 아무것도 안 붙인다 (예전엔 파일 이름이
+        #     설명문에 그대로 들어갔다 — 그건 순전히 잡음이었다).
         credit = _bgm_credit((ep.get("bgm") or jp.get("bgm") or "").strip())
         if credit:
-            kit["description"] = (kit.get("description", "").rstrip() + "\n\n" + credit)
+            kit["bgm_credit"] = credit
         # 업로드 체크리스트 (계산으로 확실한 것들)
         checks = []
         if is_shorts:
@@ -7449,10 +7462,20 @@ body.easy #easyBar { display: block; }
           <div id="kitTitles" class="hookcands"></div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
             <b style="font-size:13px">📝 설명문</b>
-            <span class="hint">(설명란에 그대로 붙여넣기 — BGM 크레딧 포함)</span>
+            <span class="hint">(설명란에 그대로 붙여넣기)</span>
             <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitDesc')">📋 복사</button>
           </div>
           <textarea id="kitDesc" style="min-height:120px;margin-top:4px"></textarea>
+      <!-- 🎵 v1.36 (목록 73) — 예전엔 이 크레딧이 설명문 «안»에 섞여 있었다.
+           설명문은 깨끗하게 두고, 무료 BGM을 쓴 경우에만 따로 보여준다. -->
+      <div id="kitBgmRow" class="hidden" style="margin-top:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <b style="font-size:13px">🎵 음원 크레딧</b>
+          <span class="hint">— 무료 BGM은 «저작자 표시»가 사용 조건이에요 (설명란 맨 아래에)</span>
+          <button class="ghost" style="padding:2px 8px" onclick="copyKit(event,'kitBgm')">📋 복사</button>
+        </div>
+        <textarea id="kitBgm" style="min-height:76px;margin-top:4px" readonly></textarea>
+      </div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
             <b style="font-size:13px">🏷️ 태그</b>
             <span class="hint">(태그란에 통째로 붙여넣기)</span>
@@ -9812,6 +9835,10 @@ function renderKit(data){
     tb.appendChild(b);
   });
   $('kitDesc').value = kit.description || '';
+  // 🎵 v1.36 (목록 73) — 내 음원·음악 없음이면 칸 자체를 안 보여준다
+  const bc = kit.bgm_credit || '';
+  $('kitBgm').value = bc;
+  $('kitBgmRow').classList.toggle('hidden', !bc);
   $('kitTags').value = (kit.tags || []).join(', ');
   // v0.47: 플랫폼별 섹션 (틱톡·인스타·네이버 클립·스레드)
   const NL = String.fromCharCode(10);
