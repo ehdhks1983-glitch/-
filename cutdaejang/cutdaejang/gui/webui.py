@@ -5907,7 +5907,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.38.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.38.1)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -7752,7 +7752,7 @@ body.easy #easyBar { display: block; }
     <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
       <div style="display:flex;align-items:center;gap:8px;font-weight:700">✨ fal.ai (AI 영상 클립)
         <span class="hint" id="apiFalState" style="font-weight:400"></span></div>
-      <div class="hint" style="margin-top:4px">쓰이는 곳: 첫 화면의 [✨ AI로 영상 만들기] — 시댄스·클링 같은 영상 생성 모델
+      <div class="hint" style="margin-top:4px">쓰이는 곳: <b>만드는 화면마다</b> 있는 [✨ AI 영상으로] · [✨ AI 영상 넣기] · [✨ AI 클립] — 시댄스·클링 같은 영상 생성 모델
         — <a href="{{LINK:fal}}" target="_blank" style="color:#7a9bff">fal.ai (선불 크레딧 — 충전한 만큼만 쓰여요)</a></div>
       <div style="display:flex;gap:6px;margin-top:8px">
         <input type="password" id="apiFalKey" placeholder="fal.ai API 키 (사이트 Keys 메뉴에서 발급)" style="flex:1">
@@ -10489,7 +10489,7 @@ async function saveApiKey(ev, which){
     return;
   }
   alert(which === 'fal'
-    ? '저장했어요 — 첫 화면의 [✨ AI로 영상 만들기]에서 시댄스·클링 같은 fal.ai 모델을 쓸 수 있어요'
+    ? '저장했어요 — 만드는 화면마다 있는 [✨ AI 영상으로]·[✨ AI 클립] 버튼에서 시댄스·클링 같은 fal.ai 모델을 쓸 수 있어요'
     : '저장했어요 — 이제 이 키가 필요한 기능이 모두 켜집니다');
 }
 async function clearAllKeys(ev){

@@ -40,7 +40,7 @@ JS = "\n".join(re.findall(r"<script>(.*?)</script>", HTML, re.S))
 
 
 def test_version():
-    assert __version__ == "1.38.0"
+    assert __version__ == "1.38.1"
 
 
 # ══ ① ✨ 단어별 자막 ═════════════════════════════════════════════
@@ -172,6 +172,23 @@ def test_the_new_effect_is_allowed_end_to_end(where):
             webui.__file__.replace("gui/webui.py", "core/orchestrator.py"),
             encoding="utf-8").read()
         assert '"karaoke", "word"' in body
+
+
+def test_no_hint_points_at_a_button_we_removed():
+    """🔴 v1.38.1 — 회원님 36차 화면 보고에서 드러난 것.
+
+    v1.36에서 첫 화면의 「✨ AI로 영상 만들기」 카드를 뺐는데(목록 72 ①),
+    그 카드를 «가리키던» 안내 두 곳이 남아 있었다. 없는 버튼을 찾아 헤매게 된다.
+    안내는 «지금 있는 곳»을 가리켜야 한다.
+    """
+    assert "첫 화면의 [✨ AI로 영상 만들기]" not in HTML
+    titles = re.findall(r'<span class="mc-title">([^<]+)</span>', HTML)
+    assert "AI로 영상 만들기" not in titles, "카드가 되살아났다"
+    # fal.ai 키 안내가 «실제로 있는» 버튼을 가리키는가
+    for btn in ("[✨ AI 영상으로]", "[✨ AI 클립]"):
+        assert btn in HTML, btn
+    seg = HTML.split("✨ fal.ai (AI 영상 클립)")[1][:400]
+    assert "만드는 화면마다" in seg
 
 
 def test_the_screen_offers_it():

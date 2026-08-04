@@ -9,7 +9,7 @@ from cutdaejang.gui import webui
 
 
 def test_version():
-    assert __version__ == "1.38.0"
+    assert __version__ == "1.38.1"
 
 
 def test_clip_combined_copy_and_readable_category():

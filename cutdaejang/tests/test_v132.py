@@ -30,7 +30,7 @@ HTML = webui._apply_links(webui._HTML)
 
 
 def test_version():
-    assert __version__ == "1.38.0"
+    assert __version__ == "1.38.1"
 
 
 # ── ① 단계별 소요 시간 ─────────────────────────────────────────
