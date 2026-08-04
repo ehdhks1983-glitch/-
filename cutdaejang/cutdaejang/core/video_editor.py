@@ -367,7 +367,15 @@ def photo_sentence_spans(n_images: int, sub_starts_us: List[int],
 
 
 def resolve_photo_inputs(path_str: str) -> List[str]:
-    """사진 입력 해석 — 폴더(안의 사진 전부, 이름순) 또는 줄바꿈/세미콜론 구분 파일들."""
+    """사진 입력 해석 — 폴더(안의 사진 전부, 이름순) 또는 줄바꿈/세미콜론 구분 파일들.
+
+    🎬 v1.36 (목록 72 ③) — «AI 영상» 칸도 받는다. 예전엔 사진 확장자가 아니면
+    ValueError로 작업 전체를 세웠기 때문에, 만든 클립을 목록에 넣는 순간
+    영상 만들기가 통째로 실패했다. photos_to_video가 영상 칸을 받으므로
+    여기서도 통과시킨다. (폴더를 훑을 때는 «사진만» — 폴더 안에 원본 영상이
+    같이 있는 경우가 흔해서, 의도치 않게 끌려 들어오면 안 된다.)
+    """
+    from .background_generator import _is_video_span  # noqa: PLC0415
     raw = (path_str or "").replace(";", "\n").splitlines()
     out: List[str] = []
     for item in raw:
@@ -381,7 +389,7 @@ def resolve_photo_inputs(path_str: str) -> List[str]:
                         for tok in re.split(r"(\d+)", f.name)]
             out += [str(f) for f in sorted(p.iterdir(), key=natkey)
                     if f.is_file() and f.suffix.lower() in IMAGE_EXTS]
-        elif p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+        elif p.is_file() and (p.suffix.lower() in IMAGE_EXTS or _is_video_span(p)):
             out.append(str(p))
         else:
             raise ValueError(f"사진 파일/폴더를 찾을 수 없습니다: {p}")
@@ -421,7 +429,14 @@ def photos_to_video(images: List[str], total_us: int, out_path: str,
     # 동일한 backdrop인데 boxblur 비용이 ~16분의 1 (사용자 리포트 "50장 오래 걸림").
     bw, bh = max(2, (w // 4) & ~1), max(2, (h // 4) & ~1)
     for i, img in enumerate(images):
-        args += ["-loop", "1", "-t", f"{per_s:.3f}", "-i", str(img)]
+        # 🎬 v1.36 (목록 72 ③) — 이 칸이 «영상»이면(AI 클립) 그대로 쓴다.
+        #   짧으면 이어 붙여 칸을 채우고(-stream_loop -1), 길면 -t 로 자른다.
+        #   사진 경로도 장면 배경과 «같은 규칙»이라 코드가 갈라지지 않는다.
+        from .background_generator import _is_video_span  # noqa: PLC0415
+        if _is_video_span(img):
+            args += ["-stream_loop", "-1", "-t", f"{per_s:.3f}", "-i", str(img)]
+        else:
+            args += ["-loop", "1", "-t", f"{per_s:.3f}", "-i", str(img)]
         chain = (
             f"[{i}:v]split=2[bg{i}][fg{i}];"
             f"[bg{i}]scale={bw}:{bh}:force_original_aspect_ratio=increase,"

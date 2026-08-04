@@ -6023,9 +6023,10 @@ body.easy #easyBar { display: block; }
         <input type="text" id="photoPath" style="flex:1" placeholder="사진 파일들(세미콜론 구분) 또는 폴더 경로">
         <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','images')">🖼 사진 고르기 (여러 장)</button>
         <button class="ghost" style="white-space:nowrap" onclick="pickInto(event,'photoPath','folder')">📁 폴더째</button>
+        <button class="ghost" style="white-space:nowrap" onclick="addAiClipPhoto(event,'photo')" title="찍은 게 없는 장면을 AI가 짧은 영상으로 만들어 마지막에 넣어드려요 — 만들기 전에 예상 요금을 보여드립니다">✨ AI 영상 넣기</button>
       </div>
       <div class="hint">[🖼 사진 고르기]에서 Ctrl/Shift로 여러 장을 한 번에 — 고른 순서(입력칸의 세미콜론 순서)대로 들어가요. 폴더를 고르면 안의 사진 전부(이름순). 가로 사진도 블러 배경으로 세로 쇼츠에 자연스럽게 들어갑니다.</div>
-      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 첫 화면의 <b>[✨ AI로 영상 만들기]</b>에서 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
+      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 옆의 <b>[✨ AI 영상 넣기]</b>로 그 장면을 만들어 넣을 수 있어요 (만들기 전에 예상 요금을 보여드려요). 넣은 뒤 순서는 ← → 로 옮기면 됩니다.</div>
       <div class="chk" style="gap:8px">
         <span>영상 전체 길이</span>
         <input type="number" id="photoSec" value="15" min="3" max="180" style="width:80px;padding:6px"
@@ -6947,10 +6948,11 @@ body.easy #easyBar { display: block; }
       <textarea id="wlPasteText" style="min-height:110px;margin-top:6px" placeholder="상품 상세설명·특징·후기 등을 통째로 붙여넣으세요 — AI가 홍보 대본으로 정리해요"></textarea>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
         <button class="ghost" onclick="pickWlPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
+          <button class="ghost" onclick="addAiClipPhoto(event,'wl')" title="찍은 게 없는 장면을 AI가 짧은 영상으로 만들어 마지막에 넣어드려요 — 만들기 전에 예상 요금을 보여드립니다">✨ AI 영상 넣기</button>
         <span class="hint" id="wlPhotoCnt" style="align-self:center"></span>
         <button class="ghost" style="border-color:#4266d5" onclick="loadWeblinkPasted(event)">🤖 이 내용으로 대본 만들기</button>
       </div>
-      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 첫 화면의 <b>[✨ AI로 영상 만들기]</b>에서 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
+      <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 옆의 <b>[✨ AI 영상 넣기]</b>로 그 장면을 만들어 넣을 수 있어요 (만들기 전에 예상 요금을 보여드려요). 넣은 뒤 순서는 ← → 로 옮기면 됩니다.</div>
     </details>
     <div id="wlPreview" class="hidden">
       <div class="steplabel"><span class="stepnum">2</span>사진 확인 <span class="hint">— 체크를 끄면 그 사진은 영상에서 빠져요 (순서 = 문장 순서)</span></div>
@@ -7220,11 +7222,12 @@ body.easy #easyBar { display: block; }
     <textarea id="shopPasteText" style="min-height:100px" placeholder="상품 이름·특징·후기 등 — 위에서 상품을 고르면 자동으로 채워지고, 상품 페이지의 상세설명을 복사해 덧붙일 수 있어요"></textarea>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
       <button class="ghost" onclick="pickShopPhotos(event)">🖼 상품 사진 고르기 (여러 장)</button>
+          <button class="ghost" onclick="addAiClipPhoto(event,'shop')" title="찍은 게 없는 장면을 AI가 짧은 영상으로 만들어 마지막에 넣어드려요 — 만들기 전에 예상 요금을 보여드립니다">✨ AI 영상 넣기</button>
       <button class="ghost" onclick="clearShopPhotos(event)" title="지금까지 모은 상품 사진을 전부 비우고 처음부터 다시">🗑 사진 비우기</button>
       <button class="ghost" onclick="resetShopCard(event)" title="링크·결과 글·사진·대본·훅을 한 번에 비우고 처음부터 (로그인 창은 그대로)">🧹 전체 초기화</button>
       <span class="hint" id="shopPhotoCnt" style="align-self:center"></span>
     </div>
-    <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 첫 화면의 <b>[✨ AI로 영상 만들기]</b>에서 짧은 영상을 만들어 채울 수 있어요 — 사진 흐름 사이에 자동으로 끼워 넣는 기능은 준비 중이에요.</div>
+    <div class="hint" style="margin-top:4px">✨ 사진이 부족한 장면은 옆의 <b>[✨ AI 영상 넣기]</b>로 그 장면을 만들어 넣을 수 있어요 (만들기 전에 예상 요금을 보여드려요). 넣은 뒤 순서는 ← → 로 옮기면 됩니다.</div>
     <div id="shopPhotoPrev" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
     <div class="hint" style="margin-top:4px">📋 <b>사진 한꺼번에 넣기</b> — 상품 페이지에서 사진 있는 부분을 마우스로 드래그해 복사(Ctrl+C)한 뒤 이 화면에 붙여넣기(Ctrl+V)하면 사진 여러 장이 자동으로 들어와요. 스크린샷(Win+Shift+S)을 바로 붙여넣어도 됩니다</div>
     <button class="ghost" style="margin-top:8px;border-color:#4266d5" onclick="makeShopScript(event)" title="수집된 설명을 수정한 뒤 대본만 다시 만들 때 사용하세요">🤖 수정한 정보로 대본 다시 만들기</button>
@@ -10139,6 +10142,43 @@ function sceneAiClip(ev, i){
     uiBanner('✨ ' + (i + 1) + '번 장면을 AI 영상으로 바꿨어요');
   };
   const seed = (($('scnP' + i) || {}).value || '').trim();
+  if(seed && !$('aiClipPrompt').value.trim()) $('aiClipPrompt').value = seed;
+  _aiClipShow();
+}
+// ✨ v1.36 (목록 72 ③) — 사진으로 만드는 경로(📸 사진 · 🔗 블로그 · 🛒 쇼핑)에도
+//   AI 영상. 사진이 모자란 자리에 «찍은 게 없는 장면»을 만들어 끼운다.
+//   슬라이드쇼 조립이 영상 칸을 받게 해 뒀으므로(photos_to_video), 목록에
+//   영상 경로를 한 칸 더 넣기만 하면 된다.
+function addAiClipPhoto(ev, where){
+  if(ev) ev.preventDefault();
+  const btn = (ev && ev.target) || null;
+  const seed = {
+    wl:   (($('wlHook') || {}).value || '').trim(),
+    shop: (($('shopHook') || {}).value || '').trim(),
+    photo:(($('editHook') || {}).value || '').trim()
+  }[where] || '';
+  // 비율은 그 경로에서 «지금 고른» 것을 따른다 (가로인데 세로 클립을 만들면 낭비)
+  const orient = {
+    wl:   (($('wlOrientSel') || {}).value || 'shorts'),
+    shop: (($('shopOrientSel') || {}).value || 'shorts'),
+    photo:(function(){ try{ return pick('editLayout'); }catch(e){ return 'shorts'; } })()
+  }[where];
+  _aiClipVi = null; _aiClipBtn = btn;
+  window._aiClipAspect = (orient === 'wide') ? '16:9' : '9:16';
+  window._aiClipDone = function(clipPath){
+    if(where === 'shop'){ addShopPhotos([clipPath], []); }
+    else if(where === 'wl'){
+      window._wlLocalPhotos = (window._wlLocalPhotos || []).concat([clipPath]);
+      if(window._weblink) window._weblink.images = window._wlLocalPhotos;
+      const c = $('wlPhotoCnt');
+      if(c) c.textContent = '📷 사진·영상 ' + window._wlLocalPhotos.length + '개 선택됨';
+    } else {
+      const el = $('photoPath');
+      if(el){ el.value = (el.value ? el.value + ';' : '') + clipPath;
+              el.dispatchEvent(new Event('input', {bubbles:true})); }
+    }
+    uiBanner('✨ AI 영상을 마지막에 넣었어요 — 순서는 ← → 로 옮기면 돼요');
+  };
   if(seed && !$('aiClipPrompt').value.trim()) $('aiClipPrompt').value = seed;
   _aiClipShow();
 }

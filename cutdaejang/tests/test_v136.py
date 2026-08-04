@@ -184,3 +184,79 @@ def test_html_is_still_well_formed():
         assert len(re.findall(rf"<{tag}[\s>]", HTML)) == len(
             re.findall(rf"</{tag}>", HTML)), f"<{tag}> 짝이 안 맞음"
     assert f"(v{__version__})" in HTML
+
+
+# ── 72 ③: 사진으로 만드는 경로(사진·블로그·쇼핑)에도 AI 영상 ──────
+def test_all_three_photo_paths_can_insert_an_ai_video():
+    """«각 템플릿 카테고리에» — 사진 경로 셋에 전부 붙었는지."""
+    assert HTML.count("addAiClipPhoto(event,") == 3
+    for where in ("'wl'", "'shop'", "'photo'"):
+        assert f"addAiClipPhoto(event,{where})" in HTML, where
+
+
+def test_the_photo_slideshow_accepts_a_video_slot(tmp_path):
+    """🎬 사진 슬라이드쇼도 장면 배경과 «같은 규칙»이어야 코드가 안 갈라진다."""
+    from cutdaejang.core.video_editor import photos_to_video
+    from cutdaejang.utils import ffmpeg as ff
+
+    img = tmp_path / "a.png"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi", "-i",
+            "gradients=size=1280x720:duration=0.1:rate=1", "-frames:v", "1", str(img)])
+    vid = tmp_path / "clip.mp4"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi", "-i",
+            "testsrc=size=1280x720:duration=2:rate=30", "-pix_fmt", "yuv420p", str(vid)])
+    out = photos_to_video([str(img), str(vid)], 8_000_000, str(tmp_path / "s.mp4"))
+    assert ff.probe_video_size(out) == (1080, 1920)
+    dur = ff.probe_duration_us(out) / 1e6
+    assert 7.6 < dur < 8.4, f"전체 길이 약속(8초)을 지켜야 한다 — {dur}"
+
+
+def test_photo_inputs_no_longer_reject_a_clip(tmp_path):
+    """🔴 여기서 막혀 있었다 — 클립을 넣는 순간 «영상 만들기»가 통째로 실패했다."""
+    from cutdaejang.core.video_editor import resolve_photo_inputs
+    from cutdaejang.utils import ffmpeg as ff
+
+    img = tmp_path / "a.png"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi", "-i",
+            "gradients=size=64x64:duration=0.1:rate=1", "-frames:v", "1", str(img)])
+    vid = tmp_path / "clip.mp4"
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi", "-i",
+            "testsrc=size=64x64:duration=1:rate=5", "-pix_fmt", "yuv420p", str(vid)])
+    got = resolve_photo_inputs(f"{img};{vid}")
+    assert len(got) == 2 and got[1].endswith(".mp4")
+
+
+def test_a_folder_still_picks_photos_only(tmp_path):
+    """폴더에는 원본 영상이 같이 있는 경우가 흔하다 — 끌려 들어오면 안 된다."""
+    from cutdaejang.core.video_editor import resolve_photo_inputs
+    from cutdaejang.utils import ffmpeg as ff
+
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi", "-i",
+            "gradients=size=64x64:duration=0.1:rate=1", "-frames:v", "1",
+            str(tmp_path / "a.png")])
+    ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi", "-i",
+            "testsrc=size=64x64:duration=1:rate=5", "-pix_fmt", "yuv420p",
+            str(tmp_path / "원본.mp4")])
+    got = resolve_photo_inputs(str(tmp_path))
+    assert [p.split("/")[-1] for p in got] == ["a.png"]
+
+
+def test_junk_files_are_still_refused(tmp_path):
+    from cutdaejang.core.video_editor import resolve_photo_inputs
+
+    (tmp_path / "note.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(ValueError):
+        resolve_photo_inputs(str(tmp_path / "note.txt"))
+
+
+def test_the_preparing_soon_caveat_is_gone():
+    """세 화면에 «자동으로 끼워 넣는 기능은 준비 중»이라 적혀 있었다 — 이제 된다."""
+    assert "준비 중이에요" not in HTML
+    assert "[✨ AI 영상 넣기]" in HTML
+
+
+def test_the_photo_paths_use_their_own_shape():
+    body = JS.split("function addAiClipPhoto(")[1].split("\n}")[0]
+    for sel in ("wlOrientSel", "shopOrientSel", "editLayout"):
+        assert sel in body, sel
+    assert "(orient === 'wide') ? '16:9' : '9:16'" in body
