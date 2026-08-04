@@ -319,6 +319,71 @@ def _typing_body(text: str, line_color: str, dur_ms: int = 0,
     return "".join(out)
 
 
+WORD_FADE_MS = 60      # ✨ 단어별 자막(v1.38) — 한 단어가 나타나는 데 걸리는 시간
+WORD_OFF_MS = 120      # 말이 끝난 단어가 기본색으로 돌아가는 시간
+WORD_FILL = 0.9        # 단어 시각이 없을 때 자막 길이의 몇 %에 걸쳐 나타낼지
+
+
+def _word_spans(sub, text: str) -> list:
+    """[(시작 상대ms, 끝 상대ms, 단어)] — 단어 시각(sub.words)이 있으면 그대로.
+
+    없으면(AI 내레이션처럼 받아쓴 게 아닌 경우) 자막 길이를 글자 수 비례로
+    나눠 쓴다. 정확하진 않아도 «말과 함께 하나씩 나타나는» 느낌은 살아난다.
+    """
+    out = []
+    for w in (getattr(sub, "words", None) or []):
+        tok = str(w[2]).strip()
+        if tok:
+            out.append((int(w[0]) // 1000, int(w[1]) // 1000, tok))
+    if out:
+        return out
+    dur_ms = max(0, int((getattr(sub, "end_us", 0) - getattr(sub, "start_us", 0)) // 1000))
+    toks = [t for t in str(text).replace("\n", " ").split() if t]
+    if not toks or dur_ms <= 0:
+        return []
+    total = sum(len(t) for t in toks) or 1
+    cur = 0.0
+    for tok in toks:
+        nxt = cur + dur_ms * WORD_FILL * len(tok) / total
+        out.append((round(cur), round(nxt), tok))
+        cur = nxt
+    return out
+
+
+def _word_body(sub, style, pop_color: str = "") -> str:
+    """✨ 단어별 자막 (v1.38 · 목록 76) — 말하는 타이밍에 단어가 하나씩 나타난다.
+
+    카라오케(v0.76)와 다르다. 카라오케는 «색이 차오르는» 것이고 이건 «없던 글자가
+    생기는» 것이다. 2026년 쇼츠에서 제일 많이 쓰는 연출이다.
+
+    ⚠ 자리는 처음부터 잡아 둔다 — 투명(\\alpha&HFF&)이어도 글자 폭은 차지하므로
+    줄이 다시 가운데 정렬되며 «덜컹»거리지 않는다. 단어가 늘 때마다 자막이
+    좌우로 흔들리면 오히려 읽기 나쁘다.
+    """
+    base = pop_color or style.primary_color
+    hl = getattr(style, "highlight_color", "") or base
+    spans = _word_spans(sub, sub.text)
+    if not spans:                       # 단어가 하나도 없으면 평소대로
+        return escape_ass_text(wrap_text(sub.text, getattr(style, "wrap_chars", 0)))
+    wrap = getattr(style, "wrap_chars", 0) or 0
+    parts, line_len = [], 0
+    for a, b, tok in spans:
+        sep = ""
+        if line_len > 0:
+            if wrap and line_len + 1 + len(tok) > wrap:
+                parts.append("\\N")
+                line_len = 0
+            else:
+                sep = " "
+        tag = ("{\\alpha&HFF&\\1c" + _inline_color(hl)
+               + "\\t(%d,%d,\\alpha&H00&)" % (a, a + WORD_FADE_MS))
+        if hl != base:                  # 말하는 단어만 강조색, 지나가면 기본색으로
+            tag += "\\t(%d,%d,\\1c%s)" % (b, b + WORD_OFF_MS, _inline_color(base))
+        parts.append(tag + "}" + escape_ass_text(sep + tok))
+        line_len += len(tok) + (1 if sep else 0)
+    return "".join(parts)
+
+
 def _karaoke_body(sub, style, pop_color: str = "") -> str:
     """🎤 단어 카라오케 (v0.76) — 말하는 단어가 강조색으로 차오른다 (\\k 태그).
 
@@ -361,6 +426,9 @@ def dialogue_text(sub, style, pop_color: str = "") -> str:
     anim=="karaoke"(v0.76)면 단어 시각이 있을 때 말하는 단어가 차오른다 (없으면 기존 폴백).
     """
     marked = colorize_markup(sub.text, style.primary_color)  # 다색 마크업 우선
+    if marked is None and getattr(style, "anim", "none") == "word":
+        # ✨ 단어별 (v1.38) — 등장 연출이라 fade/pop은 안 겹친다 (타이핑과 같은 이유)
+        return _word_body(sub, style, pop_color)
     if (marked is None and getattr(style, "anim", "none") == "karaoke"
             and (getattr(sub, "words", None) or [])):
         body = _karaoke_body(sub, style, pop_color)

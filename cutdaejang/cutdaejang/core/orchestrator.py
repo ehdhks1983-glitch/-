@@ -40,7 +40,7 @@ class JobOptions:
     tone: str = "정보형"
     target_sec: int = 60
     orientation: str = "shorts"          # shorts(세로 9:16) | wide(가로 롱폼 16:9) — v0.61
-    sub_anim: str = ""                   # 자막 등장 애니 강제 (v0.86 감성 테마: none/pop/type/karaoke)
+    sub_anim: str = ""                   # 자막 등장 애니 강제 (none/pop/type/karaoke/word)
     pace_sec: int = 0                    # 내 대본일 때 목표 길이(초) — 간격을 늘려 맞춤 (v0.63)
     bgm: str = ""                        # ""(없음) | "random" | 파일명/경로
     hook: str = ""                       # 상단 제목(훅). 비면 대본 제목 사용
@@ -343,7 +343,7 @@ def run_job(
         # ④ 타임라인 실측 → Timeline Spec 확정
         report("timeline", 0.0)
         job_style = build_style(settings, opts.orientation)  # v0.74 인스타·틱톡(reels) 특화
-        if opts.sub_anim in ("none", "pop", "type", "karaoke"):
+        if opts.sub_anim in ("none", "pop", "type", "karaoke", "word"):  # v1.38 word
             job_style.anim = opts.sub_anim   # 🎬 감성 테마의 자막 애니 (v0.86 — 이 작업만)
         spec = timeline_calculator.build_spec(
             sentences=script.sentences,

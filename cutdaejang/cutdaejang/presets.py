@@ -12,16 +12,25 @@ CANVAS_LANDSCAPE = Canvas(w=1920, h=1080, fps=30)  # v1.5 일반 모드
 
 # 스펙에는 파일명 스타일("Pretendard-ExtraBold")로 적더라도
 # libass/ASS Fontname은 폰트 내부 패밀리명("Pretendard ExtraBold")이어야 매칭된다.
+# 🔴 v1.38 (목록 76) — 여기 이름은 «지어내면» 안 된다. 폰트 파일 안의 name 표에
+#   적힌 것과 한 글자라도 다르면 libass가 «조용히 다른 글씨로» 그린다 (오류도 안 난다).
+#   실제로 그랬다: "Pretendard-Bold" → "Pretendard Bold"는 없는 이름이라
+#   렌더 결과가 «존재하지 않는 폰트»와 픽셀 단위로 완전히 같았다.
+#   파일마다 name 표를 읽어 확인한 값만 적는다 (tests/test_v138.py가 못 박는다).
 FONT_FAMILY_ALIASES = {
-    "Pretendard-ExtraBold": "Pretendard ExtraBold",
-    "Pretendard-Bold": "Pretendard Bold",
+    "Pretendard-ExtraBold": "Pretendard ExtraBold",   # 동봉 (name1 그대로)
+    "Pretendard-Bold": "Pretendard",                  # ⚠ 이 파일의 name1은 그냥 "Pretendard"
     "Pretendard-SemiBold": "Pretendard SemiBold",
     # ⬇ 무료 글씨체 (v0.63 — tools/fetch_fonts.py로 받는 Google Fonts OFL 한글)
     "BlackHanSans-Regular": "Black Han Sans",
     "Jua-Regular": "Jua",
     "DoHyeon-Regular": "Do Hyeon",
     "Gugi-Regular": "Gugi",
-    "NanumPenScript-Regular": "Nanum Pen Script",
+    "NanumPenScript-Regular": "Nanum Pen",            # ⚠ 파일 이름과 달리 name1은 "Nanum Pen"
+    # ⬇ v1.38 (목록 76) — «실패 없는 기본»과 정보형 글씨체
+    "NotoSansKR-Bold": "Noto Sans KR Bold",
+    "SCDreamBold": "S-Core Dream 6 Bold",
+    "SCDreamHeavy": "S-Core Dream 8 Heavy",
 }
 
 # 🔤 v1.11 용도별 제목+본문 글꼴 조합. 사용자는 수십 개 글꼴을 따로 고르지

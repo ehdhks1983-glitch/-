@@ -637,6 +637,10 @@ def _product_context(params: dict, settings: dict) -> str:
     return "\n\n".join(parts)[:1500]
 
 
+# 🎬 자막 등장 효과 허용값 — 화면·서버가 같은 목록을 봐야 «골랐는데 안 먹는» 일이 없다
+_ANIMS = ("none", "pop", "type", "karaoke", "word")   # word = v1.38 (목록 76)
+
+
 def _font_overrides(params: dict) -> dict:
     """폼의 글씨체·기울임 선택 → settings.subtitle에 기억할 값 (v0.63, 검증 포함)."""
     out = {}
@@ -674,7 +678,7 @@ def _job_options(params: dict, settings: Optional[dict] = None) -> JobOptions:
         orientation=(params.get("orientation")
                      if params.get("orientation") in ("wide", "reels") else "shorts"),  # v0.61·v0.74
         sub_anim=(params.get("sub_anim")
-                  if params.get("sub_anim") in ("none", "pop", "type", "karaoke") else ""),  # v0.86 테마
+                  if params.get("sub_anim") in _ANIMS else ""),  # v0.86 테마 (+v1.38 word)
         pace_sec=max(0, int(params.get("pace_sec") or 0)),  # ⏱ 내 대본 길이 맞춤 (v0.63)
         render=RenderOptions(use_gpu=params.get("gpu", "auto")),
     )
@@ -1754,7 +1758,7 @@ def _do_edit_render(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.sub_style = str(ep["sub_style"])
         if ep.get("tone"):  # 🎨 화면 톤 (v0.56)
             style.tone = str(ep["tone"])
-        if ep.get("sub_anim") in ("none", "pop", "type", "karaoke"):  # 🎬 감성 테마 (v0.86)
+        if ep.get("sub_anim") in _ANIMS:  # 🎬 감성 테마 (v0.86 · v1.38 word)
             style.anim = str(ep["sub_anim"])
         if ep.get("sub_pos") in ("center", "bottom"):  # 🎨 자막 위치 — 릴스 가운데 (v0.87)
             style.position = str(ep["sub_pos"])
@@ -2122,7 +2126,7 @@ def _do_edit_split(job_id: str, subtitles_dicts: list, hook: str, layout: str,
             style.sub_style = str(ep["sub_style"])
         if ep.get("tone"):  # 🎨 화면 톤 (v0.56)
             style.tone = str(ep["tone"])
-        if ep.get("sub_anim") in ("none", "pop", "type", "karaoke"):  # 🎬 감성 테마 (v0.86)
+        if ep.get("sub_anim") in _ANIMS:  # 🎬 감성 테마 (v0.86 · v1.38 word)
             style.anim = str(ep["sub_anim"])
         if ep.get("sub_pos") in ("center", "bottom"):  # 🎨 자막 위치 — 릴스 가운데 (v0.87)
             style.position = str(ep["sub_pos"])
@@ -2718,7 +2722,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
             style.tone = str(params["tone"])
         if (params.get("sub_font") or "").strip():
             style.font = str(params["sub_font"]).strip()
-        if params.get("sub_anim") in ("none", "pop", "type", "karaoke"):
+        if params.get("sub_anim") in _ANIMS:
             style.anim = str(params["sub_anim"])   # 🎬 감성 테마 (v0.86)
         if params.get("sub_pos") in ("center", "bottom"):
             style.position = str(params["sub_pos"])  # 🎨 자막 위치 (v0.87)
@@ -3585,8 +3589,10 @@ class _Handler(BaseHTTPRequestHandler):
             from .. import presets as _pr  # noqa: PLC0415
 
             allowed = set(_pr.FONT_FAMILY_ALIASES.keys())  # 화이트리스트 (경로 주입 차단)
-            fp = Path(_re.DEFAULT_FONTS_DIR) / (stem + ".ttf")
-            if stem in allowed and fp.is_file():
+            # 🔤 v1.38 — 새로 더한 글씨체는 .otf다. .ttf만 찾으면 미리보기가 빈다
+            fp = next((p for p in (Path(_re.DEFAULT_FONTS_DIR) / (stem + e)
+                                   for e in (".ttf", ".otf")) if p.is_file()), None)
+            if stem in allowed and fp is not None:
                 self._serve_file(str(fp))
             else:
                 self._send_json({"error": "not found"}, 404)
@@ -6161,6 +6167,11 @@ body.easy #easyBar { display: block; }
           <option value="DoHyeon-Regular">도현 — 각진 고딕</option>
           <option value="Gugi-Regular">구기 — 레트로</option>
           <option value="NanumPenScript-Regular">나눔손글씨 펜 — 손글씨</option>
+          <option value="NotoSansKR-Bold">노토산스 KR — 실패 없는 기본</option>
+          <option value="SCDreamBold">에스코어드림 6 — 깔끔한 정보형</option>
+          <option value="SCDreamHeavy">에스코어드림 8 — 굵은 강조</option>
+          <option value="Pretendard-Bold">프리텐다드 Bold — 기본보다 얇게</option>
+          <option value="Pretendard-SemiBold">프리텐다드 SemiBold — 제일 얇게</option>
         </select>
         <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
           <input type="checkbox" id="editHookTiltChk"> 비스듬히</label>
@@ -6420,6 +6431,11 @@ body.easy #easyBar { display: block; }
           <option value="DoHyeon-Regular">도현 — 각진 고딕</option>
           <option value="Gugi-Regular">구기 — 레트로</option>
           <option value="NanumPenScript-Regular">나눔손글씨 펜 — 손글씨</option>
+          <option value="NotoSansKR-Bold">노토산스 KR — 실패 없는 기본</option>
+          <option value="SCDreamBold">에스코어드림 6 — 깔끔한 정보형</option>
+          <option value="SCDreamHeavy">에스코어드림 8 — 굵은 강조</option>
+          <option value="Pretendard-Bold">프리텐다드 Bold — 기본보다 얇게</option>
+          <option value="Pretendard-SemiBold">프리텐다드 SemiBold — 제일 얇게</option>
         </select>
         <span class="hint">본문 자막 글씨체 (기억됨)</span>
       </div>
@@ -6742,12 +6758,17 @@ body.easy #easyBar { display: block; }
           <option value="DoHyeon-Regular">도현 — 각진 고딕</option>
           <option value="Gugi-Regular">구기 — 레트로</option>
           <option value="NanumPenScript-Regular">나눔손글씨 펜 — 손글씨</option>
+          <option value="NotoSansKR-Bold">노토산스 KR — 실패 없는 기본</option>
+          <option value="SCDreamBold">에스코어드림 6 — 깔끔한 정보형</option>
+          <option value="SCDreamHeavy">에스코어드림 8 — 굵은 강조</option>
+          <option value="Pretendard-Bold">프리텐다드 Bold — 기본보다 얇게</option>
+          <option value="Pretendard-SemiBold">프리텐다드 SemiBold — 제일 얇게</option>
         </select>
         <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
           <input type="checkbox" id="genHookTiltChk"> 비스듬히 (예능 자막st)</label>
         <button class="ghost" id="fontFetchBtn" style="padding:4px 10px;font-size:12.5px"
                 onclick="fetchFonts(event)"
-                title="Google Fonts의 무료(OFL) 한글 글씨체 5종을 받아옵니다 (약 8MB) — 영상·상업용 사용 가능">⬇ 무료 글씨체 받기</button>
+                title="재배포가 허용된 무료 한글 글씨체 10종을 받아옵니다 (약 19MB, 한 번만) — 영상·상업용 사용 가능">⬇ 무료 글씨체 받기</button>
       </div>
       <div id="genHookPreview" style="margin-top:6px;border-radius:10px;background:#14161c;border:1px solid #2c3350;padding:18px 10px;text-align:center;display:none"></div>
       <label class="chk" style="margin-top:6px;cursor:pointer" title="영상 맨 앞에서 성우가 제목을 읽어주고 시작 — 전문 채널 같은 오프닝">
@@ -6787,6 +6808,11 @@ body.easy #easyBar { display: block; }
           <option value="DoHyeon-Regular">도현 — 각진 고딕</option>
           <option value="Gugi-Regular">구기 — 레트로</option>
           <option value="NanumPenScript-Regular">나눔손글씨 펜 — 손글씨</option>
+          <option value="NotoSansKR-Bold">노토산스 KR — 실패 없는 기본</option>
+          <option value="SCDreamBold">에스코어드림 6 — 깔끔한 정보형</option>
+          <option value="SCDreamHeavy">에스코어드림 8 — 굵은 강조</option>
+          <option value="Pretendard-Bold">프리텐다드 Bold — 기본보다 얇게</option>
+          <option value="Pretendard-SemiBold">프리텐다드 SemiBold — 제일 얇게</option>
         </select>
         <span class="hint">본문 자막 글씨체 — [⬇ 무료 글씨체 받기]는 상단 제목 그룹에</span>
       </div>
@@ -7811,6 +7837,7 @@ body.easy #easyBar { display: block; }
           <option value="pop">팝 — 살짝 커지며 등장 (쇼츠 감성)</option>
           <option value="type">타이핑 — 글자가 하나씩 (인스타·틱톡 감성)</option>
           <option value="karaoke">카라오케 — 말하는 단어가 차오름 (편집·Whisper 자막)</option>
+          <option value="word">✨ 단어별 — 말하는 단어가 하나씩 나타남 (2026 쇼츠 유행)</option>
         </select></div>
       <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
       <div class="chk"><input type="checkbox" id="setBand"><span>자막에도 배경 띠 (하단 자막 뒤에도 어두운 띠)</span></div>
