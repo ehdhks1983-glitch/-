@@ -3330,7 +3330,10 @@ def _run_gen_clip(job_id: str, params: dict, workdir: str) -> None:
             str(params.get("prompt") or ""), provider, key, workdir,
             model=model, duration_s=int(params.get("duration_s") or 5),
             aspect=str(params.get("aspect") or "16:9"),
-            progress_cb=lambda m: _set_job(job_id, note=m))
+            # ⏱ v1.42 (목록 84) — 작업 상태 + 로그 «둘 다»에 남긴다.
+            #   화면은 상태를 띄우고, 로그 창은 나중에 «왜 오래 걸렸나»를 본다.
+            progress_cb=lambda m: (_set_job(job_id, note=m),
+                                   logging.getLogger("cutdaejang").info("AI클립 %s", m)))
         est = int(params.get("est_won") or 0)
         if cached:
             note = "♻ 저장해 둔 클립 재사용 — 같은 내용이라 과금 없음"
@@ -5877,6 +5880,9 @@ _HTML = """<!doctype html>
   .shortsbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:10px;
                padding:8px 10px; border:1px dashed #3a4157; border-radius:10px; }
   .shortsbar button { margin:0; }
+  /* ⏱ AI 클립 진행 표시 (v1.42) */
+  .aispin { display:inline-block; animation:aispin 1.6s linear infinite; }
+  @keyframes aispin { to { transform:rotate(360deg); } }
   /* 🎚 끌어서 구간 정하는 띠 (v1.37 · 목록 74) — 숫자 칸과 «서로» 연동된다 */
   .rband { position:relative; flex:1 0 100%; height:36px; margin:2px 0 4px;
     border:1px solid #3a4157; border-radius:9px; background:#232838;
@@ -6001,6 +6007,19 @@ body.easy #easyBar { display: block; }
     <button class="ghost" id="navSet" onclick="toggleSettings(event)" title="설정을 옆 서랍으로 열어요 — 보던 자리는 그대로 있어요">⚙ 설정</button>
   </div>
   <div id="toastBox"></div>
+  <!-- ⏱ v1.42 (목록 84) — AI 클립은 돈이 나가는데 «되고 있는지» 알 길이 없었다.
+       버튼 글자만 «만드는 중…»이라 회원님이 멈춘 줄 알고 또 누를 수 있다.
+       어느 화면에서 눌렀든 보이게 떠 있는 칸으로 만든다. -->
+  <div id="aiClipProg" class="hidden" style="position:fixed;right:14px;bottom:14px;z-index:60;
+       max-width:min(420px,92vw);background:#141a2b;border:1px solid #3a4a7a;border-radius:12px;
+       padding:11px 14px;box-shadow:0 8px 28px rgba(0,0,0,.55);font-size:13px;color:#cdd8f5">
+    <div style="display:flex;align-items:center;gap:8px;font-weight:700">
+      <span class="aispin">✨</span><span>AI 클립 만드는 중</span>
+      <span id="aiClipElapsed" style="margin-left:auto;color:#9db8ff">0:00</span>
+    </div>
+    <div id="aiClipNote" style="margin-top:5px;color:#a9b4cc;line-height:1.5">요청을 보내는 중…</div>
+    <div class="hint" style="margin-top:5px">창을 닫지 마세요 — 다 되면 구간의 클립 칸에 자동으로 들어가요</div>
+  </div>
   <div id="drawerBack" class="hidden" onclick="closeDrawer(event)"></div>
 
   <div class="card" id="homeCard">
@@ -10382,6 +10401,17 @@ async function sceneClipClear(ev, i){
   uiBanner(r.has_image ? '🖼 그림으로 되돌렸어요' : '⬜ 영상을 뺐어요 — 이 장면은 비어 있어요');
 }
 function aiClipClose(ev){ if(ev) ev.preventDefault(); $('aiClipBox').classList.add('hidden'); }
+// ⏱ v1.42 (목록 84) — 만드는 동안 «지금 뭐 하는 중인지»를 계속 보여 준다
+function aiClipProgShow(on, note, secs){
+  const box = $('aiClipProg'); if(!box) return;
+  box.classList.toggle('hidden', !on);
+  if(!on) return;
+  if(note != null){ const n = $('aiClipNote'); if(n) n.textContent = note; }
+  if(secs != null){
+    const el = $('aiClipElapsed');
+    if(el) el.textContent = Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+  }
+}
 async function aiClipGo(ev){
   ev.preventDefault();
   const prompt = $('aiClipPrompt').value.trim();
@@ -10404,6 +10434,7 @@ async function aiClipGo(ev){
   if(d.error){ alert(d.error); return; }
   aiClipClose();
   if(btn){ btn.dataset.orig = btn.textContent; btn.disabled = true; btn.textContent = '✨ 만드는 중…'; }
+  aiClipProgShow(true, '요청을 보내는 중…');
   let waited = 0;
   const timer = setInterval(async function(){
     waited += 3;
@@ -10411,8 +10442,12 @@ async function aiClipGo(ev){
       const st = await (await fetch('/api/state')).json();
       const j = (st.jobs || []).find(function(x){ return x.id === d.job_id; });
       if(!j) return;
+      // ⏱ v1.42 (목록 84) — 서버는 진행 상황을 계속 보내고 있었는데
+      //   화면이 그걸 «버리고» 있었다. 이제 그대로 보여 준다.
+      aiClipProgShow(true, j.note || '만드는 중…', waited);
       if(j.status === 'ok' && j.clip){
         clearInterval(timer);
+        aiClipProgShow(false);
         if(btn){ btn.disabled = false; btn.textContent = btn.dataset.orig || '✨ AI 클립'; }
         _loadAiCost().then(_renderAiSpend);
         if(window._aiClipDone){                 // ✨ v1.36 장면 검토에서 부른 경우
@@ -10421,13 +10456,19 @@ async function aiClipGo(ev){
           return;
         }
         if(vi){ vi.value = j.clip; vi.dispatchEvent(new Event('input', {bubbles:true})); }
-        alert((j.note || '✨ AI 클립 완성!') + '\\n\\n구간의 클립 칸에 자동으로 넣어드렸어요.');
+        // 📁 v1.42 — «만든 영상은 어디에?»라는 물음에 파일 경로로 답한다
+        alert((j.note || '✨ AI 클립 완성!')
+              + '\\n\\n구간의 클립 칸에 자동으로 넣어드렸어요.'
+              + '\\n\\n📁 파일 위치:\\n' + j.clip);
       } else if(j.status === 'failed'){
         clearInterval(timer);
+        aiClipProgShow(false);
         if(btn){ btn.disabled = false; btn.textContent = btn.dataset.orig || '✨ AI 클립'; }
-        alert('❌ AI 클립 실패: ' + ((j.errors || [])[0] || '알 수 없는 오류'));
+        alert('❌ AI 클립 실패: ' + ((j.errors || [])[0] || '알 수 없는 오류')
+              + '\\n\\n자세한 내용은 화면 맨 아래 「📄 로그」를 펼쳐 보세요.');
       } else if(waited > 480){
         clearInterval(timer);
+        aiClipProgShow(false);
         if(btn){ btn.disabled = false; btn.textContent = btn.dataset.orig || '✨ AI 클립'; }
         alert('⏱ 8분이 지나도 끝나지 않았어요 — 완성되면 📋 진행·대기 목록에 남아요');
       }

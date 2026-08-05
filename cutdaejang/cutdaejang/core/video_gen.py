@@ -183,10 +183,20 @@ def _fal(prompt: str, api_key: str, model: str, duration_s: int, resolution: str
             return url, {}
         raise VideoGenError("생성 접수에 실패했어요 (요청 번호 없음)")
     deadline = time.monotonic() + timeout_s
+    began = time.monotonic()
     while time.monotonic() < deadline:
         time.sleep(4)
         st = _req_json(status_url, None, hdr, timeout=30)
         status = str(st.get("status") or "").upper()
+        # ⏱ v1.42 (목록 84) — 회원님 42차: "만드는지 안 만드는지도 모르겠어".
+        #   fal은 «접수 → 큐 대기 → 실행»을 거치는데 화면엔 아무것도 안 갔다.
+        #   지난 시간과 큐 순번을 그대로 올려 보낸다.
+        el = int(time.monotonic() - began)
+        qp = st.get("queue_position")
+        where = (f"대기 {int(qp) + 1}번째" if isinstance(qp, (int, float)) and qp >= 0
+                 else ("만드는 중" if status == "IN_PROGRESS" else "접수됨"))
+        say(f"✨ fal.ai {where} · {el // 60}분 {el % 60}초 지남 "
+            f"(보통 1~5분 — 멈춘 게 아니에요)")
         if status == "COMPLETED":
             res = _req_json(resp_url, None, hdr, timeout=60)
             url = find_video_url(res)
@@ -195,7 +205,6 @@ def _fal(prompt: str, api_key: str, model: str, duration_s: int, resolution: str
             return url, {}                    # fal 결과 파일은 공개 CDN — 인증 불필요
         if status in ("FAILED", "CANCELLED", "ERROR"):
             raise VideoGenError("생성 실패: " + json.dumps(st, ensure_ascii=False)[:200])
-        say("✨ 영상을 만드는 중… (보통 1~5분 — 멈춘 게 아니에요)")
     raise VideoGenError("생성이 너무 오래 걸려 중단했어요 — 잠시 후 다시 시도해 주세요")
 
 
