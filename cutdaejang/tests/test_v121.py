@@ -18,7 +18,7 @@ from cutdaejang.gui import webui
 
 
 def test_version():
-    assert __version__ == "1.40.0"
+    assert __version__ == "1.41.0"
 
 
 def _html() -> str:

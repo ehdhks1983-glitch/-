@@ -5973,7 +5973,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.40.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.41.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -10970,6 +10970,15 @@ function markQuickDeco(){
   document.querySelectorAll('.qd-size').forEach(b => mark(b, Math.abs(+b.dataset.v - size) < 11));
   document.querySelectorAll('.qd-bgm').forEach(b => mark(b, Math.abs(+b.dataset.v - db) < 4));
   document.querySelectorAll('.qd-cards').forEach(c => { c.checked = !!on; });
+  // 🎬 v1.41 — 분신과 진짜 칸을 맞춘다 (설정에서 바꿔도 꾸미기에 바로 보이게)
+  const anim = (($('setSubAnim')||{}).value) || 'none';
+  document.querySelectorAll('.qd-anim').forEach(sel => {
+    if([...sel.options].some(o => o.value === anim)) sel.value = anim;
+  });
+  (window._DECO_CHK || _DECO_CHK).forEach(function(x){
+    const v = (($(x[2])||{}).checked);
+    document.querySelectorAll('.' + x[0]).forEach(c => { c.checked = !!v; });
+  });
 }
 // (v1.35) injectQuickDeco 는 mountDeco 로 대체됐다 — 만들기 화면 5곳에 칩만
 //   끼워 넣던 것을, 흩어진 선택칸까지 한 상자로 모으는 쪽으로 (목록 64).
@@ -11052,6 +11061,47 @@ function _decoQuickRow(){
   });
   return d;
 }
+// ── 🎬 v1.41 (목록 83) — 자막 «등장 효과·띠»를 꾸미기로 ────────────
+// 회원님 41차: "1번 사진(꾸미기)을 봤을 때 2번(설정 안의 효과들)이 들어가야 할 것 같은데"
+// 맞는 말이다. 자막 등장 효과·페이드·배경 띠는 «영상마다 바꾸는 겉모습»인데
+// ⚙ 설정 서랍에만 있어서, 만들다가 바꾸려면 서랍을 열었다 닫아야 했다.
+// 자막 글씨·배경음악 소리를 이미 여기서 바꾸고 있으니(_decoQuickRow) 결이 같다.
+//
+// ⚠ 여기 만드는 건 «분신»이다 — 진짜 칸은 설정 서랍에 그대로 두고 값을 맞춘다.
+//   경로가 6개라 원본을 옮길 수는 없고(한 곳에만 있을 수 있다), id를 복제하면
+//   저장·복원이 통째로 깨진다. 그래서 class로 만들고 양쪽을 서로 맞춘다.
+const _DECO_CHK = [['qd-fade', 'fade', 'setFade', '자막 페이드'],
+                   ['qd-hookband', 'hook_band', 'setHookBand', '제목 배경 띠'],
+                   ['qd-band', 'band', 'setBand', '자막 배경 띠']];
+
+function _decoEffectRow(){
+  const d = document.createElement('div');
+  d.className = 'chk'; d.style.cssText = 'gap:8px;flex-wrap:wrap;margin-top:6px';
+  d.innerHTML = '<span>자막 등장 효과</span>'
+    + '<select class="qd-anim" style="width:auto;padding:4px 8px"></select>'
+    + _DECO_CHK.map(x => '<label style="display:flex;align-items:center;gap:4px;margin-left:8px;cursor:pointer">'
+        + '<input type="checkbox" class="' + x[0] + '"><span>' + x[3] + '</span></label>').join('');
+  const src = $('setSubAnim'), sel = d.querySelector('.qd-anim');
+  // 효과 목록은 설정 서랍의 것을 그대로 복사한다 — 따로 적으면 언젠가 어긋난다
+  if(src) [...src.options].forEach(o => sel.add(new Option(o.textContent, o.value)));
+  sel.addEventListener('change', async () => {
+    await quickSet({subtitle: {anim: sel.value}});
+    if(src) src.value = sel.value;
+    markQuickDeco(); refreshDecoSummaries();
+    uiBanner('✅ 자막 등장 효과: ' + (sel.options[sel.selectedIndex]||{}).textContent);
+  });
+  _DECO_CHK.forEach(function(x){
+    const cb = d.querySelector('.' + x[0]);
+    cb.addEventListener('change', async () => {
+      const patch = {}; patch[x[1]] = cb.checked;
+      await quickSet({subtitle: patch});
+      const orig = $(x[2]); if(orig) orig.checked = cb.checked;
+      markQuickDeco();
+      uiBanner((cb.checked ? '✅ ' : '⬜ ') + x[3] + (cb.checked ? '를 켰어요' : '를 껐어요'));
+    });
+  });
+  return d;
+}
 function mountDeco(key){
   const set = DECO_SETS[key]; if(!set) return;
   if($('decoSum_' + key)) return;                 // 한 번만
@@ -11098,6 +11148,7 @@ function mountDeco(key){
     else host.appendChild(box);
   }
   box.appendChild(_decoQuickRow());
+  box.appendChild(_decoEffectRow());              // 🎬 v1.41 (목록 83)
   const tip = document.createElement('div');
   tip.className = 'hint'; tip.style.marginTop = '6px';
   tip.textContent = '안 건드리면 기억된 설정 그대로 만들어져요. 자막 글씨·배경음악 소리는 모든 영상에 함께 적용돼요.';
