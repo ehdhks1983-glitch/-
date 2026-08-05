@@ -36,7 +36,7 @@ PAD = "<div class='prod-detail'><p>상품 상세 설명 문단입니다. 길게 
 
 
 def test_version():
-    assert __version__ == "1.41.0"
+    assert __version__ == "1.42.0"
 
 
 # ── 사이트 → 전용 창 매핑 ────────────────────────────────────────

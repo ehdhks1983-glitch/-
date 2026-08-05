@@ -27,7 +27,7 @@ DECO = (JS.split("const _DECO_CHK = ")[1].split("\nfunction mountDeco(")[0])
 
 
 def test_version():
-    assert __version__ == "1.41.0"
+    assert __version__ == "1.42.0"
 
 
 def test_the_four_things_are_in_the_deco_box():

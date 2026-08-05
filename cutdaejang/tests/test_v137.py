@@ -34,7 +34,7 @@ JS = "\n".join(re.findall(r"<script>(.*?)</script>", HTML, re.S))
 
 
 def test_version():
-    assert __version__ == "1.41.0"
+    assert __version__ == "1.42.0"
 
 
 # ══ 74: 끌어서 구간 정하기 ═══════════════════════════════════════

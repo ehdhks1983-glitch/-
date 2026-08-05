@@ -80,6 +80,13 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.42 (84) AI 클립 진행 표시 ──
+for t in 'id="aiClipProg"' "aiClipProgShow" "aiClipElapsed" "aiClipNote" \
+         "📁 파일 위치" "aispin"; do has "$W" "$t"; done
+has "cutdaejang/core/video_gen.py" "queue_position"
+has "cutdaejang/core/video_gen.py" "초 지남"
+echo "  ✔ v1.42 (AI 클립 진행 표시)"
+
 # ── v1.41 (83) 자막 효과를 꾸미기 상자로 ──
 for t in "function _decoEffectRow(" "_DECO_CHK" "qd-anim" "qd-fade" "qd-hookband" \
          "qd-band" "box.appendChild(_decoEffectRow());" \

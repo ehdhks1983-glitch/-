@@ -21,7 +21,7 @@ SMART = "https://smartstore.naver.com/shop/products/123"
 
 
 def test_version():
-    assert __version__ == "1.41.0"
+    assert __version__ == "1.42.0"
 
 
 # ── ① naver.me → 전용 창으로 실제 도착 주소 확인 ─────────────────

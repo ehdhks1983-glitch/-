@@ -29,7 +29,7 @@ JS = "\n".join(re.findall(r"<script>(.*?)</script>", HTML, re.S))
 
 
 def test_version():
-    assert __version__ == "1.41.0"
+    assert __version__ == "1.42.0"
 
 
 # ── 72 ①: 같은 방으로 가는 두 번째 문 ─────────────────────────
