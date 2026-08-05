@@ -3139,7 +3139,7 @@ def _run_sections(job_id: str, params: dict, workdir: str) -> None:
 
 
 def _run_rip_script(job_id: str, params: dict, workdir: str) -> None:
-    """🎙→📃 목소리 → 대본 따오기 (v1.01) — 영상·녹음 속 나레이션을 대본 글로.
+    """🎙 영상 속 말 받아적기 (v1.01, 옛 이름 «대본 따오기») — 영상·녹음 속 말을 대본 글로.
 
     영상은 만들지 않는 글 전용 작업. 발화 구간을 문장 단위로 전사하고
     (Gemini 키 있으면) 오인식을 문맥으로 교정해, 구간 대본·AI 영상 카드에
@@ -4438,7 +4438,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             config.save_settings({"ui": {"drafts": {card: params.get("data")}}})
             self._send_json({"ok": True})
-        elif path == "/api/rip_script":  # 🎙→📃 목소리 → 대본 따오기 (v1.01)
+        elif path == "/api/rip_script":  # 🎙 영상 속 말 받아적기 (v1.01)
             _apply_keys(params)
             src = str(params.get("path") or "").strip().strip('"')
             if not src:

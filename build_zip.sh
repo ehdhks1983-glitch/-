@@ -80,6 +80,20 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.43 (85①~⑤) 첫 설치 쉬운 모드·⚙ 문 하나·우리말 ──
+for t in "_em == null ? true : !!_em" "🛠 전부 보기" 'id="topSet"' \
+         "ts.classList.toggle('hidden', !!info)" \
+         "'genSpeedSel', 'photoSec', 'secTempoSel', 'secBgmSel', 'secXfadeSel'" \
+         "🎙 영상 속 말 받아적기" "(대본 따오기)" \
+         "장면 설명 전체 복사 (통합)" "분당 목소리 호출 한도" \
+         "말할 때 배경음악 줄이기"; do has "$W" "$t"; done
+hasnt "$W" "🎙→📃"                      # 옛 이름 청산 (주석 포함)
+hasnt "$W" "applyEasy(!!(((s || {}).ui || {}).easy_mode))"  # 옛 무조건 강제
+hasnt "$W" "분당 TTS 호출 한도"
+hasnt "$W" "(브루식"
+hasnt "$W" "핵심 몽타주)'"              # 셀렉트 라벨 (주석은 무방)
+echo "  ✔ v1.43 (첫 설치 쉬운 모드·문 하나·우리말)"
+
 # ── v1.42 (84) AI 클립 진행 표시 ──
 for t in 'id="aiClipProg"' "aiClipProgShow" "aiClipElapsed" "aiClipNote" \
          "📁 파일 위치" "aispin"; do has "$W" "$t"; done
