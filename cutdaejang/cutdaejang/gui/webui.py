@@ -5502,6 +5502,14 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001
             return []
 
+    def _state_lang_fonts(self) -> dict:
+        # 🌏 병기 글씨체 준비 여부 (v1.45 목록 88) — ⬇ 받기 서랍·경고에 쓴다
+        try:
+            from ..tools import fetch_fonts as ffonts  # noqa: PLC0415
+            return {k: ffonts.lang_font_installed(k) for k in ffonts.LANG_FONTS}
+        except Exception:  # noqa: BLE001
+            return {}
+
     def _state(self) -> dict:
         # 🫀 v1.35.1 (목록 71) — 이 응답은 화면이 5초마다 부른다. 여기서 한 번
         #   터지면 «프로그램 전체가 안 되는» 것처럼 보인다. 실제로 그랬다:
@@ -5551,6 +5559,7 @@ class _Handler(BaseHTTPRequestHandler):
             "jobs": jobs,
             "history": history,
             "fonts": self._safe("fonts", self._state_fonts, []),
+            "lang_fonts": self._safe("lang_fonts", self._state_lang_fonts, {}),
             "keys": {
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
@@ -6020,7 +6029,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.44.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.45.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
