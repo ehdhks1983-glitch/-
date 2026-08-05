@@ -80,6 +80,34 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.44 (86·87) 미리보기 틀·손글씨 팝 ──
+for t in '"손글씨 팝"' "line_rotate" "_line_rotate_body" 'ss.get("scale", 1.0)'; do
+  has "cutdaejang/core/render_engine/ass_writer.py" "$t"; done
+for t in "/api/deco_presets" "_mountPvFrame" "renderDecoPreview" "assColorToCss" \
+         "pvReplay" "▶ 효과 다시" "autoFontForPreset" \
+         '<option value="손글씨 팝">' "'NotoSansKR-Bold':'Noto Sans KR Bold'" \
+         "'Pretendard-Bold':'Pretendard'"; do has "$W" "$t"; done
+hasnt "cutdaejang/core/render_engine/ass_writer.py" 'ss.get("font"'  # 글씨체는 제안만
+# 실동작: 손글씨 팝 두 줄 → 형광 두 색 + 확대 배율
+python3 - "$U" <<'PYEOF'
+import re, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+from cutdaejang.spec import TimelineSpec, Canvas, Style, Subtitle
+from cutdaejang.core.render_engine import ass_writer as aw
+def rend(st, txt):
+    p = tempfile.mktemp(suffix=".ass")
+    aw.write_ass(TimelineSpec(canvas=Canvas(1080,1920,30), hook="제목",
+                 subtitles=[Subtitle(text=txt, start_us=0, end_us=10**6)],
+                 style=Style(sub_style=st), duration_us=10**6), p)
+    return open(p, encoding="utf-8").read()
+t = rend("손글씨 팝", "형광 노랑 윗줄이고요 연두색 아랫줄입니다")
+assert "&H4DE9FF&" in t and "&H68F2B8&" in t, "줄마다 두 색"
+fs = lambda x: int(re.search(r"Style: Default,[^,]+,(\d+)", x).group(1))
+assert fs(t) > fs(rend("기본", "한 줄")), "확대"
+print("  ✔ 손글씨 팝 실렌더 (배포본)")
+PYEOF
+echo "  ✔ v1.44 (미리보기 틀·손글씨 팝)"
+
 # ── v1.43 (85①~⑤) 첫 설치 쉬운 모드·⚙ 문 하나·우리말 ──
 for t in "_em == null ? true : !!_em" "🛠 전부 보기" 'id="topSet"' \
          "ts.classList.toggle('hidden', !!info)" \
