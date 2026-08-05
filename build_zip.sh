@@ -80,6 +80,38 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.45 (88·89·90) 병기·강조 스위치·받기 허브 ──
+for t in "def translate_lines(" "def finalize(" "sub_lang" "highlight_on" \
+         "«강조» 표식은 번역에 방해만 된다" ; do
+  has "cutdaejang/core/translator.py" "$t"; done
+for t in "LANG_FONTS" "def fetch_lang(" "def lang_font_installed("; do
+  has "cutdaejang/tools/fetch_fonts.py" "$t"; done
+for t in "Style: Trans," "_trans_font" "trans_margin_v"; do
+  has "cutdaejang/core/render_engine/ass_writer.py" "$t"; done
+has "cutdaejang/core/edit_mode.py" "translator.finalize(ass_spec)"
+has "cutdaejang/core/render_engine/__init__.py" "finalize(spec)"
+for t in 'id="setSubLang"' 'id="setHl"' 'id="dlCard"' "⬇ 무료 자료 받기" \
+         "qd-lang" "qd-hl" "maybeOfferLangFont" "/api/fetch_lang_font" \
+         "refreshDlCard" "_state_lang_fonts"; do has "$W" "$t"; done
+# 실동작: 병기 줄 렌더 — Trans 스타일·본문 아래·조건부
+python3 - "$U" <<'PYEOF'
+import re, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+from cutdaejang.spec import TimelineSpec, Canvas, Style, Subtitle
+from cutdaejang.core.render_engine import ass_writer as aw
+p = tempfile.mktemp(suffix=".ass")
+aw.write_ass(TimelineSpec(canvas=Canvas(1080,1920,30), hook="제목",
+             subtitles=[Subtitle(text="안녕", start_us=0, end_us=10**6, trans="Hello")],
+             style=Style(), duration_us=10**6), p)
+t = open(p, encoding="utf-8").read()
+assert "Style: Trans," in t and "Hello" in t
+md = int(re.search(r"Style: Default,.*,(\d+),1$", t, re.M).group(1))
+mt = int(re.search(r"Style: Trans,.*,(\d+),1$", t, re.M).group(1))
+assert mt < md, "병기가 본문 아래"
+print("  ✔ 병기 줄 실렌더 (배포본)")
+PYEOF
+echo "  ✔ v1.45 (병기·강조 스위치·받기 허브)"
+
 # ── v1.44 (86·87) 미리보기 틀·손글씨 팝 ──
 for t in '"손글씨 팝"' "line_rotate" "_line_rotate_body" 'ss.get("scale", 1.0)'; do
   has "cutdaejang/core/render_engine/ass_writer.py" "$t"; done
