@@ -4449,7 +4449,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             job_id = orchestrator.new_job_id("대본따오기")
             _set_job(job_id, status="running", stage="analyze", frac=0.0,
-                     title="🎙→📃 대본 따오기", params=params)
+                     title="🎙 영상 속 말 받아적기", params=params)
             _queue_job(job_id, _run_rip_script, job_id, params, workdir)
             self._send_json({"job_id": job_id})
         elif path == "/api/job_params":  # ✏ 다시 편집 — 저장된 입력값 회수 (v0.85)
@@ -5993,11 +5993,16 @@ body.easy #easyBar { display: block; }
             title="필수 입력만 남기고 단순하게 보여요 — 숨은 옵션은 저장된 설정 그대로 적용됩니다">🔰 쉬운 모드</button>
     <button class="ghost" onclick="toggleProductCard()">📇 내 제품</button>
     <button class="ghost" onclick="toggleApiCard()">🔑 API 연동</button>
-    <button class="ghost" onclick="toggleSettings()">⚙ 설정</button>
+    <button class="ghost" id="topSet" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
-  <div class="banner" id="easyBar">🔰 <b>쉬운 모드</b> — 꼭 넣을 것만 보여요. 숨은 옵션은
-    <b>저장된 설정 그대로</b> 적용됩니다 · 전부 보려면 위의 [🛠 자세히]를 누르세요</div>
+  <!-- 🔰 v1.43 (목록 85①) — 띠 자체에 [전부 보기] 버튼을 둔다. 위 바는 스크롤하면
+       사라지는데 이 띠는 sticky라 항상 보인다 — «없어진 게 아니라 접힌 것»임을
+       언제든 풀 수 있어야 한다. -->
+  <div class="banner" id="easyBar">🔰 지금은 <b>쉬운 모드</b> — 꼭 넣을 것만 보여요. 숨은 옵션은
+    <b>저장된 설정 그대로</b> 적용됩니다
+    <button class="ghost" style="width:auto;margin:0 0 0 8px;padding:2px 10px"
+            onclick="toggleEasy(event)">🛠 전부 보기</button></div>
 
   <div id="navBar" class="navbar hidden">
     <button class="ghost back" onclick="showHome(event)" title="첫 화면(무엇을 만들까요?)으로 돌아가요 — 지금 쓴 내용은 그대로 남아 있어요">🏠 처음으로</button>
@@ -6075,8 +6080,9 @@ body.easy #easyBar { display: block; }
       <span class="hint" id="aiSpendLine" style="color:#ffd166"></span>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
-      <button class="ghost" onclick="openRip(event)">🎙→📃 대본 따오기</button>
-      <span class="hint">영상·녹음 속 <b>목소리를 대본 글로</b> 따와요 — 구간 대본·AI 영상에 바로 사용</span>
+      <button class="ghost" onclick="openRip(event)"
+              title="예전에 만든 영상이나 녹음을 넣으면 그 안의 말을 글로 받아 적어 드려요">🎙 영상 속 말 받아적기</button>
+      <span class="hint">영상·녹음 속 <b>말을 대본 글로</b> 받아 적어요 — 구간 대본·AI 영상에 바로 사용</span>
     </div>
     <div class="guide hidden" id="startGuide">💡 <b>처음 오셨나요? — 준비물 1개 (1분)</b><br>
       AI 대본·자막·좋은 목소리는 <b>무료 Gemini 키</b>가 있어야 해요.
@@ -6207,11 +6213,11 @@ body.easy #easyBar { display: block; }
         <span class="hint">— 하이라이트를 맨 앞에 슬쩍 보여주고 시작해요 (내레이션과는 함께 안 돼요)</span>
       </div>
       <div class="chk" style="gap:8px;margin-top:6px">
-        <label class="chk" style="cursor:pointer" title='말 사이에 홀로 나온 "어", "음", "그니까" 같은 추임새를 영상에서 자동으로 잘라냅니다 (내장 Whisper 자막일 때)'>
+        <label class="chk" style="cursor:pointer" title='말 사이에 홀로 나온 "어", "음", "그니까" 같은 추임새를 영상에서 자동으로 잘라냅니다 (내장 무료 음성인식 자막일 때)'>
           <input type="checkbox" id="editFillerCut"> 🧹 추임새("어·음") 자동 컷</label>
         <label class="chk" style="cursor:pointer" title="같은 말을 연달아 다시 말한 NG 테이크를 감지해 마지막 테이크만 남깁니다 (검토 화면에서는 ↻ 배지로 표시)">
           <input type="checkbox" id="editTakeClean"> ↻ 반복 말하기(NG) 정리</label>
-        <span class="hint">— 촬영 후 가편집을 자동으로 (Whisper 자막 추천)</span>
+        <span class="hint">— 촬영 후 가편집을 자동으로 (무료 음성인식 자막 추천)</span>
       </div>
     </details>
 
@@ -6430,7 +6436,7 @@ body.easy #easyBar { display: block; }
           <option value="fade">페이드 — 살짝 어두워졌다 밝아지며</option>
         </select>
       </div>
-      <div class="hint">사진 슬라이드, 핵심 구간·몽타주·여러 쇼츠로 나눌 때 구간 경계에 적용돼요.
+      <div class="hint">사진 슬라이드, 핵심 구간·자동 컷·여러 쇼츠로 나눌 때 구간 경계에 적용돼요.
         영상 길이와 자막 싱크는 그대로 유지됩니다. (무음 컷 경계에는 넣지 않아요 — 말 흐름 유지)</div>
       <div class="hint">🎞 인트로/아웃트로는 ⚙ 설정 → 「내 채널 정보·브랜딩」에 파일을 넣으면 모든 완성 영상에 자동으로 붙어요.</div>
     </details>
@@ -6550,7 +6556,7 @@ body.easy #easyBar { display: block; }
           <select id="sttSel"></select>
           <div class="hint" id="sttHint"></div>
           <div id="whisperModelRow" class="hidden" style="margin-top:6px">
-            <label style="margin-top:0">정확도(Whisper 모델)</label>
+            <label style="margin-top:0">정확도 (무료 음성인식 · 위스퍼)</label>
             <select id="whisperModelSel">
               <option value="tiny">tiny — 가장 빠름·정확도 낮음</option>
               <option value="base">base — 빠름</option>
@@ -6655,7 +6661,7 @@ body.easy #easyBar { display: block; }
   <div class="card hidden" id="ripCard">
     <div class="backrow">
       <button class="ghost" onclick="closeRip(event)">← 돌아가기</button>
-      <b>🎙→📃 목소리 → 대본 따오기</b>
+      <b>🎙 영상 속 말 받아적기 (대본 따오기)</b>
     </div>
     <div class="hint" style="margin-top:10px;font-size:13px;color:#cdd3e0">
       영상이나 녹음 속 <b>목소리(나레이션)를 대본 글로</b> 따와요. 예전에 만든 완성 영상을
@@ -6738,7 +6744,7 @@ body.easy #easyBar { display: block; }
                style="width:64px;padding:6px 8px"> 분
       </span>
       <span class="hint">길이는 AI 대본 분량 기준(말 속도에 따라 조금 달라져요) — 대본을 직접 넣으면 그 분량대로</span>
-      <div class="hint" style="margin-top:4px">💡 기본을 5분까지만 둔 이유: 더 길면 AI 대본이 반복·빈약해지고, 문장마다 목소리(TTS)를 만들어 시간·비용이 커져요. 더 필요하면 [직접 입력]으로 최대 30분(1800초)까지 — 이땐 대본을 직접 넣는 걸 권장해요.</div>
+      <div class="hint" style="margin-top:4px">💡 기본을 5분까지만 둔 이유: 더 길면 AI 대본이 반복·빈약해지고, 문장마다 AI 목소리를 만들어 시간·비용이 커져요. 더 필요하면 [직접 입력]으로 최대 30분(1800초)까지 — 이땐 대본을 직접 넣는 걸 권장해요.</div>
     </div>
     <details class="opt" style="margin-top:8px">
       <summary>📝 대본 직접 넣기 <span class="hint">— 써둔 대본이 있으면 AI 대본 대신 그대로 (한 줄 = 자막 하나)</span></summary>
@@ -7013,14 +7019,14 @@ body.easy #easyBar { display: block; }
         <span>그림 만들기</span>
         <select id="genSceneMode" style="width:auto;padding:6px 8px">
           <option value="auto" selected>🤖 자동 — AI가 장면마다 생성</option>
-          <option value="manual">✍ 내가 넣기 — 프롬프트만 뽑기 (AI 비용 0원)</option>
+          <option value="manual">✍ 내가 넣기 — 장면 설명만 뽑기 (AI 비용 0원)</option>
           <option value="off">⛔ 그림 없이 (기본 배경)</option>
         </select>
         <span>최대 장수</span>
         <input type="number" id="genMaxImg" min="0" max="50" value="0" style="width:74px;padding:6px 8px">
         <span class="hint">0=문장마다 1장 · 예) 19문장에 10 → 10장만 (비용 절감)</span>
       </div>
-      <div class="hint">✍ 내가 넣기 = 프롬프트만 뽑아 챗지피티/제미나이에서 직접 생성해 넣는 방식 (이미지 비용 0원, 「검토」로 진행)</div>
+      <div class="hint">✍ 내가 넣기 = 장면 설명(프롬프트)만 뽑아 챗지피티/제미나이에서 직접 생성해 넣는 방식 (이미지 비용 0원, 「검토」로 진행)</div>
       <div class="hint hidden" id="aiBgOffWarn" style="color:#e8b34b">⚠ 지금 ⚙ 설정에서 <b>AI 배경이 꺼져 있어</b> 장면 그림·마스코트가 적용되지 않아요.
         <button class="ghost" style="padding:3px 10px;margin-left:6px" onclick="enableAiBg(event)">지금 켜기</button></div>
       <div class="hint">문장(장면)마다 AI 그림이 말 타이밍에 맞춰 넘어갑니다 — 키 없으면 기본 그라데이션.</div>
@@ -7426,11 +7432,11 @@ body.easy #easyBar { display: block; }
     <div id="reviewBox" class="hidden">
       <label>제목</label>
       <input type="text" id="rvTitle">
-      <label>대본 (한 줄 = 자막 한 줄 = TTS 한 문장 · 강조 단어는 <code>문장 | 단어</code>)</label>
+      <label>대본 (한 줄 = 자막 한 줄 = 읽는 한 문장 · 강조 단어는 <code>문장 | 단어</code>)</label>
       <textarea id="rvSentences"></textarea>
       <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
         <button class="ghost" onclick="pronounceLines(event)">한글 발음으로 변환 (숫자·영어)</button>
-        <span class="hint">예: 2026년→이천이십육년, AI→에이아이 — TTS 오독 방지</span>
+        <span class="hint">예: 2026년→이천이십육년, AI→에이아이 — AI 목소리가 잘못 읽는 것 방지</span>
       </div>
       <button onclick="confirmScript()">이 대본으로 계속</button>
     </div>
@@ -7440,7 +7446,7 @@ body.easy #easyBar { display: block; }
         <span class="hint" id="sceneMeta" style="font-weight:400;margin-left:8px"></span></div>
       <div class="hint" style="margin-top:4px">마음에 안 드는 장면은 <b>묘사를 고치고 [🔄 다시 그리기]</b>, 또는 <b>[📁 내 그림]</b>으로 직접 만든 그림을 넣어도 돼요 → 다 되면 맨 아래 <b>[✅ 이 그림들로 완성]</b></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-        <button class="ghost" onclick="copyScenePrompts(event)" title="장면별 프롬프트를 「N번 장면 → 묘사」 통합 형식으로 복사 — 챗지피티/제미나이에 붙여넣어 한 번에 생성">📋 프롬프트 전체 복사 (통합)</button>
+        <button class="ghost" onclick="copyScenePrompts(event)" title="장면별 프롬프트를 「N번 장면 → 묘사」 통합 형식으로 복사 — 챗지피티/제미나이에 붙여넣어 한 번에 생성">📋 장면 설명 전체 복사 (통합)</button>
         <button onclick="importSceneFolder(event)" style="width:auto;margin:0" title="직접 만든 그림들을 폴더에 담아두면 파일 이름의 번호대로(1.png→1번 장면) 한 번에 들어갑니다. 번호가 없으면 이름순.">📁 내가 만든 그림 폴더에서 한꺼번에 넣기</button>
       </div>
       <textarea id="sceneAllText" class="hidden" readonly
@@ -7453,7 +7459,7 @@ body.easy #easyBar { display: block; }
     <div id="subEditBox" class="hidden">
       <div style="font-weight:700;margin-bottom:4px">✏️ 자막 확인하고 완성하기</div>
       <div class="hint" style="font-size:13px;color:#cdd3e0">① 아래 자막에서 <b>틀린 글자만 고치세요</b> (칸을 누르면 영상이 멈춰요) → ② 쇼츠로 줄이려면 ✂️ 줄에서 구간을 고르거나 [✨ AI 핵심 추천] → ③ 맨 아래 <b>[✅ 완성]</b> 버튼</div>
-      <div class="hint">각 줄 <b>▶</b>=듣기 · <b>✂</b>=줄 나누기 · <b>🗑</b>=<b>자막+영상 구간 통째 삭제</b>(브루식 — 체크박스 다시 켜면 복구) · <b>✕</b>=자막만 삭제(영상 유지) · <b>스페이스바</b>=재생/정지 · 💛 강조 <b>| 단어</b>, 색 <b>[노랑]글자[/]</b></div>
+      <div class="hint">각 줄 <b>▶</b>=듣기 · <b>✂</b>=줄 나누기 · <b>🗑</b>=<b>자막+영상 구간 통째 삭제</b> (다시 켜면 복구) · <b>✕</b>=자막만 삭제(영상 유지) · <b>스페이스바</b>=재생/정지 · 💛 강조 <b>| 단어</b>, 색 <b>[노랑]글자[/]</b></div>
       <div class="playbar">
         <div id="playerWrap" style="position:relative;line-height:0">
           <video id="cutPlayer" controls playsinline style="width:100%"></video>
@@ -7893,7 +7899,7 @@ body.easy #easyBar { display: block; }
         </span>
       </div>
       <div class="chk" style="margin-top:6px"><input type="checkbox" id="setTextCards"><span>🅰 다양한 텍스트 장면 <span class="hint">— 숫자·비교·후기·검색·목록·단계·CTA를 대본에 맞게 자동 선택</span></span></div>
-      <div class="chk" style="margin-top:2px"><input type="checkbox" id="setCardVariety"><span>🎨 카드 룩 자동 변화 <span class="hint">— 영상마다 색·배치·라벨이 달라져요 (같은 대본 재렌더는 동일). 끄면 예전 고정 디자인</span></span></div>
+      <div class="chk" style="margin-top:2px"><input type="checkbox" id="setCardVariety"><span>🎨 카드 룩 자동 변화 <span class="hint">— 영상마다 색·배치·라벨이 달라져요 (같은 대본으로 다시 만들면 동일). 끄면 예전 고정 디자인</span></span></div>
       <div class="chk" style="gap:8px;margin-top:8px;flex-wrap:wrap">
         <span>영상 성격</span>
         <select id="setCardPack" style="width:auto;padding:6px 8px">
@@ -7943,7 +7949,7 @@ body.easy #easyBar { display: block; }
           <option value="none">없음</option>
           <option value="pop">팝 — 살짝 커지며 등장 (쇼츠 감성)</option>
           <option value="type">타이핑 — 글자가 하나씩 (인스타·틱톡 감성)</option>
-          <option value="karaoke">카라오케 — 말하는 단어가 차오름 (편집·Whisper 자막)</option>
+          <option value="karaoke">카라오케 — 말하는 단어가 차오름 (받아쓴 자막에서 정확)</option>
           <option value="word">✨ 단어별 — 말하는 단어가 하나씩 나타남 (2026 쇼츠 유행)</option>
         </select></div>
       <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
@@ -7970,13 +7976,13 @@ body.easy #easyBar { display: block; }
     </details>
 
     <details class="opt easy-keep">
-      <summary>🔊 소리·목소리 <span class="hint">— BGM 볼륨 · 덕킹 · 문장 간격 · TTS 한도</span></summary>
+      <summary>🔊 소리·목소리 <span class="hint">— 배경음악 소리 · 말할 때 음악 줄이기 · 문장 간격 · 호출 한도</span></summary>
       <div class="row" style="margin-top:4px">
         <div><label>BGM 볼륨(dB)</label><input type="number" id="setBgmVol" min="-40" max="0"></div>
         <div><label>문장 간격(ms)</label><input type="number" id="setGap" min="0" max="1000" step="10"></div>
-        <div><label>분당 TTS 호출 한도</label><input type="number" id="setRpm" min="1" max="60"></div>
+        <div><label>분당 목소리 호출 한도 <span class="hint">(TTS)</span></label><input type="number" id="setRpm" min="1" max="60"></div>
       </div>
-      <div class="chk"><input type="checkbox" id="setDuck"><span>BGM 덕킹 (음성 나올 때 자동 감쇠 — 기본 켬, v0.44부터 편집·사진 영상에도 적용)</span></div>
+      <div class="chk"><input type="checkbox" id="setDuck"><span>말할 때 배경음악 줄이기 <span class="hint">(덕킹)</span> — 기본 켬, v0.44부터 편집·사진 영상에도 적용</span></div>
       <div class="chk" style="gap:8px;flex-wrap:wrap"><span>내장 음성 목소리</span>
         <select id="setWinVoice" style="width:auto;max-width:330px;padding:6px 8px">
           <option value="">자동 (한국어 첫 번째)</option>
@@ -8328,13 +8334,18 @@ const NAV_INFO = {
   sections: ['🖥 긴 영상 (가로 16:9)', 'resetSectionCard'],
   shop:     ['🛒 쇼핑 상품 영상', 'resetShopCard'],
   voice:    ['🎤 내 목소리 등록', ''],
-  rip:      ['🎙→📃 대본 따오기', ''],
+  rip:      ['🎙 영상 속 말 받아적기 (대본 따오기)', ''],
 };
 function updateNav(view){
   const bar = $('navBar'), ttl = $('navTitle'), rst = $('navReset');
   if(!bar) return;
   const info = NAV_INFO[view];
   bar.classList.toggle('hidden', !info);      // 첫 화면에서는 숨김
+  // ⚙ v1.43 (목록 85③) — 카드 안에서는 위 바와 고정 바의 ⚙가 «둘 다» 보였다.
+  //   같은 방으로 가는 문이 둘이면 헷갈린다 (72번에서 세운 원칙).
+  //   카드 안 = 고정 바(navSet)만, 첫 화면 = 위 바(topSet)만.
+  const ts = $('topSet');
+  if(ts) ts.classList.toggle('hidden', !!info);
   if(!info) return;
   if(ttl) ttl.textContent = info[0];
   if(rst) rst.classList.toggle('hidden', !info[1]);
@@ -8351,7 +8362,7 @@ function openMode(kind){
   const view = kind;
   $('homeCard').classList.add('hidden');
   $('voiceCard').classList.add('hidden');
-  $('ripCard').classList.add('hidden');      // 🎙→📃 대본 따오기 (v1.01)
+  $('ripCard').classList.add('hidden');      // 🎙 영상 속 말 받아적기 (v1.01)
   $('weblinkCard').classList.toggle('hidden', view !== 'weblink');  // 🔗 전용 탭 (v0.79)
   $('sectionCard').classList.toggle('hidden', view !== 'sections'); // 🎞 구간 대본 (v0.80)
   $('shopCard').classList.toggle('hidden', view !== 'shop');        // 🛒 쇼핑 상품 (v0.89)
@@ -8406,7 +8417,7 @@ function closeVoice(ev){
   const r = window._voiceReturn;
   if(r === 'gen' || r === 'edit' || r === 'photo' || r === 'weblink' || r === 'sections') openMode(r); else showHome();
 }
-// ── 🎙→📃 목소리 → 대본 따오기 전용 화면 (v1.01 — 사용자 요청 "목소리를 대본으로") ──
+// ── 🎙 영상 속 말 받아적기(대본 따오기) 전용 화면 (v1.01 — 사용자 요청 "목소리를 대본으로") ──
 function openRip(ev){
   if(ev) ev.preventDefault();
   window._ripReturn = window._view || 'home';
@@ -8925,7 +8936,7 @@ function renderSubRows(){
       `<input type="text" style="flex:1;${confStyle}" ${lowConf?'title="음성 인식이 불확실한 줄이에요 — 한번 확인해 주세요"':''} value="${escHtml(subScenePlain(sub.text))}" onfocus="pauseCut()" oninput="setSubSceneText(${i},this.value)">`+
       `<button class="ghost" title="위 줄과 합치기" onclick="mergeSub(${i})" ${i===0?'disabled':''}>⬆</button>`+
       `<button class="ghost" title="이 줄을 둘로 나누기" onclick="splitSub(${i})">✂</button>`+
-      `<button class="ghost" title="자막+영상 구간 통째 삭제 (브루식 — 체크박스로 복구)" onclick="dropSeg(${i})">🗑</button>`+
+      `<button class="ghost" title="자막+영상 구간 통째 삭제 — 체크박스를 다시 켜면 복구" onclick="dropSeg(${i})">🗑</button>`+
       `<button class="ghost" title="자막만 삭제 (영상은 유지)" onclick="delSub(${i})">✕</button>`;
     box.appendChild(row);
   });
@@ -10238,6 +10249,10 @@ const EASY_HIDE_IDS = ['tplSel', 'autoMultiSel', 'autoTargetPreset', 'autoTarget
   'voiceSel', 'styleSel', 'elevenVoiceSel',
   'wlHook', 'wlVoiceSel', 'wlBgmSel', 'wlOrientSel', 'wlQualitySel',
   'secVoiceSel', 'secHook',
+  // 🔰 v1.43 (목록 85②) — 접힘상자 «밖»이라 쉬운 모드에서도 남아 있던 것들.
+  //   숨겨도 값은 살아 있어 만들기 결과는 그대로다 (저장된 설정 적용).
+  'genSpeedSel', 'photoSec', 'secTempoSel', 'secBgmSel', 'secXfadeSel',
+  'secQualitySel', 'vpVol',
   'shopHook', 'shopVoiceSel', 'shopBgmSel', 'shopOrientSel', 'shopQualitySel'];
 let _easyMarked = false;
 function _markEasyRows(){
@@ -11213,7 +11228,11 @@ function mountShapeTop(){
 
 function fillSettings(s){
   restoreDrafts(s); bindDrafts(); bindDrops();   // 📥 끌어넣기 (v1.13)
-  applyEasy(!!(((s || {}).ui || {}).easy_mode)); // 🔰 쉬운 모드 기억 (v1.17)
+  // 🔰 v1.43 (목록 85①) — «처음 설치»는 쉬운 모드로 시작한다.
+  //   저장값이 있으면(한 번이라도 직접 껐다 켰으면) 그대로 존중한다.
+  //   할아버지도 쓰는 게 목표인데, 제일 복잡한 전체 화면을 제일 먼저 만나면 안 된다.
+  const _em = ((s || {}).ui || {}).easy_mode;
+  applyEasy(_em == null ? true : !!_em);
   autoCheckUpdate();                             // 🔄 하루 1회 새 버전 확인 (v1.18)
   _loadAiCost().then(_renderAiSpend);            // ✨ AI 클립 월 사용액 (v1.19)
   try{ const _vv = $('vpVol'); if(_vv) _vv.value = localStorage.getItem('vp_vol') || 100; }catch(e){}
@@ -12666,7 +12685,7 @@ function addSectionRow(title, narration){
   const sp = document.createElement('select');         // ⏩ 구간별 배속 (v0.82)
   sp.className = 'sec-speed'; sp.style.cssText = 'width:auto;padding:6px 8px';
   sp.title = '클립이 내레이션보다 길 때 줄이는 방법 — 몽타주는 핵심 장면만 잘라 붙이고, 배속은 안 자르고 빨리 감아요';
-  [['', '컷: 자동 (핵심 몽타주)'], ['fit', '⏩ 배속으로 통째로 맞춤 (안 잘림)'],
+  [['', '컷: 자동 (핵심만 이어붙임)'], ['fit', '⏩ 배속으로 통째로 맞춤 (안 잘림)'],
    ['1.5', '⏩ 1.5배속'], ['2', '⏩ 2배속'], ['3', '⏩ 3배속']
   ].forEach(function(o){ sp.add(new Option(o[1], o[0])); });
   const aib = document.createElement('button');      // ✨ AI 클립 (v1.19)

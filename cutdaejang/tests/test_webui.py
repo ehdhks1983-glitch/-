@@ -1348,7 +1348,7 @@ def test_html_wellformed_and_scene_review_v0572(server):
     dups = sorted({i for i in ids if ids.count(i) > 1})
     assert not dups, f"중복 id: {dups}"
     # 통합 복사 버튼 + 보이는 복사 상자 + 넓어진 그리드
-    assert "프롬프트 전체 복사 (통합)" in html
+    assert "장면 설명 전체 복사 (통합)" in html
     assert html.count('id="sceneAllText"') == 1
     # v1.35 (목록 69): 장면 칸을 «그림 먼저»로 바꾸며 넓혔다 (240 → 300)
     assert "minmax(300px,1fr)" in html

@@ -18,7 +18,7 @@ def test_v082_ui_present_and_wired():
         # ⏱ 예상 시간 (구간 행) + 전체 예상
         "sec-time", 'id="secTotal"', "function updateSectionTimes", "function fmtMMSS",
         # ⏩ 구간별 배속 셀렉트 + payload
-        "sec-speed", "핵심 몽타주", "배속으로 통째로 맞춤",
+        "sec-speed", "핵심만 이어붙임", "배속으로 통째로 맞춤",
         "sec-speed')||{}).value",
         # ⏱ 완성 후 유튜브 설명란용 타임라인
         'id="chaptersBox"', 'id="chaptersText"', "function copyChapters",
