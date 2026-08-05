@@ -4330,6 +4330,19 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "path": saved_to})
             except OSError as e:
                 self._send_json({"error": f"설정 저장 실패: {e}"}, 500)
+        elif path == "/api/fetch_lang_font":  # 🌏 병기 글씨체 받기 (v1.45 목록 88)
+            lang = str(params.get("lang") or "")
+            from ..tools import fetch_fonts as ffonts2  # noqa: PLC0415
+
+            if lang not in ffonts2.LANG_FONTS:
+                self._send_json({"error": "지원하지 않는 언어예요"}, 400)
+                return
+            try:
+                r = ffonts2.fetch_lang(lang)
+            except Exception as e:  # noqa: BLE001 — 네트워크 등
+                self._send_json({"error": f"받기 실패: {e}"}, 500)
+                return
+            self._send_json(r)
         elif path == "/api/fetch_bgm":  # 🎵 무료 BGM 화면에서 받기 (v0.50.1)
             with _LOCK:
                 if _BGM_TASK["running"]:
@@ -4427,6 +4440,10 @@ class _Handler(BaseHTTPRequestHandler):
                     max(40, min(128, sub["font_size"])))
             if isinstance(sub.get("text_cards"), bool):
                 safe.setdefault("subtitle", {})["text_cards"] = sub["text_cards"]
+            if sub.get("sub_lang") in ("", "en", "ja", "zh"):   # 🌏 병기 (v1.45)
+                safe.setdefault("subtitle", {})["sub_lang"] = sub["sub_lang"]
+            if isinstance(sub.get("highlight_on"), bool):       # 🎨 강조 스위치 (v1.45)
+                safe.setdefault("subtitle", {})["highlight_on"] = sub["highlight_on"]
             bgm_p = patch.get("bgm") or {}
             if isinstance(bgm_p.get("volume_db"), (int, float)):
                 safe.setdefault("bgm", {})["volume_db"] = float(
@@ -4900,7 +4917,9 @@ class _Handler(BaseHTTPRequestHandler):
                                  "fail": r["fail"],
                                  # 🔎 v1.38 — 받았는데 «이름표»가 달라 자막에 안 먹는 것
                                  "mismatch": r.get("mismatch") or [],
-                                 "fonts": ffonts.installed()})
+                                 "fonts": ffonts.installed(),
+                                 "lang_fonts": {k: ffonts.lang_font_installed(k)
+                                                for k in ffonts.LANG_FONTS}})
             except Exception as e:  # noqa: BLE001
                 self._send_json({"error": f"글씨체 받기 실패: {str(e)[:200]}"}, 500)
         elif path == "/api/desub_preview":   # 🧹 원본 자막 어디를 지울지 (v1.28)
@@ -6102,6 +6121,8 @@ body.easy #easyBar { display: block; }
       <span class="hint" id="aiSpendLine" style="color:#ffd166"></span>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <button class="ghost" onclick="openDlCard(event)"
+              title="무료 글씨체·배경음악을 여기서 한 번에 받아요">⬇ 무료 자료 받기</button>
       <button class="ghost" onclick="openRip(event)"
               title="예전에 만든 영상이나 녹음을 넣으면 그 안의 말을 글로 받아 적어 드려요">🎙 영상 속 말 받아적기</button>
       <span class="hint">영상·녹음 속 <b>말을 대본 글로</b> 받아 적어요 — 구간 대본·AI 영상에 바로 사용</span>
@@ -7865,6 +7886,32 @@ body.easy #easyBar { display: block; }
     <button style="margin-top:12px" class="ghost" onclick="toggleProductCard()">닫기</button>
   </div>
 
+  <div class="card drawer hidden" id="dlCard">
+  <div class="drawer-head"><b>⬇ 무료 자료 받기</b><span class="drawer-now"></span><button class="ghost" onclick="closeDrawer(event)" title="닫으면 보던 자리 그대로예요">✕ 닫기</button></div>
+    <div class="backrow"><b>⬇ 무료 자료 받기</b> <span class="hint">— 한 번만 받으면 계속 쓸 수 있어요 (전부 무료·상업 사용 가능)</span></div>
+    <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
+      <div style="font-weight:700">🔤 글씨체 10종 <span class="hint" id="dlFontsState">— 확인 중…</span></div>
+      <div class="hint" style="margin-top:4px">블랙한산스·주아·나눔손글씨 펜·에스코어드림 등 — 자막·제목 글씨체 목록에 들어가요 (약 19MB)</div>
+      <button class="ghost" style="margin-top:6px" onclick="fetchFonts(event)">⬇ 받기</button>
+    </div>
+    <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
+      <div style="font-weight:700">🎵 무료 배경음악 14곡 <span class="hint" id="dlBgmState"></span></div>
+      <div class="hint" style="margin-top:4px">Kevin MacLeod (CC BY — 설명란에 저작자 표시 필요 · 업로드 키트가 자동으로 넣어줘요)</div>
+      <button class="ghost" style="margin-top:6px" onclick="fetchBgm(event)">⬇ 받기</button>
+    </div>
+    <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
+      <div style="font-weight:700">🌏 번역 병기용 글씨체 <span class="hint">— 병기 자막 쓸 때만 필요</span></div>
+      <div class="hint" style="margin-top:4px">한글 글씨체에는 일본어 가나·중국어 간체가 없어요 — 병기 줄이 네모(□)로 깨지지 않게 전용 글씨체를 받아요</div>
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <span class="hint" id="dlJaState">일본어: 확인 중…</span>
+        <button class="ghost" style="width:auto" onclick="fetchLangFont('ja', event)">⬇ 받기</button>
+        <span class="hint" id="dlZhState" style="margin-left:12px">중국어: 확인 중…</span>
+        <button class="ghost" style="width:auto" onclick="fetchLangFont('zh', event)">⬇ 받기</button>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:10px">📌 회원님 목소리·API 키는 여기와 상관없어요 — 이건 «재료»(글씨체·음악)만 받는 곳입니다.</div>
+  </div>
+
   <div class="card drawer hidden" id="apiCard">
   <div class="drawer-head"><b>🔑 API 연동</b><span class="drawer-now"></span><button class="ghost" onclick="closeDrawer(event)" title="닫으면 보던 자리 그대로예요">✕ 닫기</button></div>
     <div class="backrow"><b>🔑 API 연동</b> <span class="hint">— 키는 이 PC의 설정 파일에만 저장돼요 (외부 전송 없음)</span></div>
@@ -7981,6 +8028,15 @@ body.easy #easyBar { display: block; }
           <option value="karaoke">카라오케 — 말하는 단어가 차오름 (받아쓴 자막에서 정확)</option>
           <option value="word">✨ 단어별 — 말하는 단어가 하나씩 나타남 (2026 쇼츠 유행)</option>
         </select></div>
+      <div class="chk" style="gap:8px"><span>🌏 번역 병기 자막</span>
+        <select id="setSubLang" style="width:auto;padding:6px 8px">
+          <option value="">없음</option>
+          <option value="en">영어 — 한국어 아래 작게</option>
+          <option value="ja">일본어 — 전용 글씨체 받기 필요</option>
+          <option value="zh">중국어(간체) — 전용 글씨체 받기 필요</option>
+        </select>
+        <span class="hint">— 자막마다 번역 한 줄이 아래 붙어요 (제미나이 키 필요 · 영상당 1회 호출)</span></div>
+      <div class="chk"><input type="checkbox" id="setHl" checked><span>강조색 자동 <span class="hint">— AI가 문장마다 핵심 단어 하나에 색을 칠해요. 끄면 «»로 직접 칠한 색만 남아요</span></span></div>
       <div class="chk"><input type="checkbox" id="setHookBand"><span>상단 제목 배경 띠 (유튜브 썸네일 스타일 · 글자 뒤 어두운 띠)</span></div>
       <div class="chk"><input type="checkbox" id="setBand"><span>자막에도 배경 띠 (하단 자막 뒤에도 어두운 띠)</span></div>
     </details>
@@ -10276,6 +10332,17 @@ function openDrawer(id, ev){
   window._drawer = id;
 }
 function toggleSettings(ev){ openDrawer('settingsCard', ev); }
+function openDlCard(ev){ openDrawer('dlCard', ev); refreshDlCard(); }  // ⬇ 받기 (v1.45 목록 90)
+function refreshDlCard(){
+  const f = $('dlFontsState');
+  if(f){
+    const n = (window._fontsInstalled || []).length;
+    f.textContent = n >= 8 ? '— ✅ 받아져 있어요' : (n > 0 ? '— 일부만 있어요 (' + n + '종)' : '— 아직 없어요');
+  }
+  const j = $('dlJaState'), z = $('dlZhState'), lf = window._langFonts || {};
+  if(j) j.textContent = '일본어: ' + (lf.ja ? '✅ 있음' : '없음');
+  if(z) z.textContent = '중국어: ' + (lf.zh ? '✅ 있음' : '없음');
+}
 
 // ── 🔰 쉬운 모드 (v1.17) — 기능은 그대로, 보이는 것만 최소로 ──
 // 숨긴 입력도 값은 살아 있어 만들기 페이로드는 자세히 모드와 100% 동일하다.
@@ -10719,6 +10786,7 @@ function genTargetSec(){
 
 // ── ⬇ 무료 글씨체 (v0.63) ──
 function fillFontSels(installed){
+  window._fontsInstalled = installed || [];      // ⬇ 받기 서랍 상태 표시 (v1.45)
   const have = new Set(installed || []);
   document.querySelectorAll('select.fontsel option').forEach(o => {
     if(!o.value) return;  // 기본(프리텐다드)은 항상 가능
@@ -11070,6 +11138,8 @@ function markQuickDeco(){
   document.querySelectorAll('.qd-anim').forEach(sel => {
     if([...sel.options].some(o => o.value === anim)) sel.value = anim;
   });
+  const slang = (($('setSubLang')||{}).value) || '';
+  document.querySelectorAll('.qd-lang').forEach(sel => { sel.value = slang; });
   (window._DECO_CHK || _DECO_CHK).forEach(function(x){
     const v = (($(x[2])||{}).checked);
     document.querySelectorAll('.' + x[0]).forEach(c => { c.checked = !!v; });
@@ -11217,8 +11287,22 @@ function renderDecoPreview(){
     const sizeK = Math.max(.6, Math.min(1.6, (+((($('setFontSize')||{}).value)) || 84) / 84));
     sub.style.fontFamily = fontFamilyOf((fSel && fSel.value) || '');
     sub.style.fontSize = Math.round(13 * (ss.scale || 1) * sizeK) + 'px';
+    const hlOn = (function(){ const box = fr.closest('details');
+      const c = box && box.querySelector('.qd-hl');
+      return c ? c.checked : ((($('setHl')||{}).checked) !== false); })();
     sub.innerHTML = lineHtml(0, '자막이 이렇게 나와요')
-      + lineHtml(1, '<span style="color:' + hl + '">강조</span>는 이 색이에요');
+      + lineHtml(1, hlOn ? '<span style="color:' + hl + '">강조</span>는 이 색이에요'
+                         : '강조색 자동은 꺼짐');
+    // 🌏 병기 줄 견본 (v1.45 목록 88) — 실제와 같은 «본문 아래 작게·옅은 노랑»
+    const box2 = fr.closest('details');
+    const lsel2 = box2 && box2.querySelector('.qd-lang');
+    const plang = (lsel2 ? lsel2.value : ((($('setSubLang')||{}).value) || ''));
+    if(plang){
+      const sample = plang === 'ja' ? '字幕はこんな感じ' : plang === 'zh' ? '字幕就是这样' : 'Subtitles look like this';
+      sub.innerHTML += '<span class="pvline"><span style="color:#FFE566;font-size:58%;'
+        + 'text-shadow:-1px -1px 0 #141414,1px -1px 0 #141414,-1px 1px 0 #141414,1px 1px 0 #141414">'
+        + sample + '</span></span>';
+    }
     const hk = fr.querySelector('.pvhooktxt');
     const hband = ('band' in hs) ? hs.band : true;
     hk.style.color = hs.primary || '#FFFFFF';
@@ -11251,6 +11335,34 @@ function pvReplay(ev){
   if(fr) _pvApplyAnim(fr);
 }
 function _pvSchedule(){ clearTimeout(window._pvT); window._pvT = setTimeout(renderDecoPreview, 30); }
+// 🌏 일·중 병기는 전용 글씨체가 없으면 두부(□) — 고르는 순간 확인하고 받기를 권한다 (v1.45)
+function maybeOfferLangFont(lang){
+  if(lang !== 'ja' && lang !== 'zh') return;
+  const have = (window._langFonts || {})[lang];
+  if(have) return;
+  const name = lang === 'ja' ? '일본어' : '중국어';
+  if(confirm(name + ' 글씨는 전용 글씨체가 필요해요 (없으면 네모(□)로 깨져요).' +
+             String.fromCharCode(10) + '지금 받을까요? (' + (lang === 'ja' ? '약 5MB' : '약 10MB') + ' · 무료 Noto Sans)')){
+    fetchLangFont(lang);
+  } else {
+    uiBanner('⚠ ' + name + ' 글씨체가 없어서 병기 줄이 깨질 수 있어요 — ⬇ 받기에서 받을 수 있어요');
+  }
+}
+async function fetchLangFont(lang, ev){
+  if(ev) ev.preventDefault();
+  const btn = ev && ev.target;
+  if(btn){ btn.disabled = true; btn.textContent = '받는 중…'; }
+  try {
+    const d = await (await fetch('/api/fetch_lang_font', {method:'POST',
+      body: JSON.stringify({lang: lang})})).json();
+    if(d.error || !d.ok){ alert(d.error || '받기에 실패했어요 — 인터넷 확인 후 다시'); return; }
+    (window._langFonts = window._langFonts || {})[lang] = true;
+    uiBanner('✅ ' + (lang === 'ja' ? '일본어' : '중국어') + ' 글씨체 준비 완료!');
+    refreshDlCard();
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '⬇ 받기'; }
+  }
+}
 function autoFontForPreset(styleSelId){
   // 🖋 프리셋에 어울리는 글씨체 자동 제안 — «기본»일 때만 바꾼다 (직접 고른 건 존중)
   const key = Object.keys(PV_IDS).find(function(k){ return PV_IDS[k].sub === styleSelId; });
@@ -11292,7 +11404,8 @@ function _mountPvFrame(box, key){
 }
 const _DECO_CHK = [['qd-fade', 'fade', 'setFade', '자막 페이드'],
                    ['qd-hookband', 'hook_band', 'setHookBand', '제목 배경 띠'],
-                   ['qd-band', 'band', 'setBand', '자막 배경 띠']];
+                   ['qd-band', 'band', 'setBand', '자막 배경 띠'],
+                   ['qd-hl', 'highlight_on', 'setHl', '강조색 자동']];
 
 function _decoEffectRow(){
   const d = document.createElement('div');
@@ -11304,6 +11417,23 @@ function _decoEffectRow(){
   const src = $('setSubAnim'), sel = d.querySelector('.qd-anim');
   // 효과 목록은 설정 서랍의 것을 그대로 복사한다 — 따로 적으면 언젠가 어긋난다
   if(src) [...src.options].forEach(o => sel.add(new Option(o.textContent, o.value)));
+  // 🌏 병기 언어 (v1.45 목록 88) — 같은 원칙으로 설정 서랍 셀렉트를 복사
+  const lrow = document.createElement('span');
+  lrow.style.cssText = 'display:flex;align-items:center;gap:4px;margin-left:8px';
+  lrow.innerHTML = '<span>🌏 병기</span><select class="qd-lang" style="width:auto;padding:4px 8px"></select>';
+  d.appendChild(lrow);
+  const lsrc = $('setSubLang'), lsel = lrow.querySelector('.qd-lang');
+  if(lsrc) [...lsrc.options].forEach(o => lsel.add(new Option(o.textContent.split(' — ')[0], o.value)));
+  lsel.addEventListener('change', async () => {
+    await quickSet({subtitle: {sub_lang: lsel.value}});
+    if(lsrc) lsrc.value = lsel.value;
+    markQuickDeco(); refreshDecoSummaries();
+    if(lsel.value){
+      uiBanner('🌏 병기 자막: ' + (lsel.options[lsel.selectedIndex]||{}).textContent
+        + ' — 만들 때 자막 아래 번역 한 줄이 붙어요');
+      maybeOfferLangFont(lsel.value);
+    } else uiBanner('🌏 병기 자막을 껐어요');
+  });
   sel.addEventListener('change', async () => {
     await quickSet({subtitle: {anim: sel.value}});
     if(src) src.value = sel.value;
@@ -11408,6 +11538,8 @@ function fillSettings(s){
   $('setMarginV').value = s.subtitle.margin_v;
   $('setWrapChars').value = s.subtitle.wrap_chars != null ? s.subtitle.wrap_chars : 16;
   $('setSubAnim').value = s.subtitle.anim || 'none';
+  $('setSubLang').value = s.subtitle.sub_lang || '';            // 🌏 병기 (v1.45)
+  $('setHl').checked = s.subtitle.highlight_on !== false;       // 🎨 강조 (v1.45)
   $('setFade').checked = !!s.subtitle.fade;
   $('setTextCards').checked = s.subtitle.text_cards !== false;   // 🅰 v1.07 (기본 켬)
   $('setCardVariety').checked = s.subtitle.card_variety !== false; // 🎨 v1.22 (기본 켬)
@@ -11545,6 +11677,8 @@ async function saveSettings(){
                hook_band: $('setHookBand').checked, band: $('setBand').checked,
                wrap_chars: numOr('setWrapChars', sub0.wrap_chars != null ? sub0.wrap_chars : 16, 0, 60),
                anim: $('setSubAnim').value,
+               sub_lang: $('setSubLang').value,
+               highlight_on: $('setHl').checked,
                text_cards: $('setTextCards').checked,
                card_variety: $('setCardVariety').checked,
                card_pack: $('setCardPack').value, card_density: $('setCardDensity').value,
@@ -13594,6 +13728,8 @@ async function poll(){
     }
     // v0.63: 글씨체·기울임 복원 + 설치 목록 반영
     fillFontSels(state.fonts || []);
+    window._langFonts = state.lang_fonts || {};   // 🌏 병기 글씨체 준비 여부 (v1.45)
+    refreshDlCard();
     const subF = ((state.settings || {}).subtitle || {}).font || '';
     const hkF = ((state.settings || {}).subtitle || {}).hook_font || '';
     const tiltV = !!((state.settings || {}).subtitle || {}).hook_tilt;
