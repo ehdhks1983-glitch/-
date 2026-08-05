@@ -80,6 +80,13 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.41 (83) 자막 효과를 꾸미기 상자로 ──
+for t in "function _decoEffectRow(" "_DECO_CHK" "qd-anim" "qd-fade" "qd-hookband" \
+         "qd-band" "box.appendChild(_decoEffectRow());" \
+         "[...src.options].forEach"; do has "$W" "$t"; done
+hasnt "$W" 'id="qd-anim"'          # 분신은 class여야 한다 (id 복제 = 저장 파괴)
+echo "  ✔ v1.41 (자막 효과 꾸미기)"
+
 # ── v1.40 (82) 여러 쇼츠도 «좋은 데만» ──
 for t in "def suggest_multi_highlights(" "def suggest_multi_highlights_heuristic(" \
          "def _clip_groups_sane(" "MULTI_HL_PROMPT" "등분하지 마라"; do has "$S2" "$t"; done
