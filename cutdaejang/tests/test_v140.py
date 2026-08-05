@@ -45,7 +45,7 @@ def _long(n=40, sec=4):
 
 
 def test_version():
-    assert __version__ == "1.43.0"
+    assert __version__ == "1.44.0"
 
 
 # ══ 지금까지가 «그냥 자르기»였다는 것부터 못 박는다 ═══════════════

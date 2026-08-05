@@ -28,7 +28,7 @@ SUB_Y = H - 190          # 자막을 그려 넣을 위치
 
 
 def test_version():
-    assert __version__ == "1.43.0"
+    assert __version__ == "1.44.0"
 
 
 @pytest.fixture(scope="module")
