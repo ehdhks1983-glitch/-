@@ -30,6 +30,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font},{size},{primary},&H000000FF,{def_outline_color},&H80000000,0,0,0,0,100,100,0,0,{def_border},{def_outline},{shadow},{alignment},{sub_ml},{sub_ml},{margin_v},1
+Style: Trans,{trans_font},{trans_size},{trans_primary},&H000000FF,&H00141414,&H80000000,0,0,0,0,100,100,0,0,1,{trans_outline},0,2,{sub_ml},{sub_ml},{trans_margin_v},1
 Style: Title,{title_font},{title_size},{title_primary},&H000000FF,{title_outline_color},&HA0000000,0,0,0,0,100,100,0,{title_angle},{title_border},{title_outline},{title_shadow},8,{title_ml},{title_ml},{title_margin_v},1
 Style: Info,{font},{info_size},{info_primary},&H000000FF,&H00101010,&HA0000000,0,0,0,0,100,100,0,0,1,{info_outline},2,5,60,60,0,1
 Style: Card,{title_font},{card_size},&H00FFFFFF,&H000000FF,&H00151210,&H00000000,-1,0,0,0,100,100,1,0,1,{card_outline},0,5,{card_ml},{card_ml},0,1
@@ -528,6 +529,29 @@ def band_event_lines(style_name: str, start: str, end: str, body: str,
     ]
 
 
+_LANG_TRANS_FONT = {"ja": ("NotoSansJP", "Noto Sans JP"),
+                    "zh": ("NotoSansSC", "Noto Sans SC")}
+
+
+def _trans_font(style) -> str:
+    """🌏 병기 줄 글씨체 (v1.45) — 일·중은 전용 글씨체가 «설치돼 있을 때만» 쓴다.
+
+    설치 확인 없이 이름만 적으면 libass가 조용히 기본체로 떨어져(두부 글자 □),
+    v1.38에서 배운 함정 그대로가 된다. 없으면 본문 글씨체로 두고, 안내는
+    translator/화면이 한다.
+    """
+    lang = getattr(style, "sub_lang", "") or ""
+    hit = _LANG_TRANS_FONT.get(lang)
+    if hit:
+        from . import DEFAULT_FONTS_DIR  # noqa: PLC0415 — 순환 방지 지연 임포트
+
+        stem, fam = hit
+        if any((Path(DEFAULT_FONTS_DIR) / (stem + e)).is_file()
+               for e in (".ttf", ".otf")):
+            return fam
+    return presets.font_family(getattr(style, "font", "") or "")
+
+
 def write_ass(spec: TimelineSpec, out_path) -> str:
     """spec.subtitles(+spec.hook) → .ass 파일 생성. 생성된 경로를 반환.
 
@@ -541,6 +565,12 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         return max(1, round(v * sf))
 
     wide = spec.canvas.w > spec.canvas.h  # 🖥 가로 롱폼 (v0.62)
+    sub_margin_v = (sc(style.margin_v) if style.margin_v is not None
+                    else presets.subtitle_margin_v(style.position, spec.canvas.h))
+    # 🌏 병기 줄 자리 (v1.45) — 하단 자막이면 그 «바로 아래», 아니면 화면 하단.
+    trans_size = max(10, round(sc(style.size) * 0.52))
+    trans_margin_v = (max(sc(20), sub_margin_v - round(trans_size * 1.7))
+                      if style.position == "bottom" else sc(60))
     if wide and getattr(style, "wrap_chars", 0):
         # 가로 화면은 한 줄이 길어도 안전 — 세로 기준(16자)을 자동 확장 (16→27)
         from dataclasses import replace  # noqa: PLC0415
@@ -580,11 +610,13 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         def_outline=sc(18) if sub_band else sc(style.outline),
         shadow=0 if sub_band else sc(style.shadow) if style.shadow else 0,
         alignment=presets.subtitle_alignment(style.position),
-        margin_v=(
-            sc(style.margin_v)
-            if style.margin_v is not None
-            else presets.subtitle_margin_v(style.position, spec.canvas.h)
-        ),
+        margin_v=sub_margin_v,
+        # 🌏 병기 줄 (v1.45 목록 88) — 본문의 절반 크기·옅은 노랑, 본문 «아래»
+        trans_font=_trans_font(style),
+        trans_size=trans_size,
+        trans_primary=ass_color("#FFE566"),
+        trans_outline=sc(2),
+        trans_margin_v=trans_margin_v,
         title_size=round(presets.title_size(spec.canvas.h)
                          * (1.45 if wide else 1.0)  # 가로에선 높이 비례만으론 작아 보정 (v0.62)
                          * max(0.6, min(1.6, float(getattr(style, "hook_scale", 1.0) or 1.0)))),
@@ -909,5 +941,14 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
             body,
             band_on=sub_band, fade=bool(style.fade),
         )
+        tr = str(getattr(s, "trans", "") or "")
+        if tr:  # 🌏 병기 줄 (v1.45 목록 88) — 카드 문장은 위 continue로 이미 제외
+            wc = getattr(style, "wrap_chars", 0)
+            tbody = escape_ass_text(wrap_text(tr, round(wc * 1.8) if wc else 0))
+            if style.fade:
+                tbody = "{\\fad(100,60)}" + tbody
+            lines.append(
+                f"Dialogue: 0,{us_to_ass(s.start_us)},{us_to_ass(s.end_us)},Trans,,0,0,0,,"
+                + tbody)
     Path(out_path).write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
     return str(out_path)

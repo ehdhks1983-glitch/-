@@ -82,6 +82,8 @@ def render(
 
         voice = mix_sfx(voice, spec.sfx, str(work / "voice_sfx.m4a"))
 
+    from ..translator import finalize  # noqa: PLC0415 — 🌏 병기·강조 마무리 (v1.45)
+    finalize(spec)                         # 실패해도 렌더는 계속 (내부에서 삼킴)
     ass = ass_writer.write_ass(spec, work / "subs.ass")
 
     gradient = None

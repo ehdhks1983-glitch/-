@@ -29,6 +29,9 @@ FONT_FAMILY_ALIASES = {
     "NanumPenScript-Regular": "Nanum Pen",            # ⚠ 파일 이름과 달리 name1은 "Nanum Pen"
     # ⬇ v1.38 (목록 76) — «실패 없는 기본»과 정보형 글씨체
     "NotoSansKR-Bold": "Noto Sans KR Bold",
+    # ⬇ v1.45 (목록 88) — 병기 자막 전용 (한글 글씨체엔 가나·간체가 없다)
+    "NotoSansJP": "Noto Sans JP",
+    "NotoSansSC": "Noto Sans SC",
     "SCDreamBold": "S-Core Dream 6 Bold",
     "SCDreamHeavy": "S-Core Dream 8 Heavy",
 }

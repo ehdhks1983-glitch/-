@@ -63,6 +63,8 @@ class Subtitle:
     # v0.76 말 다듬기 — 단어 타임스탬프(카라오케)·인식 신뢰도. 없으면 기존 동작.
     words: list = field(default_factory=list)  # [[자막 내 상대 시작μs, 끝μs, "단어"], ...]
     conf: float = 1.0                          # STT 신뢰도 0~1 (whisper avg_logprob 기반)
+    # 🌏 v1.45 (목록 88) — 병기 번역 한 줄 (renderer가 본문 아래 작게 그린다)
+    trans: str = ""
 
 
 @dataclass
@@ -81,6 +83,8 @@ class Style:
     outline: int = 3
     shadow: int = 0
     position: str = "bottom"   # "bottom" | "center" | "top"
+    # 🌏 v1.45 (목록 88) — 병기 언어("en"|"ja"|"zh") — 일·중은 전용 글씨체 선택 근거
+    sub_lang: str = ""
     gradient_overlay: bool = True
     primary_color: str = "#FFFFFF"
     outline_color: str = "#000000"

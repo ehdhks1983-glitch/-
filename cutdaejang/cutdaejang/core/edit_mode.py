@@ -352,6 +352,8 @@ def render_edited(
         style=style,
     )
     work = Path(out_path).parent
+    from . import translator  # noqa: PLC0415 — 🌏 병기·강조 마무리 (v1.45 88·89)
+    translator.finalize(ass_spec)          # 실패해도 렌더는 계속 (내부에서 삼킴)
     ass_path = ass_writer.write_ass(ass_spec, work / "subs.ass")
 
     from .render_engine.ffmpeg_composer import TONE_PRESETS  # noqa: PLC0415

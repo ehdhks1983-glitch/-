@@ -129,6 +129,42 @@ def check_names(fonts_dir=None) -> list:
     return bad
 
 
+# 🌏 병기 자막 전용 글씨체 (v1.45 목록 88) — 한글 글씨체에는 가나·간체 한자가
+#   없어 병기 언어를 고르면 이것만 «따로» 받는다. 기본 「받기」(FONTS)에 안 끼운
+#   이유: 합쳐서 ~16MB — 병기를 안 쓰는 대다수에게 물리기엔 크다.
+#   URL은 css2 API(구형 UA)로 실물 확인 후 고정 (2026-08, name1 검증 완료).
+LANG_FONTS = {
+    "ja": ("NotoSansJP.ttf", "Noto Sans JP",
+           "https://fonts.gstatic.com/s/notosansjp/v56/-F6jfjtqLzI2JPCgQBnw7HFyzSD-AsregP8VFPYk75s.ttf"),
+    "zh": ("NotoSansSC.ttf", "Noto Sans SC",
+           "https://fonts.gstatic.com/s/notosanssc/v40/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaGzjCnYw.ttf"),
+}
+
+
+def lang_font_installed(lang: str, fonts_dir=None) -> bool:
+    """병기 언어 글씨체가 준비돼 있나 — en은 모든 글씨체가 라틴을 갖고 있어 True."""
+    if lang not in LANG_FONTS:
+        return True
+    out = Path(fonts_dir) if fonts_dir else Path(DEFAULT_FONTS_DIR)
+    f = out / LANG_FONTS[lang][0]
+    return f.is_file() and f.stat().st_size > 100_000
+
+
+def fetch_lang(lang: str, fonts_dir=None) -> dict:
+    """병기 언어 글씨체 1종 받기 — {"ok", "file", "mismatch"}"""
+    if lang not in LANG_FONTS:
+        return {"ok": True, "file": "", "mismatch": False}
+    fname, fam, url = LANG_FONTS[lang]
+    out = Path(fonts_dir) if fonts_dir else Path(DEFAULT_FONTS_DIR)
+    out.mkdir(parents=True, exist_ok=True)
+    dest = out / fname
+    if not (dest.is_file() and dest.stat().st_size > 100_000):
+        fetch(url, dest)
+    ok = dest.is_file() and dest.stat().st_size > 100_000
+    mism = ok and fam not in font_names(dest)   # 이름표가 다르면 «조용한 폴백» 위험
+    return {"ok": ok and not mism, "file": str(dest), "mismatch": mism}
+
+
 def fetch_all(fonts_dir=None, progress=None) -> dict:
     """글씨체 전부 받기 — 반환 {"got", "skip", "fail": [이름...], "mismatch": [...]}"""
     out = Path(fonts_dir) if fonts_dir else Path(DEFAULT_FONTS_DIR)
