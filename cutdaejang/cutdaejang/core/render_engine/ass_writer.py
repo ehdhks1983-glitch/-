@@ -138,6 +138,14 @@ SUB_STYLES = {
     # ⬛ 블랙 박스 — 검은 띠 위 흰 글자 + 노랑 강조 (참고 릴스 상단 제목형)
     "블랙 박스": {"primary": "#FFFFFF", "band": True, "band_color": "&H00121212",
                "highlight": "#FFD400"},
+    # 🖋 손글씨 팝 (v1.44 목록 86) — 참고 릴스 스샷1: 대형 손글씨에 형광 노랑/연두가
+    #   «줄마다» 번갈아 + 얇은 검정 테두리. "font"는 화면(JS)이 글씨체를 제안하는
+    #   힌트일 뿐 렌더는 안 쓴다 — 서버가 글씨체를 강제하면 미설치 때 libass가
+    #   «조용히» 기본체로 떨어지는 함정(v1.38에서 배움)이 있어서다.
+    "손글씨 팝": {"primary": "#FFE94D", "band": False, "outline": 2,
+               "outline_color": "#1F1F1F", "shadow": 1, "scale": 1.22,
+               "line_rotate": ["#FFE94D", "#B8F268"],
+               "font": "NanumPenScript-Regular"},
 }
 
 # 🪧 상단 제목 스타일 프리셋 (v0.52) — 글자색·테두리·띠를 통째로 바꾼다.
@@ -417,6 +425,31 @@ def _karaoke_body(sub, style, pop_color: str = "") -> str:
     return "".join(parts)
 
 
+def _line_rotate_body(sub, style, colors) -> str:
+    """🖋 줄마다 색 번갈아 (v1.44 손글씨 팝) — 참고 릴스의 «윗줄 노랑/아랫줄 연두».
+
+    강조 단어는 강조색을 유지하되 끝나면 «그 줄» 색으로 복원한다 — 기본색으로
+    복원하면 아랫줄 나머지가 윗줄 색으로 바뀌어 버린다.
+    """
+    txt = wrap_text(sub.text, getattr(style, "wrap_chars", 0))
+    out = []
+    for i, ln in enumerate(txt.split("\n")):
+        c = colors[i % len(colors)]
+        seg = "{\\1c" + _inline_color(c) + "}"
+        hl = getattr(sub, "highlight", "") or ""
+        if hl and hl in ln:
+            pre, _, post = ln.partition(hl)
+            seg += (escape_ass_text(pre)
+                    + "{\\1c" + _inline_color(style.highlight_color) + "}"
+                    + escape_ass_text(hl)
+                    + "{\\1c" + _inline_color(c) + "}"
+                    + escape_ass_text(post))
+        else:
+            seg += escape_ass_text(ln)
+        out.append(seg)
+    return "\\N".join(out)
+
+
 def dialogue_text(sub, style, pop_color: str = "") -> str:
     """자막 본문 조립 — 페이드 태그 + 강조 단어 인라인 컬러 (지시서 PATCH 5).
 
@@ -441,8 +474,12 @@ def dialogue_text(sub, style, pop_color: str = "") -> str:
         dur_ms = max(0, int((getattr(sub, "end_us", 0) - getattr(sub, "start_us", 0)) // 1000))
         return _typing_body(wrap_text(sub.text, getattr(style, "wrap_chars", 0)),
                             line_color, dur_ms=dur_ms)
+    lr = (SUB_STYLES.get(getattr(style, "sub_style", "기본") or "기본", {})
+          .get("line_rotate") if marked is None else None)
     if marked is not None:
         body = marked
+    elif lr:  # 🖋 줄마다 색 (v1.44) — 수동 마크업 우선, word/karaoke/type은 위에서 제 길로
+        body = _line_rotate_body(sub, style, lr)
     elif pop_color:  # 🌈 다색 팝 — 문장 전체를 회전색으로 (수동 색·강조는 위에서 우선)
         body = ("{\\1c" + _inline_color(pop_color) + "}"
                 + escape_ass_text(wrap_text(sub.text, getattr(style, "wrap_chars", 0))))
@@ -534,7 +571,7 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         font=presets.font_family(style.font),
         title_font=presets.font_family(getattr(style, "hook_font", "") or style.font),
         title_angle=4 if getattr(style, "hook_tilt", False) else 0,
-        size=sc(style.size),
+        size=sc(style.size * float(ss.get("scale", 1.0))),  # 🖋 프리셋 확대 (v1.44)
         primary=ass_color(style.primary_color),
         def_border=3 if sub_band else 1,
         # 띠일 때: 박스 색(기본 반투명 검정, 프리셋이 지정하면 그 색), 아니면 글자 외곽선

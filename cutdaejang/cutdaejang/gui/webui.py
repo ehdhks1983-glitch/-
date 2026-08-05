@@ -3625,6 +3625,11 @@ class _Handler(BaseHTTPRequestHandler):
                 self._serve_file(str(fp))
             else:
                 self._send_json({"error": "not found"}, 404)
+        elif path == "/api/deco_presets":  # 📺 꾸미기 미리보기 데이터 (v1.44 목록 87)
+            from ..core.render_engine import ass_writer as _aw  # noqa: PLC0415
+
+            self._send_json({"sub": _aw.SUB_STYLES, "hook": _aw.HOOK_STYLES,
+                             "palette": _aw.POP_PALETTE})
         elif path.startswith("/font/"):  # 🔤 글씨체 실물 미리보기 (v0.68) — resources/fonts만
             stem = path.split("/", 2)[2]
             from ..core import render_engine as _re  # noqa: PLC0415
@@ -5946,6 +5951,23 @@ _HTML = """<!doctype html>
     padding:9px 14px; cursor:pointer; font-weight:800; font-size:15px; line-height:1.2; }
   .stylechip:hover { border-color:#4266d5; }
   .stylechip.sel { border-color:#5b7cfa; box-shadow:0 0 0 2px rgba(91,124,250,.28); }
+  /* ── 📺 v1.44 (목록 87) 꾸미기 미리보기 틀 ── */
+  .pvwrap { margin:8px 0 2px; }
+  .pvframe { position:relative; width:150px; height:267px; margin:0 auto; border-radius:10px;
+    overflow:hidden; border:1px solid #2c3350;
+    background:linear-gradient(165deg,#33405f 0%,#1a2030 55%,#242c44 100%); }
+  .pvhook { position:absolute; top:8%; left:6px; right:6px; text-align:center; }
+  .pvhooktxt { display:inline-block; font-weight:800; font-size:14px; line-height:1.3;
+    padding:2px 8px; border-radius:4px; }
+  .pvsub { position:absolute; bottom:13%; left:4px; right:4px; text-align:center; }
+  .pvsubtxt { display:inline-block; font-weight:800; font-size:13px; line-height:1.4; }
+  .pvsubtxt .pvline { display:block; }
+  .pvsubtxt .pvband { display:inline-block; padding:1px 7px; border-radius:3px; }
+  .pvcap { display:flex; align-items:center; justify-content:center; gap:8px; margin-top:5px;
+    flex-wrap:wrap; }
+  @keyframes pvPop { from { transform:scale(.86); } to { transform:none; } }
+  @keyframes pvFadeIn { from { opacity:0; } to { opacity:1; } }
+  @keyframes pvType { from { clip-path:inset(0 100% 0 0); } to { clip-path:inset(0 0 0 0); } }
   .fx-demo { display:inline-flex; width:64px; height:38px; border-radius:6px; flex:none;
     background:linear-gradient(135deg,#31406e,#7a4a76 60%,#b8875a);
     align-items:center; justify-content:center; overflow:hidden; }
@@ -6500,6 +6522,7 @@ body.easy #easyBar { display: block; }
           <option value="네온">네온 (민트 글로우)</option>
           <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
           <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
+          <option value="손글씨 팝">손글씨 팝 (대형 손글씨+형광 번갈아)</option>
         </select>
         <div class="stylechips" data-for="editSubStyleSel">
           <div class="stylechip sel" data-v="기본" onclick="pickStyleChip('editSubStyleSel','기본',event)"
@@ -6514,6 +6537,8 @@ body.easy #easyBar { display: block; }
                style="text-shadow:-1.5px -1.5px 0 #fff,1.5px -1.5px 0 #fff,-1.5px 1.5px 0 #fff,1.5px 1.5px 0 #fff,0 2px 4px #000"><span style="color:#FF3B30">다색</span> <span style="color:#31E1C4">팝</span></div>
           <div class="stylechip" data-v="블랙 박스" onclick="pickStyleChip('editSubStyleSel','블랙 박스',event)"
                style="background:#121212;color:#fff;border-radius:6px">블랙 박스 <span style="color:#FFD400">강조</span></div>
+          <div class="stylechip" data-v="손글씨 팝" onclick="pickStyleChip('editSubStyleSel','손글씨 팝',event)"
+               style="font-family:'Nanum Pen',cursive;font-size:16px;text-shadow:-1px -1px 0 #1f1f1f,1px -1px 0 #1f1f1f,-1px 1px 0 #1f1f1f,1px 1px 0 #1f1f1f"><span style="color:#FFE94D">손글씨</span> <span style="color:#B8F268">팝</span></div>
         </div>
       </div>
       <div class="chk" style="gap:8px;margin-top:6px">
@@ -6878,6 +6903,7 @@ body.easy #easyBar { display: block; }
         <option value="네온">네온 (민트 글로우)</option>
           <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
           <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
+          <option value="손글씨 팝">손글씨 팝 (대형 손글씨+형광 번갈아)</option>
       </select>
       <div class="stylechips" data-for="genSubStyleSel">
           <div class="stylechip sel" data-v="기본" onclick="pickStyleChip('genSubStyleSel','기본',event)"
@@ -6892,6 +6918,8 @@ body.easy #easyBar { display: block; }
                style="text-shadow:-1.5px -1.5px 0 #fff,1.5px -1.5px 0 #fff,-1.5px 1.5px 0 #fff,1.5px 1.5px 0 #fff,0 2px 4px #000"><span style="color:#FF3B30">다색</span> <span style="color:#31E1C4">팝</span></div>
           <div class="stylechip" data-v="블랙 박스" onclick="pickStyleChip('genSubStyleSel','블랙 박스',event)"
                style="background:#121212;color:#fff;border-radius:6px">블랙 박스 <span style="color:#FFD400">강조</span></div>
+          <div class="stylechip" data-v="손글씨 팝" onclick="pickStyleChip('genSubStyleSel','손글씨 팝',event)"
+               style="font-family:'Nanum Pen',cursive;font-size:16px;text-shadow:-1px -1px 0 #1f1f1f,1px -1px 0 #1f1f1f,-1px 1px 0 #1f1f1f,1px 1px 0 #1f1f1f"><span style="color:#FFE94D">손글씨</span> <span style="color:#B8F268">팝</span></div>
         </div>
       <div class="chk" style="gap:8px;margin-top:6px">
         <span>글씨체</span>
@@ -7632,6 +7660,7 @@ body.easy #easyBar { display: block; }
               <option value="네온">네온 (민트 글로우)</option>
               <option value="다색 팝">다색 팝 (문장마다 색+흰테두리)</option>
               <option value="블랙 박스">블랙 박스 (검은 띠+흰 글자)</option>
+              <option value="손글씨 팝">손글씨 팝 (대형 손글씨+형광 번갈아)</option>
             </select>
             <span>화면 톤</span>
             <select id="rtToneSel" style="width:auto;max-width:200px">
@@ -9127,9 +9156,14 @@ function subStylePreviewInto(prevId, styleName, fontId){
 
 // ── 🔤 글씨체 실물 미리보기 (v0.68) — 받은 폰트를 브라우저에 등록해 화면에 그대로 ──
 const FONT_FAMILY_MAP = {
+  // ⚠ 렌더(libass)가 쓰는 이름표(name1)와 같게 — presets.FONT_FAMILY_ALIASES와
+  //   짝을 맞춘다 (시험이 지킨다). v1.38 추가 글씨체 4종이 여기 빠져 있어서
+  //   미리보기가 «조용히» 프리텐다드로 나오던 것을 v1.44에서 채웠다 (목록 87).
   'Pretendard-ExtraBold':'Pretendard ExtraBold', 'BlackHanSans-Regular':'Black Han Sans',
   'Jua-Regular':'Jua', 'DoHyeon-Regular':'Do Hyeon', 'Gugi-Regular':'Gugi',
-  'NanumPenScript-Regular':'Nanum Pen Script',
+  'NanumPenScript-Regular':'Nanum Pen',
+  'NotoSansKR-Bold':'Noto Sans KR Bold',
+  'SCDreamBold':'S-Core Dream 6 Bold', 'SCDreamHeavy':'S-Core Dream 8 Heavy',
 };
 function injectFontFaces(installed){
   const have = new Set(['Pretendard-ExtraBold'].concat(installed || []));
@@ -9179,6 +9213,8 @@ function pickStyleChip(selId, val, ev){
   // v0.74: 스타일 바꾸면 실물 미리보기도 즉시 갱신
   if(selId === 'editSubStyleSel') renderSubFontPrev('editSubFontSel','editSubFontPrev');
   else if(selId === 'genSubStyleSel') renderSubFontPrev('genSubFontSel','genSubFontPrev');
+  autoFontForPreset(selId);                       // 🖋 프리셋 글씨체 제안 (v1.44)
+  _pvSchedule();                                  // 📺 미리보기 즉시 (v1.44)
 }
 function syncStyleChips(selId){
   const sel = $(selId); if(!sel) return;
@@ -10692,6 +10728,7 @@ function fillFontSels(installed){
   renderSubFontPrev('genSubFontSel', 'genSubFontPrev');
   renderSubFontPrev('editSubFontSel', 'editSubFontPrev');
   renderGenHookPreview(); renderHookPreview();
+  _pvSchedule();                                  // 📺 새 글씨체를 미리보기에도 (v1.44)
 }
 async function fetchFonts(ev){
   ev.preventDefault();
@@ -11035,6 +11072,7 @@ function markQuickDeco(){
     const v = (($(x[2])||{}).checked);
     document.querySelectorAll('.' + x[0]).forEach(c => { c.checked = !!v; });
   });
+  _pvSchedule();                                  // 📺 설정과 미리보기 동기 (v1.44)
 }
 // (v1.35) injectQuickDeco 는 mountDeco 로 대체됐다 — 만들기 화면 5곳에 칩만
 //   끼워 넣던 것을, 흩어진 선택칸까지 한 상자로 모으는 쪽으로 (목록 64).
@@ -11126,6 +11164,130 @@ function _decoQuickRow(){
 // ⚠ 여기 만드는 건 «분신»이다 — 진짜 칸은 설정 서랍에 그대로 두고 값을 맞춘다.
 //   경로가 6개라 원본을 옮길 수는 없고(한 곳에만 있을 수 있다), id를 복제하면
 //   저장·복원이 통째로 깨진다. 그래서 class로 만들고 양쪽을 서로 맞춘다.
+// ── 📺 꾸미기 미리보기 틀 (v1.44 목록 87) — 고른 그대로를 작은 화면에 합성 ──
+//    "설정은 많은데 어떤 건지 모르겠어"(회원님 44차)의 답. 프리셋 색·구성은
+//    서버(ass_writer)가 진실이고 화면은 /api/deco_presets로 받아 그린다.
+const PV_IDS = {
+  gen:     {sub:'genSubStyleSel',  font:'genSubFontSel',  hook:'genHookStyleSel'},
+  edit:    {sub:'editSubStyleSel', font:'editSubFontSel', hook:'hookStyleSel'},
+  weblink: {sub:'wlSubStyleSel',   font:'wlSubFontSel',   hook:'wlHookStyleSel'},
+  sections:{sub:'secSubStyleSel',  font:'secSubFontSel',  hook:'secHookStyleSel'},
+  shop:    {sub:'shopSubStyleSel', font:'shopSubFontSel', hook:'shopHookStyleSel'}
+};
+function assColorToCss(c){
+  // ASS(&HAABBGGRR·&HBBGGRR) → CSS. 알파는 00=불투명, FF=투명.
+  if(!c) return '';
+  if(c[0] === '#') return c;
+  const m = String(c).toUpperCase().match(/^&H([0-9A-F]{2})?([0-9A-F]{6})&?$/);
+  if(!m) return '';
+  const h = m[2], r = h.slice(4,6), g = h.slice(2,4), b = h.slice(0,2);
+  if(m[1] && m[1] !== '00'){
+    const a = Math.round((1 - parseInt(m[1],16)/255)*100)/100;
+    return 'rgba(' + parseInt(r,16) + ',' + parseInt(g,16) + ',' + parseInt(b,16) + ',' + a + ')';
+  }
+  return '#' + r + g + b;
+}
+function _pvShadow(px, color, blur){
+  const c = color || '#101010', p = Math.max(1, Math.min(3, Math.round((px == null ? 2 : px)*0.7)));
+  let s = '-'+p+'px -'+p+'px 0 '+c+', '+p+'px -'+p+'px 0 '+c+', -'+p+'px '+p+'px 0 '+c+', '+p+'px '+p+'px 0 '+c;
+  if(blur) s += ', 0 0 8px '+c+', 0 0 18px '+c;
+  return s;
+}
+function renderDecoPreview(){
+  const P = window._DECO_PRESETS; if(!P) return;
+  document.querySelectorAll('.pvframe').forEach(function(fr){
+    const ids = PV_IDS[fr.dataset.key] || {};
+    const sSel = $(ids.sub), fSel = $(ids.font), hSel = $(ids.hook);
+    const ss = (P.sub || {})[(sSel && sSel.value) || '기본'] || {};
+    const hs = (P.hook || {})[(hSel && hSel.value) || '기본'] || {};
+    const lr = ss.line_rotate, base = ss.primary || '#FFFFFF';
+    const pop = ss.pop_rotate ? ((P.palette || [])[0] || base) : '';
+    const hl = ss.highlight || '#FFD400';
+    const bandBg = ss.band ? (assColorToCss(ss.band_color || '') || 'rgba(16,16,16,.55)') : '';
+    const shadow = ss.band ? 'none' : _pvShadow(ss.outline, ss.outline_color || '#101010', ss.blur);
+    function lineHtml(i, inner){
+      const c = lr ? lr[i % lr.length] : (pop || base);
+      return '<span class="pvline"><span class="' + (ss.band ? 'pvband' : '')
+        + '" style="color:' + c + ';text-shadow:' + shadow
+        + (bandBg ? ';background:' + bandBg : '') + '">' + inner + '</span></span>';
+    }
+    const sub = fr.querySelector('.pvsubtxt');
+    const sizeK = Math.max(.6, Math.min(1.6, (+((($('setFontSize')||{}).value)) || 84) / 84));
+    sub.style.fontFamily = fontFamilyOf((fSel && fSel.value) || '');
+    sub.style.fontSize = Math.round(13 * (ss.scale || 1) * sizeK) + 'px';
+    sub.innerHTML = lineHtml(0, '자막이 이렇게 나와요')
+      + lineHtml(1, '<span style="color:' + hl + '">강조</span>는 이 색이에요');
+    const hk = fr.querySelector('.pvhooktxt');
+    const hband = ('band' in hs) ? hs.band : true;
+    hk.style.color = hs.primary || '#FFFFFF';
+    hk.style.background = hband ? (assColorToCss(hs.band_color || '') || 'rgba(16,16,16,.56)') : 'transparent';
+    hk.style.textShadow = hband ? 'none' : _pvShadow(hs.outline == null ? 5 : hs.outline, hs.outline_color || '#101010', hs.blur);
+    _pvApplyAnim(fr);
+  });
+}
+function _pvApplyAnim(fr){
+  const box = fr.closest('details');
+  const a = box && box.querySelector('.qd-anim');
+  const anim = (a && a.value) || ((($('setSubAnim')||{}).value) || 'none');
+  const f = box && box.querySelector('.qd-fade');
+  const fade = f ? f.checked : !!(($('setFade')||{}).checked);
+  const el = fr.querySelector('.pvsub'); if(!el) return;
+  el.style.animation = 'none';
+  void el.offsetWidth;                     // 재생 리셋 (리플로 강제)
+  const parts = [];
+  if(anim === 'pop') parts.push('pvPop .3s ease-out');
+  else if(anim === 'type') parts.push('pvType 1.1s steps(18, end)');
+  else if(anim === 'word') parts.push('pvType 1.2s steps(6, end)');
+  else if(anim === 'karaoke') parts.push('pvType 1.2s linear');
+  if(fade) parts.push('pvFadeIn .45s ease-out');
+  el.style.animation = parts.join(', ');
+}
+function pvReplay(ev){
+  if(ev) ev.preventDefault();
+  const w = ev && ev.target.closest('.pvwrap');
+  const fr = w && w.querySelector('.pvframe');
+  if(fr) _pvApplyAnim(fr);
+}
+function _pvSchedule(){ clearTimeout(window._pvT); window._pvT = setTimeout(renderDecoPreview, 30); }
+function autoFontForPreset(styleSelId){
+  // 🖋 프리셋에 어울리는 글씨체 자동 제안 — «기본»일 때만 바꾼다 (직접 고른 건 존중)
+  const key = Object.keys(PV_IDS).find(function(k){ return PV_IDS[k].sub === styleSelId; });
+  if(!key) return;
+  const st = $(styleSelId), f = $(PV_IDS[key].font);
+  const want = (((window._DECO_PRESETS || {}).sub || {})[(st && st.value) || ''] || {}).font;
+  if(!st || !f || !want) return;
+  const opt = [...f.options].find(function(o){ return o.value === want; });
+  if(!opt) return;
+  if(opt.disabled){
+    uiBanner('🖋 「' + st.value + '」에는 손글씨체가 어울려요 — ⚙ 설정에서 무료 글씨체를 받으면 자동으로 맞춰드려요');
+    return;
+  }
+  if(f.value) return;
+  f.value = want;
+  f.dispatchEvent(new Event('change', {bubbles:true}));
+  uiBanner('🖋 글씨체를 「나눔손글씨 펜」으로 맞췄어요 — 다른 걸로 바꿔도 돼요');
+}
+function _mountPvFrame(box, key){
+  if(!box || box.querySelector('.pvframe')) return;
+  const w = document.createElement('div');
+  w.className = 'pvwrap';
+  w.innerHTML = '<div class="pvframe" data-key="' + key + '">'
+    + '<div class="pvhook"><span class="pvhooktxt">제목이 여기에!</span></div>'
+    + '<div class="pvsub"><span class="pvsubtxt"></span></div></div>'
+    + '<div class="pvcap hint">📺 지금 고른 그대로 <b>미리보기</b>'
+    + ' <button class="ghost" style="width:auto;margin:0;padding:2px 10px" onclick="pvReplay(event)">▶ 효과 다시</button></div>';
+  const sum = box.querySelector('summary');
+  if(sum && sum.nextSibling) box.insertBefore(w, sum.nextSibling);
+  else box.appendChild(w);
+  box.addEventListener('change', function(e){
+    const id = (e.target && e.target.id) || '';
+    if(id && PV_IDS[key] && id === PV_IDS[key].sub) autoFontForPreset(id);
+    _pvSchedule();
+  });
+  box.addEventListener('click', function(e){
+    if(e.target && e.target.closest('.stylechip,.tonecard')) _pvSchedule();
+  });
+}
 const _DECO_CHK = [['qd-fade', 'fade', 'setFade', '자막 페이드'],
                    ['qd-hookband', 'hook_band', 'setHookBand', '제목 배경 띠'],
                    ['qd-band', 'band', 'setBand', '자막 배경 띠']];
@@ -11205,6 +11367,7 @@ function mountDeco(key){
   }
   box.appendChild(_decoQuickRow());
   box.appendChild(_decoEffectRow());              // 🎬 v1.41 (목록 83)
+  _mountPvFrame(box, key);                        // 📺 미리보기 틀 (v1.44 목록 87)
   const tip = document.createElement('div');
   tip.className = 'hint'; tip.style.marginTop = '6px';
   tip.textContent = '안 건드리면 기억된 설정 그대로 만들어져요. 자막 글씨·배경음악 소리는 모든 영상에 함께 적용돼요.';
@@ -13777,6 +13940,12 @@ document.addEventListener('keydown', (e) => {
 });
 
 injectFontFaces([]);  // 🔤 번들 프리텐다드 즉시 등록 — 받은 글씨체는 poll의 fillFontSels가 추가 (v0.68)
+// 📺 꾸미기 미리보기 데이터 — 프리셋 색·구성은 서버(ass_writer)가 진실 (v1.44)
+fetch('/api/deco_presets').then(function(r){ return r.json(); })
+  .then(function(d){ window._DECO_PRESETS = d; renderDecoPreview(); })
+  .catch(function(){});
+const _pvSf = $('setFontSize');
+if(_pvSf) _pvSf.addEventListener('change', _pvSchedule);
 sweepUltraCost();                       // 🐢 기억된 값이 4K면 바로 알림 (v1.28.0)
 poll(); setInterval(()=>{ if(!currentJob) poll(); }, 5000);
 </script>
