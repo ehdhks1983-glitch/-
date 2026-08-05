@@ -34,7 +34,9 @@ def test_easy_mode_css_and_toggle_wired():
         assert tok in html, tok
     # 상태는 설정에 기억되고, 켜기/끄기 라벨이 바뀐다
     assert "easy_mode: on" in html and "🛠 자세히" in html
-    assert "applyEasy(!!(((s || {}).ui || {}).easy_mode));" in html
+    # 부팅 때 기억값 적용 — v1.43부터 «저장값 없음 = 쉬운 모드»가 기본이라
+    # 무조건 !!강변환이 아니라 null 판별을 거친다 (기억값 존중은 그대로)
+    assert "applyEasy(_em == null ? true : !!_em);" in html
 
 
 def test_easy_hides_options_but_keeps_essentials():
