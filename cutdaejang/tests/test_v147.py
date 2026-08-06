@@ -39,7 +39,7 @@ def _default_events(txt):
 
 
 def test_version():
-    assert __version__ == "1.47.0"
+    assert __version__ == "1.47.1"
 
 
 # ── 렌더 — \t 사슬 ──────────────────────────────────────────────
@@ -135,6 +135,18 @@ def test_preview_loops_the_motion():
     seg = JS.split("function _pvApplyAnim(")[1].split("\nfunction ")[0]
     assert "infinite" in seg, "계속 움직임은 미리보기도 무한 반복"
     assert ".4s infinite" in seg, "실제 렌더와 같은 400ms 지연 규칙"
+
+
+# ── v1.47.1 (95) 꾸미기가 쉬운 모드에서 실종되던 것 ────────────
+def test_deco_box_survives_easy_mode():
+    """🔴 회원님 47차 "꾸미기 어디에 있는 거야?" — v1.43 다이어트가 접힘상자를
+    통째로 숨겼는데, 꾸미기는 그 사이 미리보기·스타일·움직임의 허브가 됐다.
+    쉬운 모드에서도 «접힌 한 줄»로는 보여야 한다 (열지 않으면 자리 안 차지)."""
+    for bid in ("wlDecoBox", "secDecoBox", "shopDecoBox"):
+        assert f'class="opt easy-keep" id="{bid}"' in HTML, bid
+    assert "box.className = 'opt easy-keep'; box.id = 'decoBox_' + key;" in JS,         "편집·AI생성의 동적 상자도"
+    # 숨김 규칙 자체는 그대로 산다 (다른 접힘상자 다이어트 유지)
+    assert "details:not(.easy-keep) { display: none; }" in HTML
 
 
 # ── 화면이 여전히 성한가 ───────────────────────────────────────

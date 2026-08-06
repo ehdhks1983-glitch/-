@@ -80,6 +80,12 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.47.1 (95) 꾸미기가 쉬운 모드에서도 ──
+for t in 'class="opt easy-keep" id="wlDecoBox"' \
+         "box.className = 'opt easy-keep'; box.id = 'decoBox_' + key;"; do
+  has "$W" "$t"; done
+echo "  ✔ v1.47.1 (꾸미기 easy-keep)"
+
 # ── v1.47 (94) 자막 계속 움직임 ──
 for t in "def _motion_tags(" "fscx106" "frz1.6"; do
   has "cutdaejang/core/render_engine/ass_writer.py" "$t"; done

@@ -40,7 +40,7 @@ def _render(sub_style, text, hl=""):
 
 
 def test_version():
-    assert __version__ == "1.47.0"
+    assert __version__ == "1.47.1"
 
 
 # ── 🖋 손글씨 팝 (86) ───────────────────────────────────────────
