@@ -80,6 +80,14 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.46 (91·92·93) 클립 챌린지·링크 궁합·사진 추가 ──
+for t in "#오늘클립챌린지" "카운팅 3조건" "뉴스·블로그·오픈톡 정보태그는 미션 제외" \
+         "function renderWlGrid" "function addWlPhotos" "_wlMergePhotos" \
+         "📁 사진 추가 (여러 장)" "사진을 못 가져오는 곳이에요" \
+         "짧은 설명글만"; do has "$W" "$t"; done
+hasnt "$W" "if(window._weblink) window._weblink.images = paths;"  # 덮어쓰기 잔재
+echo "  ✔ v1.46 (클립 챌린지·링크 궁합·사진 추가)"
+
 # ── v1.45 (88·89·90) 병기·강조 스위치·받기 허브 ──
 for t in "def translate_lines(" "def finalize(" "sub_lang" "highlight_on" \
          "«강조» 표식은 번역에 방해만 된다" ; do
