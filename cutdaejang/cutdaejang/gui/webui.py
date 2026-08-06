@@ -2343,10 +2343,24 @@ def _kit_text(kit: dict, title: str) -> str:
                   ig["caption"], " ".join(f"#{t}" for t in ig.get("hashtags", []))]
     nc = kit.get("naver_clip") or {}
     if nc.get("title"):
+        # 📌 v1.46 (목록 91) — 「오늘 클립 챌린지」는 ① #오늘클립챌린지 ② 내용에
+        #   맞는 «인정» 정보태그 ③ 전체 공개, 셋을 다 채워야 자동 카운팅된다
+        #   (회원님이 정리해 주신 규칙). 정보태그는 업로드 화면에서만 고를 수 있어
+        #   여기서는 태그 자동 포함 + 체크리스트로 안내한다.
         lines += ["", "【네이버 클립】 올리기 → https://clipcreators.naver.com",
                   "(제목은 「검색어 + 붙잡는 한마디」 · 태그 5~7개 · 제목과 안 겹치게)",
                   f"제목: {nc['title']}",
-                  "태그: " + " ".join(f"#{t}" for t in nc.get("tags", []))]
+                  "태그: " + " ".join(f"#{t}" for t in nc.get("tags", []))
+                  + " #오늘클립챌린지",
+                  "▶ 「오늘 클립 챌린지」 카운팅 3조건 — 하나라도 빠지면 미션 숫자가 안 올라가요",
+                  "  ① 본문에 #오늘클립챌린지 (위 태그 줄에 넣어뒀어요)",
+                  "  ② 업로드 화면에서 영상 내용과 정확히 맞는 «정보태그» 선택",
+                  "     (장소·쇼핑·영화·방송·스포츠 등만 인정 — 뉴스·블로그·오픈톡 정보태그는 미션 제외)",
+                  "  ③ 전체 공개로 발행",
+                  "  ※ 맞는 정보태그가 없는 정보성·뉴스형 영상은 일반 클립으로 올리세요",
+                  "     — 관계없는 태그를 억지로 붙이면 검수에서 제외될 수 있어요",
+                  "  ※ 반영 확인: 모바일 앱 수익 → 미션 → 오늘 클립 챌린지 → 활동 내역",
+                  "  ※ 네이버 미션 규칙은 바뀔 수 있어요 — 미션 공지를 한 번 확인하세요"]
     th = kit.get("threads") or {}
     if th.get("post"):
         lines += ["", "【스레드】 올리기 → https://www.threads.com",
@@ -7118,9 +7132,12 @@ body.easy #easyBar { display: block; }
       <button class="ghost" onclick="showHome(event)">← 처음으로</button>
       <b>🔗 블로그 글로 만들기</b>
     </div>
-    <div class="hint">내가 쓴 블로그 글(상품 소개·후기) 주소를 넣으면 글 속 <b>사진</b>과 <b>대본</b>을 가져와
-      AI 목소리 내레이션 영상으로 만들어요. ⚠ 쿠팡·네이버쇼핑 <b>상품 페이지</b> 주소는 쇼핑몰이 막아서 안 돼요
-      — 꼭 <b>상품을 소개한 블로그 글</b> 주소를 넣어주세요 (네이버 블로그 권장).</div>
+    <div class="hint">내가 쓴 블로그 글 주소를 넣으면 글 속 <b>사진</b>과 <b>대본</b>을 가져와
+      AI 목소리 내레이션 영상으로 만들어요. 링크마다 가져올 수 있는 게 달라요:<br>
+      ◎ <b>네이버 블로그</b> — 사진·본문을 다 가져와요 (가장 잘 맞아요)<br>
+      △ <b>유튜브 링크</b> — 짧은 설명글만 와요 · 사진 0장 (아래 <b>[📁 사진 추가]</b>로 직접 넣어주세요)<br>
+      ✕ <b>뉴스·쿠팡·네이버쇼핑</b> — 프로그램 긁기를 막는 곳이 많아요 → 안 되면 글을 복사해
+      아래 「직접 붙여넣기」 + [📁 사진 추가]로 만들면 됩니다</div>
     <div class="steplabel"><span class="stepnum">1</span>블로그 글 주소
       <button class="ghost wipe" style="margin-left:8px;padding:2px 10px" onclick="resetWeblinkCard(event)" title="주소·사진·대본·훅을 한 번에 비우고 처음부터">🧹 전체 초기화</button></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -7146,6 +7163,10 @@ body.easy #easyBar { display: block; }
     </details>
     <div id="wlPreview" class="hidden">
       <div class="steplabel"><span class="stepnum">2</span>사진 확인 <span class="hint">— 체크를 끄면 그 사진은 영상에서 빠져요 (순서 = 문장 순서)</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 6px">
+        <button class="ghost" style="width:auto" onclick="addWlPhotos(event)">📁 사진 추가 (여러 장)</button>
+        <span class="hint" style="align-self:center">— 사진을 못 긁어온 사이트(유튜브·뉴스 등)거나 더 넣고 싶을 때 · Ctrl/Shift로 여러 장</span>
+      </div>
       <div id="wlGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px"></div>
       <div class="steplabel"><span class="stepnum">3</span>대본 확인 <span class="hint">— 한 줄 = 자막 한 줄 = 사진 한 장 타이밍. AI 목소리가 읽어요</span></div>
       <textarea id="wlScript" style="min-height:110px" oninput="updateEta()"></textarea>
@@ -12711,7 +12732,7 @@ async function pickWlPhotos(ev){
     if(paths.length){
       window._wlLocalPhotos = paths;
       $('wlPhotoCnt').textContent = '📷 사진 ' + paths.length + '장 선택됨';
-      if(window._weblink) window._weblink.images = paths;
+      _wlMergePhotos(paths);   // v1.46 (목록 93) — 긁어온 사진을 덮어쓰지 않고 합친다
     }
   } catch(e){ alert('선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
   finally { btn.disabled = false; }
@@ -12814,27 +12835,68 @@ function initWeblinkCard(){
   cloneSelect('editToneSel', 'wlToneSel');
 }
 
-function applyWeblink(r){
-  const imgs = r.images || [], lines = r.script_lines || [];
-  // 🖼 사진 미리보기 그리드 — 체크 해제 = 영상에서 제외 (v0.79)
-  const grid = $('wlGrid');
-  if(grid){
-    grid.innerHTML = '';
-    (r.previews || []).forEach((u, i) => {
-      const lab = document.createElement('label');
-      lab.style.cssText = 'display:block;cursor:pointer;background:#0f1117;border:1px solid #2c3347;border-radius:10px;padding:6px';
+// 🖼 v1.46 (목록 93) — 그리드를 함수로: 긁어온 사진(미리보기 有)과 내가 추가한
+//   사진(미리보기 無 → 📁 이름표)을 한 판에서 같은 번호 체계로 그린다.
+//   체크박스 data-i가 images 배열 번호와 1:1이라 만들기 페이로드가 그대로 맞는다.
+function renderWlGrid(){
+  const r = window._weblink || {};
+  const grid = $('wlGrid'); if(!grid) return;
+  grid.innerHTML = '';
+  (r.images || []).forEach(function(p, i){
+    const u = (r.previews || [])[i] || '';
+    const lab = document.createElement('label');
+    lab.style.cssText = 'display:block;cursor:pointer;background:#0f1117;border:1px solid #2c3347;border-radius:10px;padding:6px';
+    if(u){
       const img = document.createElement('img');
       img.src = u; img.loading = 'lazy';
       img.style.cssText = 'width:100%;height:110px;object-fit:cover;border-radius:6px;display:block';
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px;color:#cdd3e0';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox'; cb.checked = true; cb.dataset.i = i;
-      row.appendChild(cb); row.appendChild(document.createTextNode((i + 1) + '번'));
-      lab.appendChild(img); lab.appendChild(row);
-      grid.appendChild(lab);
-    });
-  }
+      lab.appendChild(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.style.cssText = 'width:100%;height:110px;border-radius:6px;background:#1a2030;display:flex;align-items:center;justify-content:center;text-align:center;font-size:11px;color:#9db8ff;padding:6px;overflow:hidden';
+      ph.textContent = '📁 ' + (String(p).split('/').pop().split(String.fromCharCode(92)).pop() || '내 사진');
+      lab.appendChild(ph);
+    }
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px;color:#cdd3e0';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = true; cb.dataset.i = i;
+    row.appendChild(cb); row.appendChild(document.createTextNode((i + 1) + '번'));
+    lab.appendChild(row);
+    grid.appendChild(lab);
+  });
+}
+function _wlMergePhotos(paths){
+  window._weblink = window._weblink || {images: [], previews: [], script_lines: []};
+  const r = window._weblink;
+  r.images = r.images || []; r.previews = r.previews || [];
+  const seen = new Set(r.images); let added = 0;
+  paths.forEach(function(p){
+    if(seen.has(p)) return;
+    seen.add(p); r.images.push(p); r.previews.push(''); added++;
+  });
+  renderWlGrid();
+  const pv = $('wlPreview'); if(pv) pv.classList.remove('hidden');
+  return added;
+}
+async function addWlPhotos(ev){
+  ev.preventDefault();
+  const btn = ev.target; btn.disabled = true;
+  try{
+    const data = await (await fetch('/api/pick_file', {method:'POST',
+      body: JSON.stringify({kind: 'images'})})).json();
+    if(data.error){ alert(data.error + PASTE_TIP); return; }
+    const paths = (data.path || '').split(';').filter(Boolean);
+    if(!paths.length) return;
+    const added = _wlMergePhotos(paths);
+    uiBanner('📁 사진 ' + added + '장을 추가했어요 — 문장 순서에 맞춰 들어가요 (체크로 빼기 가능)');
+  } catch(e){ alert('선택 창을 열 수 없습니다: ' + e + PASTE_TIP); }
+  finally { btn.disabled = false; }
+}
+function applyWeblink(r){
+  const imgs = r.images || [], lines = r.script_lines || [];
+  window._weblink = r;                     // 그리드가 이걸 읽는다 (v1.46)
+  renderWlGrid();
   if($('wlScript')) $('wlScript').value = lines.join('\\n');
   if($('wlHook')) $('wlHook').value = r.hook || r.title || '';
   const pv = $('wlPreview'); if(pv) pv.classList.remove('hidden');
@@ -12843,6 +12905,7 @@ function applyWeblink(r){
     let msg = '✅ <b>사진 ' + imgs.length + '장 · 대본 ' + lines.length + '문장</b>을 가져왔어요 — 아래에서 확인하고 [🎬 영상 만들기]를 누르세요.';
     if((r.links||[]).length) msg += ' 🛒 글에서 상품 링크도 찾았어요 — [📇 제품 프로필 저장]을 누르면 기억해 둬요.';
     (r.notes||[]).forEach(n => { msg += '<br>ℹ ' + n; });
+    if(!imgs.length) msg += '<br>📁 <b>사진을 못 가져오는 곳이에요</b> — 위 [📁 사진 추가]로 PC에 저장한 사진을 넣어주세요.';
     h.innerHTML = msg;
   }
   const pb = $('weblinkProdBtn'); if(pb) pb.classList.remove('hidden');
