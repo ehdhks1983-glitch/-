@@ -80,6 +80,30 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.47 (94) 자막 계속 움직임 ──
+for t in "def _motion_tags(" "fscx106" "frz1.6"; do
+  has "cutdaejang/core/render_engine/ass_writer.py" "$t"; done
+has "cutdaejang/core/orchestrator.py" 'motion=sub.get("motion", "none")'
+for t in 'id="setSubMotion"' "qd-motion" "pvPulse" "pvWiggle" "떠 있는 내내"; do
+  has "$W" "$t"; done
+# 실동작: 6초 두근 → \t 사슬이 끝까지 + 원위치 마감
+python3 - "$U" <<'PYEOF'
+import re, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+from cutdaejang.spec import TimelineSpec, Canvas, Style, Subtitle
+from cutdaejang.core.render_engine import ass_writer as aw
+p = tempfile.mktemp(suffix=".ass")
+aw.write_ass(TimelineSpec(canvas=Canvas(1080,1920,30), hook="제목",
+             subtitles=[Subtitle(text="움직임", start_us=0, end_us=6*10**6)],
+             style=Style(motion="pulse"), duration_us=6*10**6), p)
+d = [l for l in open(p, encoding="utf-8").read().splitlines()
+     if l.startswith("Dialogue") and ",Default," in l][0]
+assert d.count("\\t(") >= 8 and "\\fscx106" in d
+assert "\\fscx100\\fscy100" in d.rstrip().split("\\t(")[-1]
+print("  ✔ 두근 실렌더 (배포본)")
+PYEOF
+echo "  ✔ v1.47 (자막 계속 움직임)"
+
 # ── v1.46 (91·92·93) 클립 챌린지·링크 궁합·사진 추가 ──
 for t in "#오늘클립챌린지" "카운팅 3조건" "뉴스·블로그·오픈톡 정보태그는 미션 제외" \
          "function renderWlGrid" "function addWlPhotos" "_wlMergePhotos" \
