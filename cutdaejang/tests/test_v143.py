@@ -28,7 +28,7 @@ VIS = re.sub(r"<!--.*?-->", "", VIS, flags=re.S)
 
 
 def test_version():
-    assert __version__ == "1.45.0"
+    assert __version__ == "1.46.0"
 
 
 # ── ① 처음 설치는 쉬운 모드 ─────────────────────────────────────
