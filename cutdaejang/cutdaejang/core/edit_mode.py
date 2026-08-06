@@ -1163,6 +1163,31 @@ def retime_narration(clips: List, subtitles: List[Subtitle], total_us: int, tmp_
     #   우리가 정한 값이 된다. 안 빼면 0.30초로 적어 놓고 0.40초가 들린다.
     edges = [ff.edge_silence_us(c) for c in clips]
 
+    # 🔇 v1.47.2 (목록 97) — 가장자리 무음이 60ms(클릭 방지 패딩 50ms + 여유)를
+    #   넘으면 넘치는 만큼 «물리적으로» 잘라낸다. v1.31부터 간격 계산은 무음을
+    #   감안했지만 **자막 창은 클립 통째 길이**라, 제공자가 앞뒤에 붙여 보내는
+    #   침묵(일레븐랩스 등 100~250ms)만큼 자막이 목소리보다 먼저 뜨고 늦게
+    #   사라졌다 — 회원님 48차 "살짝 안 맞음". 잘라 두면 배치 시각·자막 창·
+    #   들리는 구간이 하나로 떨어진다. 60ms 이하는 안 건드린다 (의도된 패딩,
+    #   v0.46.1 클릭 방지) — 얌전한 클립은 예전과 100% 동일하게 동작한다.
+    _keep = 60_000
+    if any(a > _keep + 20_000 or b > _keep + 20_000 for a, b in edges):
+        tdir = Path(tmp_dir)
+        tdir.mkdir(parents=True, exist_ok=True)
+        for i in range(n):
+            lead, tail = edges[i]
+            cut_a = max(0, lead - _keep)
+            cut_b = max(0, tail - _keep)
+            if cut_a + cut_b < 20_000:          # 20ms 미만은 잴 때 소음 수준
+                continue
+            o = tdir / f"nar_tight_{i:03d}.wav"
+            ff.run([ff.ffmpeg_bin(), "-y", "-v", "error", "-i", clips[i],
+                    "-af", f"atrim={cut_a / 1e6:.3f}:{(durs[i] - cut_b) / 1e6:.3f}",
+                    "-c:a", "pcm_s16le", str(o)])
+            clips[i] = str(o)
+            durs[i] = ff.probe_duration_us(str(o))
+            edges[i] = ff.edge_silence_us(str(o))
+
     def _pad(i: int) -> int:
         """i번과 i+1번 사이에 **이미 들어 있는** 무음 (뒤쪽 + 다음 앞쪽)."""
         return edges[i][1] + (edges[i + 1][0] if i + 1 < n else 0)

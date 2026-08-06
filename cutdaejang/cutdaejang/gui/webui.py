@@ -7922,7 +7922,7 @@ body.easy #easyBar { display: block; }
   </div>
 
   <div class="card drawer hidden" id="dlCard">
-  <div class="drawer-head"><b>⬇ 무료 자료 받기</b><span class="drawer-now"></span><button class="ghost" onclick="closeDrawer(event)" title="닫으면 보던 자리 그대로예요">✕ 닫기</button></div>
+  <div class="drawer-head"><b>⬇ 무료 자료 받기</b><button class="ghost" onclick="closeDrawer(event)" title="닫으면 보던 자리 그대로예요">✕ 닫기</button></div>
     <div class="backrow"><b>⬇ 무료 자료 받기</b> <span class="hint">— 한 번만 받으면 계속 쓸 수 있어요 (전부 무료·상업 사용 가능)</span></div>
     <div style="border:1px solid #2c3350;border-radius:12px;padding:12px;margin-top:10px">
       <div style="font-weight:700">🔤 글씨체 10종 <span class="hint" id="dlFontsState">— 확인 중…</span></div>
@@ -10354,9 +10354,10 @@ function _drawerNowLine(){
 }
 function closeDrawer(ev){
   if(ev) ev.preventDefault();
-  ['settingsCard','productCard','apiCard'].forEach(id => {
-    const c = $(id); if(c) c.classList.add('hidden');
-  });
+  // v1.47.2 (목록 96) — 서랍을 이름으로 나열하면 새 서랍을 또 빠뜨린다:
+  //   v1.45의 ⬇ 받기(dlCard)가 목록에 없어 ✕ 닫기가 안 먹었다.
+  //   drawer 클래스를 단 카드 전부를 닫는다 — 앞으로 서랍이 늘어도 그대로.
+  document.querySelectorAll('.card.drawer').forEach(c => c.classList.add('hidden'));
   const b = $('drawerBack'); if(b) b.classList.add('hidden');
   window._drawer = null;
 }
