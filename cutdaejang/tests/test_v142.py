@@ -30,7 +30,7 @@ POLL = JS.split("async function aiClipGo(")[1].split("\nasync function ")[0]
 
 
 def test_version():
-    assert __version__ == "1.47.1"
+    assert __version__ == "1.47.2"
 
 
 # ── ① 만드는지 안 만드는지 ──────────────────────────────────────

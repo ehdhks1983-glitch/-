@@ -21,7 +21,7 @@ from cutdaejang.gui import webui
 
 
 def test_version():
-    assert __version__ == "1.47.1"
+    assert __version__ == "1.47.2"
 
 
 def test_easy_mode_css_and_toggle_wired():

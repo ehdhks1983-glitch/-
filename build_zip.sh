@@ -80,6 +80,13 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.47.2 (96·97) 받기 서랍 닫기·싱크 트림 ──
+has "$W" "querySelectorAll('.card.drawer')"
+hasnt "$W" "['settingsCard','productCard','apiCard']"
+has "cutdaejang/core/edit_mode.py" "nar_tight_"
+has "cutdaejang/core/edit_mode.py" "_keep = 60_000"
+echo "  ✔ v1.47.2 (받기 닫기·싱크 트림)"
+
 # ── v1.47.1 (95) 꾸미기가 쉬운 모드에서도 ──
 for t in 'class="opt easy-keep" id="wlDecoBox"' \
          "box.className = 'opt easy-keep'; box.id = 'decoBox_' + key;"; do

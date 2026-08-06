@@ -12,6 +12,7 @@
 
 import re
 import tempfile
+from pathlib import Path
 
 from cutdaejang import __version__
 from cutdaejang.core.orchestrator import build_style
@@ -39,7 +40,7 @@ def _default_events(txt):
 
 
 def test_version():
-    assert __version__ == "1.47.1"
+    assert __version__ == "1.47.2"
 
 
 # ── 렌더 — \t 사슬 ──────────────────────────────────────────────
@@ -147,6 +148,58 @@ def test_deco_box_survives_easy_mode():
     assert "box.className = 'opt easy-keep'; box.id = 'decoBox_' + key;" in JS,         "편집·AI생성의 동적 상자도"
     # 숨김 규칙 자체는 그대로 산다 (다른 접힘상자 다이어트 유지)
     assert "details:not(.easy-keep) { display: none; }" in HTML
+
+
+# ── v1.47.2 (96·97) 받기 서랍 닫기 + 내레이션·자막 어긋남 ────────
+def test_close_drawer_closes_every_drawer():
+    """🔴 회원님 48차 — 받기 서랍 ✕가 안 먹었다. 이름 나열이 아니라
+    drawer 클래스 전부를 닫아야 새 서랍이 생겨도 또 안 빠진다."""
+    assert "querySelectorAll('.card.drawer')" in JS.split("function closeDrawer(")[1].split("\nfunction ")[0]
+    assert "['settingsCard','productCard','apiCard']" not in JS, "이름 나열 잔재"
+    assert 'class="card drawer hidden" id="dlCard"' in HTML, "받기 서랍도 drawer 클래스"
+
+
+def test_dl_drawer_has_no_settings_tagline():
+    """받기 서랍 머리에 «여기 값은 모든 영상의 기본값…»(설정 전용)이 떴었다."""
+    seg = HTML.split('id="dlCard"')[1].split('id="apiCard"')[0]
+    assert "drawer-now" not in seg
+
+
+def test_retime_trims_big_edge_silence_but_keeps_click_guard():
+    """🔴 회원님 48차 «살짝 안 맞음» — 제공자가 붙인 앞뒤 침묵만큼 자막이
+    목소리보다 먼저 뜨고 늦게 사라졌다. 60ms(클릭 방지 50ms+여유)를 넘는
+    무음만 물리 트림 — 얌전한 클립은 예전과 100% 동일."""
+    import shutil
+
+    import pytest as _pt
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        _pt.skip("ffmpeg 필요")
+    from cutdaejang.core import edit_mode
+    from cutdaejang.utils import ffmpeg as ff
+    td = Path(tempfile.mkdtemp())
+
+    def mk(name, lead_s, tail_s):
+        p = td / name
+        ff.run([ff.ffmpeg_bin(), "-y", "-v", "error",
+                "-f", "lavfi", "-i", "sine=frequency=500:duration=0.6",
+                "-af", f"adelay={int(lead_s * 1000)}|{int(lead_s * 1000)},apad=pad_dur={tail_s}",
+                "-ar", "24000", "-c:a", "pcm_s16le", str(p)])
+        return str(p)
+
+    noisy = mk("pad_big.wav", 0.30, 0.25)     # 일레븐식 큰 패딩
+    tidy = mk("pad_ok.wav", 0.05, 0.05)       # 의도된 클릭 방지 50ms
+    subs = [Subtitle(text="첫 문장", start_us=0, end_us=1),
+            Subtitle(text="둘째 문장", start_us=0, end_us=1)]
+    out_subs, out_clips, _ = edit_mode.retime_narration(
+        [noisy, tidy], subs, 30_000_000, td / "tmp", fit="freeze")
+    assert "nar_tight" in out_clips[0], "큰 패딩은 잘라낸 사본으로"
+    d0 = ff.probe_duration_us(out_clips[0])
+    assert abs(d0 - 720_000) < 60_000, f"0.6s 발화 + 양쪽 60ms ≈ {d0}"
+    e0 = ff.edge_silence_us(out_clips[0])
+    assert e0[0] <= 80_000 and e0[1] <= 80_000, f"남은 가장자리 {e0}"
+    assert out_clips[1] == tidy, "얌전한 클립은 파일 그대로 (무변화)"
+    # 자막 창 = 잘라낸 클립 길이 → 배치 시각 = 자막 시각 = 들리는 시각
+    assert out_subs[0].end_us - out_subs[0].start_us == d0
 
 
 # ── 화면이 여전히 성한가 ───────────────────────────────────────
