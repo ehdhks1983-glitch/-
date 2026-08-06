@@ -4456,6 +4456,8 @@ class _Handler(BaseHTTPRequestHandler):
                 safe.setdefault("subtitle", {})["text_cards"] = sub["text_cards"]
             if sub.get("sub_lang") in ("", "en", "ja", "zh"):   # 🌏 병기 (v1.45)
                 safe.setdefault("subtitle", {})["sub_lang"] = sub["sub_lang"]
+            if sub.get("motion") in ("none", "pulse", "wiggle"):  # 💓 움직임 (v1.47)
+                safe.setdefault("subtitle", {})["motion"] = sub["motion"]
             if isinstance(sub.get("highlight_on"), bool):       # 🎨 강조 스위치 (v1.45)
                 safe.setdefault("subtitle", {})["highlight_on"] = sub["highlight_on"]
             bgm_p = patch.get("bgm") or {}
@@ -6010,6 +6012,9 @@ _HTML = """<!doctype html>
   @keyframes pvPop { from { transform:scale(.86); } to { transform:none; } }
   @keyframes pvFadeIn { from { opacity:0; } to { opacity:1; } }
   @keyframes pvType { from { clip-path:inset(0 100% 0 0); } to { clip-path:inset(0 0 0 0); } }
+  @keyframes pvPulse { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.06); } }
+  @keyframes pvWiggle { 0%, 100% { transform:rotate(0); } 25% { transform:rotate(1.6deg); }
+    75% { transform:rotate(-1.6deg); } }
   .fx-demo { display:inline-flex; width:64px; height:38px; border-radius:6px; flex:none;
     background:linear-gradient(135deg,#31406e,#7a4a76 60%,#b8875a);
     align-items:center; justify-content:center; overflow:hidden; }
@@ -8058,6 +8063,13 @@ body.easy #easyBar { display: block; }
           <option value="karaoke">카라오케 — 말하는 단어가 차오름 (받아쓴 자막에서 정확)</option>
           <option value="word">✨ 단어별 — 말하는 단어가 하나씩 나타남 (2026 쇼츠 유행)</option>
         </select></div>
+      <div class="chk" style="gap:8px"><span>자막 움직임 <span class="hint">(떠 있는 내내)</span></span>
+        <select id="setSubMotion" style="width:auto;padding:6px 8px">
+          <option value="none">없음 — 가만히</option>
+          <option value="pulse">💓 두근 — 커졌다 작아졌다</option>
+          <option value="wiggle">🫨 갸웃 — 살짝 기울었다 돌아왔다</option>
+        </select>
+        <span class="hint">— 등장 효과는 «나타날 때» 한 번, 이건 자막이 떠 있는 동안 계속</span></div>
       <div class="chk" style="gap:8px"><span>🌏 번역 병기 자막</span>
         <select id="setSubLang" style="width:auto;padding:6px 8px">
           <option value="">없음</option>
@@ -11170,6 +11182,8 @@ function markQuickDeco(){
   });
   const slang = (($('setSubLang')||{}).value) || '';
   document.querySelectorAll('.qd-lang').forEach(sel => { sel.value = slang; });
+  const smot = (($('setSubMotion')||{}).value) || 'none';
+  document.querySelectorAll('.qd-motion').forEach(sel => { sel.value = smot; });
   (window._DECO_CHK || _DECO_CHK).forEach(function(x){
     const v = (($(x[2])||{}).checked);
     document.querySelectorAll('.' + x[0]).forEach(c => { c.checked = !!v; });
@@ -11356,6 +11370,11 @@ function _pvApplyAnim(fr){
   else if(anim === 'word') parts.push('pvType 1.2s steps(6, end)');
   else if(anim === 'karaoke') parts.push('pvType 1.2s linear');
   if(fade) parts.push('pvFadeIn .45s ease-out');
+  // 💓 계속 움직임 (v1.47) — 등장이 끝난 0.4s 뒤부터 무한 반복 (실제 렌더와 같은 규칙)
+  const mm = box && box.querySelector('.qd-motion');
+  const motion = (mm && mm.value) || ((($('setSubMotion')||{}).value) || 'none');
+  if(motion === 'pulse') parts.push('pvPulse 1.1s ease-in-out .4s infinite');
+  else if(motion === 'wiggle') parts.push('pvWiggle 1.4s ease-in-out .4s infinite');
   el.style.animation = parts.join(', ');
 }
 function pvReplay(ev){
@@ -11464,6 +11483,21 @@ function _decoEffectRow(){
       maybeOfferLangFont(lsel.value);
     } else uiBanner('🌏 병기 자막을 껐어요');
   });
+  // 💓 자막 움직임 (v1.47 목록 94) — 역시 설정 서랍 셀렉트를 복사
+  const mrow = document.createElement('span');
+  mrow.style.cssText = 'display:flex;align-items:center;gap:4px;margin-left:8px';
+  mrow.innerHTML = '<span>움직임</span><select class="qd-motion" style="width:auto;padding:4px 8px"></select>';
+  d.appendChild(mrow);
+  const msrc = $('setSubMotion'), msel = mrow.querySelector('.qd-motion');
+  if(msrc) [...msrc.options].forEach(o => msel.add(new Option(o.textContent.split(' — ')[0], o.value)));
+  msel.addEventListener('change', async () => {
+    await quickSet({subtitle: {motion: msel.value}});
+    if(msrc) msrc.value = msel.value;
+    markQuickDeco(); refreshDecoSummaries();
+    uiBanner(msel.value === 'none' ? '자막 움직임을 껐어요'
+      : '💓 자막 움직임: ' + (msel.options[msel.selectedIndex]||{}).textContent
+        + ' — 자막이 떠 있는 내내 움직여요');
+  });
   sel.addEventListener('change', async () => {
     await quickSet({subtitle: {anim: sel.value}});
     if(src) src.value = sel.value;
@@ -11569,6 +11603,7 @@ function fillSettings(s){
   $('setWrapChars').value = s.subtitle.wrap_chars != null ? s.subtitle.wrap_chars : 16;
   $('setSubAnim').value = s.subtitle.anim || 'none';
   $('setSubLang').value = s.subtitle.sub_lang || '';            // 🌏 병기 (v1.45)
+  $('setSubMotion').value = s.subtitle.motion || 'none';        // 💓 움직임 (v1.47)
   $('setHl').checked = s.subtitle.highlight_on !== false;       // 🎨 강조 (v1.45)
   $('setFade').checked = !!s.subtitle.fade;
   $('setTextCards').checked = s.subtitle.text_cards !== false;   // 🅰 v1.07 (기본 켬)
@@ -11708,6 +11743,7 @@ async function saveSettings(){
                wrap_chars: numOr('setWrapChars', sub0.wrap_chars != null ? sub0.wrap_chars : 16, 0, 60),
                anim: $('setSubAnim').value,
                sub_lang: $('setSubLang').value,
+               motion: $('setSubMotion').value,
                highlight_on: $('setHl').checked,
                text_cards: $('setTextCards').checked,
                card_variety: $('setCardVariety').checked,

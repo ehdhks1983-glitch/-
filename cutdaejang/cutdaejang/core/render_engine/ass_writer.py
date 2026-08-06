@@ -426,6 +426,34 @@ def _karaoke_body(sub, style, pop_color: str = "") -> str:
     return "".join(parts)
 
 
+def _motion_tags(dur_ms: int, motion: str) -> str:
+    """💓 자막 «계속» 움직임 (v1.47 목록 94) — 등장 뒤에도 끝까지 반복.
+
+    회원님 46차: "30초라고 했을 때 30초가 동일한 게 아니고 글씨가 커졌다가
+    작아졌다가". ASS에는 반복 애니메이션이 없어 \\t 구간을 사슬로 잇는다.
+    등장 효과(팝 130ms 등)와 속성이 겹치지 않게 400ms부터 시작하고, 마지막은
+    원위치로 돌려 끝 프레임이 어정쩡하게 굳지 않게 한다. 30초 두근이면
+    \\t 약 54개 — libass에 부담 없는 수준. 띠(band)는 유령 레이어가 태그를
+    걷어내므로 박스는 가만히 있고 글자만 움직인다.
+    """
+    if motion == "pulse":     # 💓 두근 — 커졌다 작아졌다
+        a, b, neutral, half = "\\fscx106\\fscy106", "\\fscx100\\fscy100", "\\fscx100\\fscy100", 550
+    elif motion == "wiggle":  # 🫨 갸웃 — 살짝 기울었다 돌아왔다
+        a, b, neutral, half = "\\frz1.6", "\\frz-1.6", "\\frz0", 700
+    else:
+        return ""
+    start = 400
+    if dur_ms < start + 2 * half:     # 너무 짧으면 움직일 새가 없다 — 생략
+        return ""
+    out, t, flip = [], start, True
+    while t + half <= dur_ms - half:
+        out.append(f"\\t({t},{t + half},{a if flip else b})")
+        flip = not flip
+        t += half
+    out.append(f"\\t({t},{min(t + half, dur_ms)},{neutral})")
+    return "{" + "".join(out) + "}"
+
+
 def _line_rotate_body(sub, style, colors) -> str:
     """🖋 줄마다 색 번갈아 (v1.44 손글씨 팝) — 참고 릴스의 «윗줄 노랑/아랫줄 연두».
 
@@ -936,6 +964,10 @@ def write_ass(spec: TimelineSpec, out_path) -> str:
         body = dialogue_text(s, style, pop_color=pop)
         if ss.get("blur"):  # 네온 자막 — 외곽선 글로우 (띠 없음 프리셋에서만)
             body = "{\\blur" + str(max(2, sc(ss["blur"]))) + "}" + body
+        mt = _motion_tags(int((s.end_us - s.start_us) // 1000),
+                          getattr(style, "motion", "none") or "none")
+        if mt:  # 💓 계속 움직임 (v1.47) — 등장·강조·단어별 어느 몸통과도 겹치지 않는다
+            body = mt + body
         lines += band_event_lines(
             "Default", us_to_ass(s.start_us), us_to_ass(s.end_us),
             body,

@@ -85,6 +85,8 @@ class Style:
     position: str = "bottom"   # "bottom" | "center" | "top"
     # 🌏 v1.45 (목록 88) — 병기 언어("en"|"ja"|"zh") — 일·중은 전용 글씨체 선택 근거
     sub_lang: str = ""
+    # 💓 v1.47 (목록 94) — 자막 «계속» 움직임: none | pulse(두근) | wiggle(갸웃)
+    motion: str = "none"
     gradient_overlay: bool = True
     primary_color: str = "#FFFFFF"
     outline_color: str = "#000000"

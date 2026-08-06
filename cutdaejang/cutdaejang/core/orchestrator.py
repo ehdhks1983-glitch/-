@@ -131,6 +131,7 @@ def build_style(settings: dict, orientation: str = "shorts") -> Style:
         hook_band=sub.get("hook_band", True),
         wrap_chars=sub.get("wrap_chars", 16),
         anim=anim,
+        motion=sub.get("motion", "none"),   # 💓 자막 계속 움직임 (v1.47 목록 94)
         hook_style=sub.get("hook_style", "기본"),
         sub_style=sub_style,
         tone=settings["bg"].get("tone", "기본"),
