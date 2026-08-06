@@ -44,7 +44,7 @@ BADKEY = ('HTTP 400: {"error":{"message":"API key not valid. Please pass a valid
 
 
 def test_version():
-    assert __version__ == "1.46.0"
+    assert __version__ == "1.47.0"
 
 
 # ── 목록 52: 실패 이유를 갈라 본다 ─────────────────────────────
