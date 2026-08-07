@@ -4442,6 +4442,13 @@ class _Handler(BaseHTTPRequestHandler):
                      title=f"🎞 {title}", mode="sections", params=params)
             _queue_job(job_id, _run_sections, job_id, params, workdir)  # 📋 작업 큐 (v0.88)
             self._send_json({"job_id": job_id})
+        elif path == "/api/save_license":  # 🔑 정품 코드 등록 (v1.49 목록 99)
+            code = str(params.get("code") or "")
+            from ..core import license as _lic  # noqa: PLC0415
+
+            r = _lic.save_code(code)
+            self._send_json(r if r.get("ok") else {"error": r.get("reason")},
+                            200 if r.get("ok") else 400)
         elif path == "/api/quick_set":   # 🎛 카드 꾸미기 ↔ ⚙설정 연동 저장 (v1.08)
             patch = params.get("patch") or {}
             safe: dict = {}
@@ -5518,6 +5525,14 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001
             return []
 
+    def _state_license(self) -> dict:
+        # 🔑 정품/체험 상태 (v1.49 목록 99) — 화면 잠금·배지의 근거
+        try:
+            from ..core import license as _lic  # noqa: PLC0415
+            return _lic.status()
+        except Exception:  # noqa: BLE001
+            return {"licensed": True, "trial": False}  # 문제 시 잠그지 않는다
+
     def _state_lang_fonts(self) -> dict:
         # 🌏 병기 글씨체 준비 여부 (v1.45 목록 88) — ⬇ 받기 서랍·경고에 쓴다
         try:
@@ -5575,6 +5590,7 @@ class _Handler(BaseHTTPRequestHandler):
             "jobs": jobs,
             "history": history,
             "fonts": self._safe("fonts", self._state_fonts, []),
+            "license": self._safe("license", self._state_license, {}),
             "lang_fonts": self._safe("lang_fonts", self._state_lang_fonts, {}),
             "keys": {
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
@@ -5738,6 +5754,11 @@ def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
     for msg in config.migrate_settings():  # 구버전 설정 1회 승격 (v0.50.1)
         logging.getLogger("cutdaejang").info("설정 업데이트: %s", msg)
     _ensure_queue_worker()   # 📋 작업 큐 워커 (v0.88) — 무거운 작업 순차 실행
+    try:  # 🔑 v1.49 (목록 99) — 첫 실행일 기록 (7일 체험 시작점)
+        from ..core import license as _lic  # noqa: PLC0415
+        _lic.mark_first_run()
+    except Exception:  # noqa: BLE001 — 라이선스 문제로 서버가 안 뜨면 안 된다
+        pass
     httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     httpd.workdir = str(workdir)  # type: ignore[attr-defined]
     return httpd
@@ -5995,6 +6016,15 @@ _HTML = """<!doctype html>
     padding:9px 14px; cursor:pointer; font-weight:800; font-size:15px; line-height:1.2; }
   .stylechip:hover { border-color:#4266d5; }
   .stylechip.sel { border-color:#5b7cfa; box-shadow:0 0 0 2px rgba(91,124,250,.28); }
+  /* 🔑 v1.49 (목록 99) 정품/체험 게이트 */
+  #lockOverlay { position:fixed; inset:0; z-index:9000;
+    background:rgba(9,11,16,.92); backdrop-filter:blur(4px);
+    display:flex; align-items:center; justify-content:center; padding:20px; }
+  .lockbox { background:#141926; border:1px solid #2c3350; border-radius:16px;
+    padding:28px 26px; max-width:420px; width:100%; text-align:center;
+    box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  #trialBar { background:#1c2233; border:1px solid #3a4568; color:#cdd6ea; }
+  body.locked { overflow:hidden; }
   /* ── 📺 v1.44 (목록 87) 꾸미기 미리보기 틀 ── */
   .pvwrap { margin:8px 0 2px; }
   .pvframe { position:relative; width:150px; height:267px; margin:0 auto; border-radius:10px;
@@ -6065,6 +6095,25 @@ body.easy #easyBar { display: block; }
     <button class="ghost" id="topSet" onclick="toggleSettings()">⚙ 설정</button>
   </div>
   <div class="banner hidden" id="envBanner"></div>
+  <!-- 🔑 정품/체험 (v1.49 목록 99) — 체험 배지 + 만료 시 잠금 -->
+  <div class="banner hidden" id="trialBar"></div>
+  <div id="lockOverlay" class="hidden">
+    <div class="lockbox">
+      <div style="font-size:34px">🔒</div>
+      <h2 style="margin:6px 0">무료 체험이 끝났어요</h2>
+      <p class="hint" style="margin:0 0 12px">계속 쓰시려면 <b>정품 코드</b>를 넣어주세요.
+        코드는 구매하신 곳(카페)에서 받을 수 있어요.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+        <input type="text" id="licInput" placeholder="CD-20261231-XXXXXXXXXXXX"
+               style="flex:1;min-width:240px;text-align:center;letter-spacing:1px"
+               onkeydown="if(event.key==='Enter')submitLicense(event)">
+        <button style="width:auto" onclick="submitLicense(event)">정품 등록</button>
+      </div>
+      <div id="licMsg" class="hint" style="margin-top:8px;min-height:18px"></div>
+      <div class="hint" style="margin-top:14px;opacity:.7">
+        프로그램은 계속 켜 두셔도 돼요 — 코드를 넣으면 바로 열립니다.</div>
+    </div>
+  </div>
   <!-- 🔰 v1.43 (목록 85①) — 띠 자체에 [전부 보기] 버튼을 둔다. 위 바는 스크롤하면
        사라지는데 이 띠는 sticky라 항상 보인다 — «없어진 게 아니라 접힌 것»임을
        언제든 풀 수 있어야 한다. -->
@@ -13842,6 +13891,7 @@ async function poll(){
     fillFontSels(state.fonts || []);
     window._langFonts = state.lang_fonts || {};   // 🌏 병기 글씨체 준비 여부 (v1.45)
     refreshDlCard();
+    applyLicense(state.license);                  // 🔑 정품/체험 반영 (v1.49)
     const subF = ((state.settings || {}).subtitle || {}).font || '';
     const hkF = ((state.settings || {}).subtitle || {}).hook_font || '';
     const tiltV = !!((state.settings || {}).subtitle || {}).hook_tilt;
@@ -14190,6 +14240,52 @@ document.addEventListener('keydown', (e) => {
 });
 
 injectFontFaces([]);  // 🔤 번들 프리텐다드 즉시 등록 — 받은 글씨체는 poll의 fillFontSels가 추가 (v0.68)
+// 🔑 정품/체험 (v1.49 목록 99)
+function applyLicense(lic){
+  lic = lic || {};
+  const bar = $('trialBar'), lock = $('lockOverlay');
+  if(lic.licensed){
+    if(bar) bar.classList.add('hidden');
+    if(lock) lock.classList.add('hidden');
+    document.body.classList.remove('locked');
+    return;
+  }
+  if(lic.trial){
+    if(bar){
+      const d = lic.days_left;
+      bar.innerHTML = '🎁 무료 체험 <b>' + d + '일</b> 남았어요 — 계속 쓰시려면 카페에서 받은 <b>정품 코드</b>를 넣어주세요 '
+        + '<button class="ghost" style="width:auto;margin-left:8px;padding:2px 10px" onclick="openLicense(event)">정품 등록</button>';
+      bar.classList.remove('hidden');
+    }
+    if(lock) lock.classList.add('hidden');
+    document.body.classList.remove('locked');
+  } else {                                   // 체험 종료 → 잠금
+    if(bar) bar.classList.add('hidden');
+    if(lock) lock.classList.remove('hidden');
+    document.body.classList.add('locked');
+    const inp = $('licInput'); if(inp) setTimeout(() => inp.focus(), 100);
+  }
+}
+function openLicense(ev){
+  if(ev) ev.preventDefault();
+  const lock = $('lockOverlay'); if(lock) lock.classList.remove('hidden');
+  const inp = $('licInput'); if(inp) setTimeout(() => inp.focus(), 100);
+}
+async function submitLicense(ev){
+  if(ev) ev.preventDefault();
+  const inp = $('licInput'), msg = $('licMsg');
+  const code = (inp.value || '').trim();
+  if(!code){ if(msg) msg.textContent = '코드를 넣어주세요'; return; }
+  if(msg){ msg.style.color = ''; msg.textContent = '확인 중…'; }
+  try{
+    const d = await (await fetch('/api/save_license', {method:'POST',
+      body: JSON.stringify({code: code})})).json();
+    if(d.error){ if(msg){ msg.style.color = '#ff8a8a'; msg.textContent = '❌ ' + d.error; } return; }
+    if(msg){ msg.style.color = '#7fd18a';
+      msg.textContent = '✅ 정품 등록 완료' + (d.expiry ? ' (유효기간 ' + d.expiry + ')' : '') + ' — 감사합니다!'; }
+    setTimeout(() => { applyLicense({licensed: true}); poll(); }, 700);
+  }catch(e){ if(msg){ msg.style.color = '#ff8a8a'; msg.textContent = '확인 실패 — 잠시 후 다시'; } }
+}
 // 📺 꾸미기 미리보기 데이터 — 프리셋 색·구성은 서버(ass_writer)가 진실 (v1.44)
 fetch('/api/deco_presets').then(function(r){ return r.json(); })
   .then(function(d){ window._DECO_PRESETS = d; renderDecoPreview(); })
