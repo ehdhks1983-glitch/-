@@ -58,9 +58,9 @@ def make_code(expiry: str, seed: str) -> str:
 
 
 def _parse(code: str):
-    """코드 → (만료 date, 원문 서명부) 또는 None (형식 불량)."""
+    """코드 → (접두, 만료, 시드, 서명, 만료 date) 또는 None (형식 불량)."""
     parts = (code or "").strip().upper().replace(" ", "").split("-")
-    if len(parts) != 3 or parts[0] != _CODE_PREFIX:
+    if len(parts) != 3 or parts[0] not in (_CODE_PREFIX, "CP"):
         return None
     expiry, tail = parts[1], parts[2]
     if len(expiry) != 8 or not expiry.isdigit() or len(tail) <= _SIG_LEN:
@@ -70,27 +70,79 @@ def _parse(code: str):
         exp_date = datetime.strptime(expiry, "%Y%m%d").date()
     except ValueError:
         return None
-    return expiry, seed, sig, exp_date
+    return parts[0], expiry, seed, sig, exp_date
 
 
-def verify_code(code: str, today: date | None = None) -> dict:
+def verify_code(code: str, today: date | None = None,
+                mc: str | None = None) -> dict:
     """정품 코드 검증 → {"valid", "reason", "expiry"(ISO 또는 "")}.
 
-    valid=True면 today가 만료일 이하다. 서명이 틀리면 valid=False·reason="위조".
+    CD- = 아무 PC나, CP- = 그 고유코드 PC 전용 (v1.50 목록 101 — 기존 봇 방식).
+    valid=True면 today가 만료일 이하다. 서명이 틀리면 valid=False.
     """
     today = today or _today()
     p = _parse(code)
     if not p:
         return {"valid": False, "reason": "형식이 올바르지 않아요 (CD-날짜-코드)",
                 "expiry": ""}
-    expiry, seed, sig, exp_date = p
-    if not hmac.compare_digest(sig, _sign(expiry, seed)):
+    prefix, expiry, seed, sig, exp_date = p
+    if prefix == "CP":
+        want = _sign_pc(expiry, seed, (mc or machine_code()).replace("-", "").upper())
+        if not hmac.compare_digest(sig, want):
+            return {"valid": False,
+                    "reason": ("코드가 이 PC와 맞지 않아요 (오타 또는 다른 PC 코드) — "
+                               f"내 고유코드 {machine_code_pretty(mc)}를 판매자에게 알려주세요"),
+                    "expiry": ""}
+    elif not hmac.compare_digest(sig, _sign(expiry, seed)):
         return {"valid": False, "reason": "코드가 올바르지 않아요 (위조·오타)",
                 "expiry": ""}
     if today > exp_date:
         return {"valid": False, "reason": f"이 코드는 {exp_date.isoformat()}까지였어요",
                 "expiry": exp_date.isoformat()}
     return {"valid": True, "reason": "", "expiry": exp_date.isoformat()}
+
+
+# ── PC 고유코드 (v1.50 목록 101) ────────────────────────────────
+def machine_code() -> str:
+    """이 PC의 고유코드 8자 — 프로그램을 지웠다 깔아도 유지 (기존 봇 방식).
+
+    Windows MachineGuid(윈도우 설치마다 고유)를 해시해 쓰고, 못 읽으면
+    컴퓨터 이름+맥주소로 대신한다. 해시라 개인정보가 드러나지 않는다.
+    """
+    raw = ""
+    if os.name == "nt":
+        try:
+            import winreg  # noqa: PLC0415
+
+            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                               r"SOFTWARE\Microsoft\Cryptography", 0,
+                               winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+            raw = str(winreg.QueryValueEx(k, "MachineGuid")[0])
+        except Exception:  # noqa: BLE001
+            raw = ""
+    if not raw:
+        import platform  # noqa: PLC0415
+        import uuid  # noqa: PLC0415
+        raw = f"{platform.node()}:{uuid.getnode():012x}"
+    h = hashlib.sha256(f"cutdaejang-pc:{raw}".encode()).digest()
+    return base64.b32encode(h).decode("ascii")[:8]
+
+
+def machine_code_pretty(mc: str | None = None) -> str:
+    """화면 표시용 XXXX-XXXX."""
+    mc = (mc or machine_code()).replace("-", "").upper()
+    return f"{mc[:4]}-{mc[4:8]}"
+
+
+def _sign_pc(expiry: str, seed: str, mc: str) -> str:
+    msg = f"{expiry}:{seed}:PC:{mc}".encode()
+    mac = hmac.new(_secret(), msg, hashlib.sha256).digest()
+    return base64.b32encode(mac).decode("ascii").rstrip("=")[:_SIG_LEN]
+
+
+def make_code_pc(expiry: str, seed: str, mc: str) -> str:
+    """PC 묶임 코드 (CP-) — 그 고유코드의 PC에서만 유효."""
+    return f"CP-{expiry}-{seed}{_sign_pc(expiry, seed, mc.replace('-', '').upper())}"
 
 
 # ── 7일 체험 ────────────────────────────────────────────────────

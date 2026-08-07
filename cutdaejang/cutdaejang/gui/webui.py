@@ -2708,12 +2708,17 @@ def _fetch_bgm_bg() -> None:
             return fb.fetch(url, dest)
 
         ok, fail = fb.main(bgm_dir=orchestrator.DEFAULT_BGM_DIR, fetch_fn=progress_fetch)
+        why = ""
+        if fail:  # 가장 흔한 실패 원인 1개 — 캡처만 봐도 진단되게 (v1.50 목록 103)
+            from collections import Counter  # noqa: PLC0415
+            tops = Counter(fb.FAIL_WHY.get(t, "") for t in fail).most_common(1)
+            why = tops[0][0] if tops and tops[0][0] else ""
         if not ok and fail:
-            msg = "받기 실패 — 인터넷 연결(방화벽)을 확인하고 다시 눌러주세요"
+            msg = f"받기 실패 — 원인: {why or '알 수 없음'}. 다시 눌러도 같으면 이 문구를 캡처해 보내주세요"
         else:
             msg = f"무료 BGM {len(ok)}곡 준비 완료!"
             if fail:
-                msg += f" (실패 {len(fail)}곡 — 다시 누르면 그 곡만 재시도)"
+                msg += f" (실패 {len(fail)}곡{' — ' + why if why else ''} · 다시 누르면 그 곡만 재시도)"
         _BGM_TASK.update(running=False, msg=msg)
     except Exception as e:  # noqa: BLE001
         logging.getLogger("cutdaejang").error("BGM 받기 실패: %s", e)
@@ -5529,7 +5534,9 @@ class _Handler(BaseHTTPRequestHandler):
         # 🔑 정품/체험 상태 (v1.49 목록 99) — 화면 잠금·배지의 근거
         try:
             from ..core import license as _lic  # noqa: PLC0415
-            return _lic.status()
+            r = _lic.status()
+            r["machine"] = _lic.machine_code_pretty()   # 🖥 PC 고유코드 (v1.50)
+            return r
         except Exception:  # noqa: BLE001
             return {"licensed": True, "trial": False}  # 문제 시 잠그지 않는다
 
@@ -6078,7 +6085,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.49.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.50.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6098,18 +6105,27 @@ body.easy #easyBar { display: block; }
   <!-- 🔑 정품/체험 (v1.49 목록 99) — 체험 배지 + 만료 시 잠금 -->
   <div class="banner hidden" id="trialBar"></div>
   <div id="lockOverlay" class="hidden">
-    <div class="lockbox">
+    <div class="lockbox" style="position:relative">
+      <button id="licClose" class="ghost hidden" onclick="closeLicense(event)"
+              style="position:absolute;top:8px;right:10px;width:auto;padding:2px 10px">✕ 닫기</button>
       <div style="font-size:34px">🔒</div>
-      <h2 style="margin:6px 0">무료 체험이 끝났어요</h2>
-      <p class="hint" style="margin:0 0 12px">계속 쓰시려면 <b>정품 코드</b>를 넣어주세요.
+      <h2 id="licTitle" style="margin:6px 0">무료 체험이 끝났어요</h2>
+      <p id="licSub" class="hint" style="margin:0 0 12px">계속 쓰시려면 <b>정품 코드</b>를 넣어주세요.
         코드는 구매하신 곳(카페)에서 받을 수 있어요.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
-        <input type="text" id="licInput" placeholder="CD-20261231-XXXXXXXXXXXX"
+        <input type="text" id="licInput" placeholder="받은 정품 코드 붙여넣기 (CD- 또는 CP-)"
                style="flex:1;min-width:240px;text-align:center;letter-spacing:1px"
                onkeydown="if(event.key==='Enter')submitLicense(event)">
         <button style="width:auto" onclick="submitLicense(event)">정품 등록</button>
       </div>
       <div id="licMsg" class="hint" style="margin-top:8px;min-height:18px"></div>
+      <div class="hint" style="margin-top:12px">🖥 내 PC 고유코드:
+        <b id="licMc" style="letter-spacing:1px">확인 중…</b>
+        <button id="licMcBtn" class="ghost" onclick="copyMc(event)"
+                style="width:auto;padding:2px 10px;margin-left:6px">복사</button>
+        <div style="opacity:.75;margin-top:4px">구매할 때 이 고유코드를 판매자(카페)에게 알려주면
+          내 PC 전용 코드를 받아요.</div>
+      </div>
       <div class="hint" style="margin-top:14px;opacity:.7">
         프로그램은 계속 켜 두셔도 돼요 — 코드를 넣으면 바로 열립니다.</div>
     </div>
@@ -10333,7 +10349,7 @@ async function copyKitNaverAll(ev){
   ev.preventDefault(); ev.stopPropagation();
   const t = ($('kitNaverTitle').value || '').trim();
   const tags = ($('kitNaverTags').value || '').trim()
-    .split(/[,\s]+/).filter(Boolean)
+    .split(/[,\\s]+/).filter(Boolean)
     .map(function(x){ return x.startsWith('#') ? x : ('#' + x); }).join(' ');
   if(!t && !tags){ alert('먼저 [📦 업로드 키트 만들기]로 문구를 만들어 주세요'); return; }
   try{
@@ -11274,7 +11290,7 @@ function decoSummary(key){
   set.ids.slice(0, 3).forEach(id => {
     const el = $(id); if(!el || !el.options || el.selectedIndex < 0) return;
     const t = (el.options[el.selectedIndex].textContent || '').trim();
-    if(t && !/^(직접 고르기|기억된|자동|기본)/.test(t)) bits.push(t.replace(/\s*\(.*$/, ''));
+    if(t && !/^(직접 고르기|기억된|자동|기본)/.test(t)) bits.push(t.replace(/\\s*\\(.*$/, ''));
   });
   const size = +((($('setFontSize')||{}).value) || 84);
   bits.push('글씨 ' + (size <= 70 ? '작게' : size <= 94 ? '보통' : size <= 114 ? '크게' : '특대'));
@@ -14242,14 +14258,18 @@ document.addEventListener('keydown', (e) => {
 injectFontFaces([]);  // 🔤 번들 프리텐다드 즉시 등록 — 받은 글씨체는 poll의 fillFontSels가 추가 (v0.68)
 // 🔑 정품/체험 (v1.49 목록 99)
 function applyLicense(lic){
-  lic = lic || {};
+  // 순간 오류 응답(빈 상태)로는 잠그지도 열지도 않는다 — 상태 유지 (v1.50)
+  if(!lic || typeof lic.licensed === 'undefined') return;
   const bar = $('trialBar'), lock = $('lockOverlay');
+  const mc = $('licMc'); if(mc && lic.machine) mc.textContent = lic.machine;
   if(lic.licensed){
+    window._licManual = false;
     if(bar) bar.classList.add('hidden');
     if(lock) lock.classList.add('hidden');
     document.body.classList.remove('locked');
     return;
   }
+  const t = $('licTitle'), s = $('licSub'), c = $('licClose');
   if(lic.trial){
     if(bar){
       const d = lic.days_left;
@@ -14257,19 +14277,43 @@ function applyLicense(lic){
         + '<button class="ghost" style="width:auto;margin-left:8px;padding:2px 10px" onclick="openLicense(event)">정품 등록</button>';
       bar.classList.remove('hidden');
     }
-    if(lock) lock.classList.add('hidden');
+    // 체험 중 [정품 등록]으로 연 창은 두고, 아니면 숨긴다 (v1.50 목록 101 — 안 닫힘 사고 방지)
+    if(lock && !window._licManual) lock.classList.add('hidden');
     document.body.classList.remove('locked');
-  } else {                                   // 체험 종료 → 잠금
+    if(c) c.classList.remove('hidden');
+    if(t) t.textContent = '🔑 정품 코드 등록';
+    if(s) s.innerHTML = '체험 중에도 미리 등록할 수 있어요 — 코드는 구매하신 곳(카페)에서 받아요.';
+  } else {                                   // 체험 종료 → 잠금 (닫기 없음)
     if(bar) bar.classList.add('hidden');
     if(lock) lock.classList.remove('hidden');
     document.body.classList.add('locked');
+    if(c) c.classList.add('hidden');
+    if(t) t.textContent = '무료 체험이 끝났어요';
+    if(s) s.innerHTML = '계속 쓰시려면 <b>정품 코드</b>를 넣어주세요. 코드는 구매하신 곳(카페)에서 받을 수 있어요.';
     const inp = $('licInput'); if(inp) setTimeout(() => inp.focus(), 100);
   }
 }
 function openLicense(ev){
   if(ev) ev.preventDefault();
+  window._licManual = true;
   const lock = $('lockOverlay'); if(lock) lock.classList.remove('hidden');
   const inp = $('licInput'); if(inp) setTimeout(() => inp.focus(), 100);
+}
+function closeLicense(ev){
+  if(ev) ev.preventDefault();
+  window._licManual = false;
+  if(!document.body.classList.contains('locked')){
+    const lock = $('lockOverlay'); if(lock) lock.classList.add('hidden');
+  }
+}
+function copyMc(ev){
+  if(ev) ev.preventDefault();
+  const t = ($('licMc') || {}).textContent || '';
+  if(t && navigator.clipboard){
+    navigator.clipboard.writeText(t);
+    const b = $('licMcBtn');
+    if(b){ b.textContent = '복사됨!'; setTimeout(() => { b.textContent = '복사'; }, 1200); }
+  }
 }
 async function submitLicense(ev){
   if(ev) ev.preventDefault();
@@ -14283,6 +14327,7 @@ async function submitLicense(ev){
     if(d.error){ if(msg){ msg.style.color = '#ff8a8a'; msg.textContent = '❌ ' + d.error; } return; }
     if(msg){ msg.style.color = '#7fd18a';
       msg.textContent = '✅ 정품 등록 완료' + (d.expiry ? ' (유효기간 ' + d.expiry + ')' : '') + ' — 감사합니다!'; }
+    window._licManual = false;
     setTimeout(() => { applyLicense({licensed: true}); poll(); }, 700);
   }catch(e){ if(msg){ msg.style.color = '#ff8a8a'; msg.textContent = '확인 실패 — 잠시 후 다시'; } }
 }

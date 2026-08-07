@@ -1,5 +1,11 @@
 @echo off
 chcp 65001 >nul
+rem 검은 서버 창을 자동 최소화로 연다 (v1.50 목록 100) — 자기 자신을 /min으로 한 번 재실행
+if not defined CUTDAEJANG_MINIMIZED (
+    set "CUTDAEJANG_MINIMIZED=1"
+    start "컷대장 서버" /min cmd /c ""%~f0" %*"
+    exit /b
+)
 setlocal
 cd /d "%~dp0.."
 
@@ -35,7 +41,7 @@ if exist "windows\ffmpeg\bin\ffmpeg.exe" (
 )
 echo.
 echo 잠시 후 브라우저에 컷대장 화면이 열립니다.
-echo 이 검은 창은 서버입니다 — 닫으면 UI도 꺼지니 그대로 두세요.
+echo 이 검은 창은 서버라 최소화된 채 두면 됩니다 — 닫으면 컷대장도 꺼져요.
 echo.
 "%PY%" -m cutdaejang ui --workdir windows\jobs
 if errorlevel 1 (

@@ -6,10 +6,14 @@
    build_zip.sh는 git archive HEAD:cutdaejang 만 담으므로 자동으로 빠진다.
 
 사용법:
-  python make_license.py 2026-12-31              # 그 날짜까지 유효한 코드 1개
+  python make_license.py 2026-12-31 --pc A1B2-C3D4  # ★그 PC에서만 도는 코드 (권장)
+  python make_license.py 2026-12-31              # 아무 PC나 되는 공용 코드 1개
   python make_license.py 2026-12-31 --n 20       # 20명분 (각각 다른 코드)
   python make_license.py 2026-12-31 --name 홍길동  # 메모와 함께 (코드엔 영향 없음)
-  python make_license.py 평생                      # 영구 코드 (2099-12-31)
+  python make_license.py 평생 --pc A1B2-C3D4       # 영구 + PC 묶임
+
+★ 회원 화면(잠금/정품 등록)에 «내 PC 고유코드»가 떠요 — 회원이 그걸 보내주면
+  --pc로 묶어 발급하세요. 그 코드는 다른 PC에 공유해도 안 돌아갑니다.
 
 코드를 회원에게 주면, 회원이 프로그램 첫 화면 «정품 등록»에 넣어 잠금을 푼다.
 """
@@ -39,23 +43,34 @@ def main() -> None:
     ap.add_argument("until", help="유효 마지막 날 (2026-12-31) 또는 '평생'")
     ap.add_argument("--n", type=int, default=1, help="만들 개수 (기본 1)")
     ap.add_argument("--name", default="", help="메모 (누구에게 줬는지 — 코드엔 안 들어감)")
+    ap.add_argument("--pc", default="",
+                    help="회원 PC 고유코드 (예: A1B2-C3D4) — 넣으면 그 PC 전용 코드")
     a = ap.parse_args()
+
+    mc = a.pc.replace("-", "").strip().upper()
+    if mc and len(mc) != 8:
+        raise SystemExit(f"PC 고유코드는 8자(XXXX-XXXX)예요: {a.pc!r}")
 
     expiry = _parse_until(a.until)
     exp_iso = f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:]}"
     if datetime.strptime(expiry, "%Y%m%d").date() < date.today():
         print(f"⚠ 주의: {exp_iso}는 오늘보다 과거라, 만든 코드가 바로 만료돼 있어요.")
 
-    print(f"== 정품 코드 {a.n}개 — {exp_iso}까지 유효 "
+    kind = f"PC 전용({a.pc.upper()})" if mc else "공용(아무 PC나)"
+    print(f"== 정품 코드 {a.n}개 — {exp_iso}까지 · {kind} "
           f"{'· ' + a.name if a.name else ''} ==")
+    if not mc:
+        print("   (팁: 회원 화면의 «내 PC 고유코드»를 받아 --pc로 묶으면 공유가 막혀요)")
     for _ in range(max(1, a.n)):
         seed = secrets.token_hex(2).upper()          # 4자 — 코드마다 유일
-        code = lic.make_code(expiry, seed)
+        code = (lic.make_code_pc(expiry, seed, mc) if mc
+                else lic.make_code(expiry, seed))
         # 되읽어 서명 검증 (판매자가 잘못된 코드를 주는 사고 방지).
         # today=만료일로 확인 → «만료 무관, 서명만» 본다 (과거 날짜 코드도 OK).
         from datetime import date as _d
         assert lic.verify_code(code, _d(int(expiry[:4]), int(expiry[4:6]),
-                                        int(expiry[6:])))["valid"], "생성 코드 검증 실패"
+                                        int(expiry[6:])),
+                               mc=mc or None)["valid"], "생성 코드 검증 실패"
         print(code)
 
 

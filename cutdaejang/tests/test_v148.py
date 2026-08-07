@@ -19,7 +19,7 @@ ROOT = Path(config.__file__).resolve().parents[1]      # 제품 루트 (pyprojec
 
 
 def test_version():
-    assert __version__ == "1.49.0"
+    assert __version__ == "1.50.0"
 
 
 def test_update_channel_ships_off():

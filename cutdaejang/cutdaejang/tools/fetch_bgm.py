@@ -110,7 +110,14 @@ TRACKS = [
 ]
 
 CREDIT_FILE = "음원_크레딧(설명란에_붙여넣기).txt"
-_HEADERS = {"User-Agent": "Mozilla/5.0 (cutdaejang bgm fetch)"}
+# 봇 티 나는 UA는 차단(CloudFlare류 403)당하기 쉽다 — 브라우저형으로 (v1.50 목록 103)
+_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+    "Referer": "https://incompetech.com/music/royalty-free/",
+}
+LAST_ERROR = ""       # 마지막 실패 원인 (화면 표시용)
+FAIL_WHY: dict = {}   # 곡별 실패 원인 — main()이 채운다
 
 
 def track_url(title: str) -> str:
@@ -142,14 +149,24 @@ def credit_text(titles: list) -> str:
 
 
 def fetch(url: str, dest: Path, timeout: float = 180.0) -> bool:
-    """mp3 한 곡 다운로드. 실패하거나 응답이 비정상(100KB 미만)이면 False."""
+    """mp3 한 곡 다운로드. 실패하면 False + LAST_ERROR에 원인을 남긴다."""
+    global LAST_ERROR  # noqa: PLW0603 — 실패 원인을 화면까지 전달
+    LAST_ERROR = ""
     req = urllib.request.Request(url, headers=_HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = resp.read()
-    except (urllib.error.URLError, OSError):
+    except urllib.error.HTTPError as e:
+        LAST_ERROR = f"HTTP {e.code} (사이트가 요청을 거절)"
+        return False
+    except urllib.error.URLError as e:
+        LAST_ERROR = f"연결 실패: {str(getattr(e, 'reason', e))[:80]}"
+        return False
+    except OSError as e:
+        LAST_ERROR = str(e)[:100]
         return False
     if len(data) < 100_000:  # 오류 페이지/빈 응답
+        LAST_ERROR = "응답이 음악 파일이 아님 (곡 주소 변경·차단 추정)"
         return False
     dest.write_bytes(data)
     return True
@@ -164,6 +181,7 @@ def main(bgm_dir=None, fetch_fn=fetch) -> tuple:
     """전 곡 다운로드(있는 곡은 건너뜀) + 크레딧 파일 생성. (성공, 실패) 제목 목록 반환."""
     out = Path(bgm_dir) if bgm_dir else default_bgm_dir()
     out.mkdir(parents=True, exist_ok=True)
+    FAIL_WHY.clear()
     ok, fail = [], []
     for i, (mood, title) in enumerate(TRACKS, 1):
         dest = out / save_name(mood, title)
@@ -176,7 +194,8 @@ def main(bgm_dir=None, fetch_fn=fetch) -> tuple:
             ok.append(title)
         else:
             fail.append(title)
-            print(f"      [!] 실패 — 나중에 다시 실행하면 이 곡만 재시도합니다: {title}")
+            FAIL_WHY[title] = LAST_ERROR or "원인 미상"
+            print(f"      [!] 실패({FAIL_WHY[title]}) — 다시 실행하면 이 곡만 재시도: {title}")
     if ok:
         (out / CREDIT_FILE).write_text(credit_text(ok), encoding="utf-8")
     print()

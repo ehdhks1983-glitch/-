@@ -355,6 +355,26 @@ class ElevenLabsTTS:
         return str(out_path)
 
 
+def _eleven_http_ko(code: int, body: str) -> str:
+    """일레븐랩스 HTTP 거절 → 초보자용 한국어 (v1.50 목록 102).
+
+    회원 리포트: «기존에 잘 쓰던 키가 안 된다» — 원문 JSON만 보여줘서는
+    권한 제한 키(요즘 기본 유도)인지 오타인지 알 수 없었다.
+    """
+    if "missing_permissions" in body or "invalid_permissions" in body:
+        return ("이 키는 권한이 제한돼 있어요 — elevenlabs.io → API Keys에서 "
+                "키를 만들 때 권한(스코프)을 제한하지 말고(기본값 그대로) "
+                f"새 키를 만들어 다시 저장해 주세요. (원문 {code}: {body[:120]})")
+    if code == 401 or "invalid_api_key" in body:
+        return ("일레븐랩스가 키를 거부했어요 — 복사할 때 앞뒤가 잘렸을 수 있어요. "
+                "elevenlabs.io → API Keys에서 키 전체를 다시 복사해 주세요. "
+                f"(원문 {code}: {body[:120]})")
+    if code == 429 or "quota" in body:
+        return ("일레븐랩스 사용량 한도예요 — 계정의 크레딧/요금제를 확인해 주세요. "
+                f"(원문 {code}: {body[:120]})")
+    return f"ElevenLabs 보이스 목록 실패 {code}: {body[:200]}"
+
+
 def list_elevenlabs_voices(api_key: Optional[str] = None) -> list:
     """내 ElevenLabs 계정의 보이스 목록 (v0.46 — 기성 성우 보이스 선택용).
 
@@ -370,8 +390,8 @@ def list_elevenlabs_voices(api_key: Optional[str] = None) -> list:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        raise TTSError(f"ElevenLabs 보이스 목록 실패 {e.code}: "
-                       f"{e.read().decode('utf-8', 'replace')[:200]}") from e
+        raise TTSError(
+            _eleven_http_ko(e.code, e.read().decode("utf-8", "replace")[:300])) from e
     out = [
         {"voice_id": v["voice_id"], "name": str(v.get("name") or v["voice_id"]),
          "category": str(v.get("category") or "")}
