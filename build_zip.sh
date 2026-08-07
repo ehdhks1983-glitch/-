@@ -88,6 +88,17 @@ S2="cutdaejang/core/script_generator.py"
 A="cutdaejang/core/render_engine/ass_writer.py"
 F="cutdaejang/tools/fetch_fonts.py"
 
+# ── v1.49 (99) 정품 코드 + 7일 체험 ──
+for t in "def make_code(" "def verify_code(" "def status(" "TRIAL_DAYS = 7" \
+         "mark_first_run"; do has "cutdaejang/core/license.py" "$t"; done
+for t in 'id="lockOverlay"' 'id="trialBar"' "/api/save_license" \
+         "function applyLicense" "무료 체험이 끝났어요"; do has "$W" "$t"; done
+# 🔴 코드 생성기·설치 스크립트는 구매자 zip에 절대 없어야 (비밀 열쇠 유출)
+if unzip -l "$ZIP" | grep -qE "make_license|installer\.nsi|build_exe"; then
+  echo "  ✘ 생성기·빌드 스크립트가 구매자 zip에 포함!" && exit 1
+fi
+echo "  ✔ v1.49 (정품 코드·체험 · 생성기 미포함)"
+
 # ── v1.47.2 (96·97) 받기 서랍 닫기·싱크 트림 ──
 has "$W" "querySelectorAll('.card.drawer')"
 hasnt "$W" "['settingsCard','productCard','apiCard']"
