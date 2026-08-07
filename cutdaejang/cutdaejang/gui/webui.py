@@ -6085,7 +6085,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.50.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.51.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -6467,7 +6467,7 @@ body.easy #easyBar { display: block; }
         </div>
         <div style="display:flex;align-items:flex-end;gap:6px">
           <button class="ghost" style="margin-bottom:1px" onclick="previewNarrVoice(event)">🔊 미리듣기</button>
-          <button class="ghost" id="narrFavBtn" style="margin-bottom:1px" title="이 일레븐랩스 성우를 즐겨찾기 — 목록 맨 위 고정" onclick="toggleElevenFav(event,'narr')">☆</button>
+          <button class="ghost" id="narrFavBtn" style="margin-bottom:1px" title="이 일레븐랩스 성우를 즐겨찾기 — ⭐ 그룹으로 맨 위 고정" onclick="toggleElevenFav(event,'narr')">☆ 즐겨찾기</button>
           <button class="ghost" style="margin-bottom:1px" title="일레븐랩스 성우 목록 새로고침" onclick="loadElevenVoices(true);return false">🔄</button>
         </div>
       </div>
@@ -8376,6 +8376,8 @@ async function loadElevenVoices(force){
 
 // ── ⭐ 성우 즐겨찾기 (v0.67) — ★는 맨 위, 저장돼서 다음에도 유지 ──
 function renderElevenLists(){
+  // ⭐ v1.51 (목록 104): «내가 선호하는 목소리를 따로 저장해 두고 보고 싶다» —
+  // ★ 접두 정렬 대신 「⭐ 내 즐겨찾기」 그룹으로 눈에 띄게 분리한다.
   const voices = window._elevenData || [], favs = window._elevenFavs || [];
   const sel = $('elevenVoiceSel'), nv = $('narrVoiceSel');
   if(!voices.length || !sel) return;
@@ -8384,13 +8386,32 @@ function renderElevenLists(){
     || favs.indexOf(a.voice_id) - favs.indexOf(b.voice_id));
   const keepSel = sel.value, keepNv = nv ? nv.value : '';
   sel.innerHTML = '';
-  if(nv) [...nv.options].filter(o => o.value.indexOf('el:') === 0).forEach(o => o.remove());
-  for(const v of sorted){
-    const star = favs.includes(v.voice_id) ? '★ ' : '';
-    const tag = v.category === 'cloned' ? ' (내 클론)'
-              : (v.category !== 'premade' ? ' (담은 성우)' : '');
-    sel.add(new Option(star + v.name + tag, v.voice_id));
-    if(nv) nv.add(new Option('🎙 ' + star + v.name + tag + ' (일레븐랩스)', 'el:' + v.voice_id));
+  // narr 쪽: 지난 렌더의 el: 옵션·빈 그룹 제거 (비-일레븐 옵션은 그대로)
+  if(nv){
+    [...nv.querySelectorAll('option')].filter(o => o.value.indexOf('el:') === 0)
+      .forEach(o => { const g = o.parentElement; o.remove();
+        if(g && g.tagName === 'OPTGROUP' && !g.children.length) g.remove(); });
+    [...nv.querySelectorAll('optgroup')].filter(g => !g.children.length).forEach(g => g.remove());
+  }
+  const tagOf = v => v.category === 'cloned' ? ' (내 클론)'
+                   : (v.category !== 'premade' ? ' (담은 성우)' : '');
+  const favVs = sorted.filter(v => favs.includes(v.voice_id));
+  const restVs = sorted.filter(v => !favs.includes(v.voice_id));
+  function group(label, vs, forNarr){
+    const g = document.createElement('optgroup'); g.label = label;
+    for(const v of vs){
+      g.appendChild(forNarr
+        ? new Option('🎙 ' + v.name + tagOf(v) + ' (일레븐랩스)', 'el:' + v.voice_id)
+        : new Option(v.name + tagOf(v), v.voice_id));
+    }
+    return g;
+  }
+  if(favVs.length) sel.appendChild(group('⭐ 내 즐겨찾기', favVs, false));
+  sel.appendChild(group(favVs.length ? '전체 성우' : '전체 성우 — ☆ 즐겨찾기를 누르면 맨 위에 모여요',
+                        restVs, false));
+  if(nv){
+    if(favVs.length) nv.insertBefore(group('⭐ 내 즐겨찾기 (일레븐랩스)', favVs, true), nv.firstChild);
+    nv.appendChild(group('🎙 일레븐랩스 전체', restVs, true));
   }
   if(keepSel && [...sel.options].some(o => o.value === keepSel)) sel.value = keepSel;
   if(nv && keepNv && [...nv.options].some(o => o.value === keepNv)) nv.value = keepNv;
@@ -8404,7 +8425,8 @@ function updateFavBtns(){
   }
   if(b2){
     const nvv = ($('narrVoiceSel')||{}).value || '';
-    b2.textContent = (nvv.indexOf('el:') === 0 && favs.includes(nvv.slice(3))) ? '★' : '☆';
+    b2.textContent = (nvv.indexOf('el:') === 0 && favs.includes(nvv.slice(3)))
+      ? '★ 즐겨찾기됨' : '☆ 즐겨찾기';
   }
 }
 async function toggleElevenFav(ev, which){
@@ -11318,7 +11340,7 @@ function _decoQuickRow(){
     e.preventDefault();
     await quickSet({subtitle: {font_size: +b.dataset.v}});
     if($('setFontSize')) $('setFontSize').value = b.dataset.v;
-    markEzChips(); markQuickDeco(); refreshDecoSummaries();
+    markEzChips(); markQuickDeco(); refreshDecoSummaries(); _pvSchedule();
     uiBanner('✅ 자막 글씨 크기를 ' + b.textContent + '로 바꿨어요');
   }));
   d.querySelectorAll('.qd-bgm').forEach(b => b.addEventListener('click', async (e) => {
@@ -11350,11 +11372,19 @@ function _decoQuickRow(){
 //    "설정은 많은데 어떤 건지 모르겠어"(회원님 44차)의 답. 프리셋 색·구성은
 //    서버(ass_writer)가 진실이고 화면은 /api/deco_presets로 받아 그린다.
 const PV_IDS = {
-  gen:     {sub:'genSubStyleSel',  font:'genSubFontSel',  hook:'genHookStyleSel'},
-  edit:    {sub:'editSubStyleSel', font:'editSubFontSel', hook:'hookStyleSel'},
-  weblink: {sub:'wlSubStyleSel',   font:'wlSubFontSel',   hook:'wlHookStyleSel'},
-  sections:{sub:'secSubStyleSel',  font:'secSubFontSel',  hook:'secHookStyleSel'},
-  shop:    {sub:'shopSubStyleSel', font:'shopSubFontSel', hook:'shopHookStyleSel'}
+  gen:     {sub:'genSubStyleSel',  font:'genSubFontSel',  hook:'genHookStyleSel',  tone:'genToneSel'},
+  edit:    {sub:'editSubStyleSel', font:'editSubFontSel', hook:'hookStyleSel',     tone:'editToneSel'},
+  weblink: {sub:'wlSubStyleSel',   font:'wlSubFontSel',   hook:'wlHookStyleSel',   tone:'wlToneSel'},
+  sections:{sub:'secSubStyleSel',  font:'secSubFontSel',  hook:'secHookStyleSel',  tone:'secToneSel'},
+  shop:    {sub:'shopSubStyleSel', font:'shopSubFontSel', hook:'shopHookStyleSel', tone:'shopToneSel'}
+};
+// 🎨 화면 톤 → 미리보기 CSS 근사 (실제 렌더는 ffmpeg TONE_PRESETS — 느낌만 맞춘다)
+const PV_TONE = {
+  '기본': '',
+  '시네마틱': 'contrast(1.08) saturate(.85) sepia(.18) hue-rotate(-8deg)',
+  '화사': 'brightness(1.08) saturate(1.18)',
+  '선명': 'contrast(1.15) saturate(1.25)',
+  '흑백': 'grayscale(1) contrast(1.05)'
 };
 function assColorToCss(c){
   // ASS(&HAABBGGRR·&HBBGGRR) → CSS. 알파는 00=불투명, FF=투명.
@@ -11389,10 +11419,16 @@ function renderDecoPreview(){
     const shadow = ss.band ? 'none' : _pvShadow(ss.outline, ss.outline_color || '#101010', ss.blur);
     function lineHtml(i, inner){
       const c = lr ? lr[i % lr.length] : (pop || base);
-      return '<span class="pvline"><span class="' + (ss.band ? 'pvband' : '')
-        + '" style="color:' + c + ';text-shadow:' + shadow
-        + (bandBg ? ';background:' + bandBg : '') + '">' + inner + '</span></span>';
+      return '<span class="pvline"><span class="' + (bandOn ? 'pvband' : '')
+        + '" style="color:' + c + ';text-shadow:' + shadow2
+        + (bandBg2 ? ';background:' + bandBg2 : '') + '">' + inner + '</span></span>';
     }
+    const box0 = fr.closest('details');
+    // 🎛 v1.51 (목록 105): 띠 체크박스가 미리보기에 안 먹던 것 — 체크가 프리셋을 이긴다
+    const bandC = box0 && box0.querySelector('.qd-band');
+    const bandOn = bandC ? bandC.checked : !!ss.band;
+    const bandBg2 = bandOn ? (bandBg || 'rgba(16,16,16,.55)') : '';
+    const shadow2 = bandOn ? 'none' : _pvShadow(ss.outline, ss.outline_color || '#101010', ss.blur);
     const sub = fr.querySelector('.pvsubtxt');
     const sizeK = Math.max(.6, Math.min(1.6, (+((($('setFontSize')||{}).value)) || 84) / 84));
     sub.style.fontFamily = fontFamilyOf((fSel && fSel.value) || '');
@@ -11414,10 +11450,23 @@ function renderDecoPreview(){
         + sample + '</span></span>';
     }
     const hk = fr.querySelector('.pvhooktxt');
-    const hband = ('band' in hs) ? hs.band : true;
+    // 제목 배경 띠 체크가 프리셋 기본값을 이긴다 (v1.51 목록 105)
+    const hbC = box0 && box0.querySelector('.qd-hookband');
+    const hband = hbC ? hbC.checked : (('band' in hs) ? hs.band : true);
     hk.style.color = hs.primary || '#FFFFFF';
     hk.style.background = hband ? (assColorToCss(hs.band_color || '') || 'rgba(16,16,16,.56)') : 'transparent';
     hk.style.textShadow = hband ? 'none' : _pvShadow(hs.outline == null ? 5 : hs.outline, hs.outline_color || '#101010', hs.blur);
+    // 🎨 화면 톤 — 틀 전체에 CSS 필터로 근사 (v1.51 목록 105)
+    const tSel = $(ids.tone);
+    fr.style.filter = PV_TONE[(tSel && tSel.value) || '기본'] || '';
+    // 📋 미리보기에 «안» 나오는 것 안내 — 어떤 건 되고 어떤 건 안 되는지 (목록 105)
+    const cap = fr.parentElement && fr.parentElement.querySelector('.pvonly');
+    if(cap){
+      const cardC = box0 && box0.querySelector('.qd-cards');
+      const cardOn = cardC ? cardC.checked : !!(($('setTextCards')||{}).checked);
+      cap.textContent = '🎬 영상에서만 나오는 것: 🅰 텍스트 카드('
+        + (cardOn ? '켬' : '끔') + ') · 배경음악·효과음 소리 · 펀치인 줌 — 나머지는 전부 위 미리보기에 보여요';
+    }
     _pvApplyAnim(fr);
   });
 }
@@ -11504,7 +11553,8 @@ function _mountPvFrame(box, key){
     + '<div class="pvhook"><span class="pvhooktxt">제목이 여기에!</span></div>'
     + '<div class="pvsub"><span class="pvsubtxt"></span></div></div>'
     + '<div class="pvcap hint">📺 지금 고른 그대로 <b>미리보기</b>'
-    + ' <button class="ghost" style="width:auto;margin:0;padding:2px 10px" onclick="pvReplay(event)">▶ 효과 다시</button></div>';
+    + ' <button class="ghost" style="width:auto;margin:0;padding:2px 10px" onclick="pvReplay(event)">▶ 효과 다시</button></div>'
+    + '<div class="pvonly hint" style="margin-top:2px;opacity:.7"></div>';
   const sum = box.querySelector('summary');
   if(sum && sum.nextSibling) box.insertBefore(w, sum.nextSibling);
   else box.appendChild(w);
@@ -11514,7 +11564,8 @@ function _mountPvFrame(box, key){
     _pvSchedule();
   });
   box.addEventListener('click', function(e){
-    if(e.target && e.target.closest('.stylechip,.tonecard')) _pvSchedule();
+    // 자막 글씨(작게~특대)·텍스트 카드도 미리보기 즉시 반영 (v1.51 목록 105)
+    if(e.target && e.target.closest('.stylechip,.tonecard,.qd-size,.qd-cards')) _pvSchedule();
   });
 }
 const _DECO_CHK = [['qd-fade', 'fade', 'setFade', '자막 페이드'],
