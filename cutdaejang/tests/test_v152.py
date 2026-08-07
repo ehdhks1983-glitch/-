@@ -33,9 +33,9 @@ def test_kit_category_not_dim_hint():
 
 def test_kit_category_name_highlighted():
     """이름은 노랑·크게, 이유는 옆에 옅게 — 클립 카테고리(v0.87)와 동일 문법."""
-    m = re.search(r"kitCategory'\)\.innerHTML[^;]+;", JS, re.S)
-    assert m and "color:#ffd166;font-size:15px" in m.group(0)
-    assert "category_reason" in m.group(0)
+    seg = JS.split("kitCategory').innerHTML")[1][:400]
+    assert "color:#ffd166;font-size:15px" in seg
+    assert "category_reason" in seg
 
 
 # ── 107. 상품 후킹 대본·장면 추천 ──────────────────────────────
