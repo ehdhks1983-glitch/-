@@ -51,8 +51,11 @@ def main() -> None:
     for _ in range(max(1, a.n)):
         seed = secrets.token_hex(2).upper()          # 4자 — 코드마다 유일
         code = lic.make_code(expiry, seed)
-        # 되읽어 검증까지 (판매자가 잘못된 코드를 주는 사고 방지)
-        assert lic.verify_code(code)["valid"], "생성 코드 자체 검증 실패"
+        # 되읽어 서명 검증 (판매자가 잘못된 코드를 주는 사고 방지).
+        # today=만료일로 확인 → «만료 무관, 서명만» 본다 (과거 날짜 코드도 OK).
+        from datetime import date as _d
+        assert lic.verify_code(code, _d(int(expiry[:4]), int(expiry[4:6]),
+                                        int(expiry[6:])))["valid"], "생성 코드 검증 실패"
         print(code)
 
 
