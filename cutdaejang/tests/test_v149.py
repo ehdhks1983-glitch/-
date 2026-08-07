@@ -25,7 +25,7 @@ JS = "\n".join(__import__("re").findall(r"<script>(.*?)</script>", HTML, __impor
 
 
 def test_version():
-    assert __version__ == "1.51.0"
+    assert __version__ == "1.52.0"
 
 
 # ── 코드 서명·검증 ─────────────────────────────────────────────

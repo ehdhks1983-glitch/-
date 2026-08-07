@@ -4887,6 +4887,20 @@ class _Handler(BaseHTTPRequestHandler):
                 prods = [x for x in prods if (x.get("name") or "") != name]
                 config.save_settings_replace("products", prods)
             self._send_json({"ok": True, "products": prods})
+        elif path == "/api/clip_hook":  # 🪝 상품 후킹 대본·장면 (v1.52 목록 107)
+            _apply_keys(params)
+            from ..core import script_generator as sg  # noqa: PLC0415
+            try:
+                out = sg.clip_hook(
+                    product_text=str(params.get("product_text") or ""),
+                    narration=str(params.get("narration") or ""),
+                    scene=str(params.get("scene") or ""),
+                    seconds=params.get("seconds") or 10)
+                self._send_json({"ok": True, **out})
+            except sg.ScriptError as e:
+                self._send_json({"error": str(e)}, 400)
+            except Exception as e:  # noqa: BLE001
+                self._send_json({"error": f"후킹 대본 실패: {str(e)[:200]}"}, 500)
         elif path == "/api/product_summarize":  # 붙여넣은 소개글 → 프로필 초안 (v0.64)
             _apply_keys(params)
             raw = (params.get("text") or "").strip()
@@ -6085,7 +6099,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.51.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.52.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -7848,7 +7862,7 @@ body.easy #easyBar { display: block; }
           <textarea id="kitTags" style="min-height:48px;margin-top:4px"></textarea>
           <div class="hint" id="kitKeywords" style="margin-top:8px"></div>
           <div class="hint" id="kitNiche" style="margin-top:4px;color:#ffd97a"></div>
-          <div class="hint" id="kitCategory" style="margin-top:4px"></div>
+          <div id="kitCategory" style="margin-top:6px;font-size:14px"></div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
             <b style="font-size:13px">📌 고정 댓글</b>
             <span class="hint">(업로드 직후 내 계정으로 달고 <b>[고정]</b> — 초기 댓글·참여가 노출을 밀어줘요)</span>
@@ -8277,6 +8291,15 @@ body.easy #easyBar { display: block; }
       <b id="aiClipEstLine" style="color:#ffd166"></b>
     </div>
     <div class="hint" id="aiClipKeyHint" style="margin-top:6px;color:#ff9aa6"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <button class="ghost" id="aiClipHookBtn" style="width:auto" onclick="aiClipHook(event)">🪝 상품 후킹 대본·장면 추천</button>
+      <span class="hint">— 끌어온 상품 정보로, 고른 초에 맞는 대본과 장면을 만들어 채워줘요</span>
+    </div>
+    <div id="aiClipHookOut" class="hidden" style="margin-top:8px;padding:10px;border:1px solid #2c3347;border-radius:8px;background:#131722">
+      <div class="hint">🪝 후킹 내레이션 — 마음에 들면 이 구간 대본에 바로 넣을 수 있어요:</div>
+      <div id="aiClipHookScript" style="margin:6px 0;font-size:14px;line-height:1.5"></div>
+      <button class="ghost" style="width:auto" onclick="aiClipHookApply(event)">✍ 이 대본을 구간 내레이션에 넣기</button>
+    </div>
     <div style="display:flex;gap:8px;margin-top:10px">
       <button onclick="aiClipGo(event)">✨ 이 내용으로 만들기</button>
     </div>
@@ -10358,8 +10381,9 @@ function renderKit(data){
     ? '<b>🎯 틈새 검색어(노출 시작점):</b> ' + escHtml(kit.niche_keywords.join(' · '))
     : '';
   if($('kitPinned')) $('kitPinned').value = kit.pinned_comment || '';
-  $('kitCategory').innerHTML = '<b>📂 카테고리:</b> ' + escHtml(kit.category || '') +
-    (kit.category_reason ? (' — ' + escHtml(kit.category_reason)) : '');
+  $('kitCategory').innerHTML = '<b>📂 카테고리:</b> '
+    + '<b style="color:#ffd166;font-size:15px">' + escHtml(kit.category || '') + '</b>'
+    + (kit.category_reason ? (' <span class="hint">— ' + escHtml(kit.category_reason) + '</span>') : '');
   $('kitChecklist').textContent = (kit.checklist || []).map(c => '□ ' + c)
     .join(String.fromCharCode(10));
   $('kitPath').textContent = data.path
@@ -10567,6 +10591,7 @@ function aiClipEst(){
 function aiClipOpen(ev, row, vi, btn){
   if(ev) ev.preventDefault();
   _aiClipVi = vi; _aiClipBtn = btn;
+  window._aiClipRow = row;                                 // 🪝 후킹 대본 넣을 구간 (v1.52)
   window._aiClipDone = null; window._aiClipAspect = '';   // 구간은 «칸 채우기» (목록 72)
   const scr = row.querySelector('.sec-screen'), nar = row.querySelector('.sec-narr');
   const seed = ((scr && scr.value.trim())
@@ -10586,12 +10611,46 @@ function _aiClipShow(){
     aiClipEst();
   };
   if(_aiCost) fill(); else _loadAiCost().then(fill);
+  const ho = $('aiClipHookOut'); if(ho) ho.classList.add('hidden');   // 지난 결과 접기 (v1.52)
   $('aiClipBox').classList.remove('hidden');
+}
+// 🪝 상품 후킹 대본·장면 (v1.52 목록 107) — "상품에 대해 아는 거잖아,
+//    10초 정도에 맞게 후킹성으로" — 끌어온 상품 글(shopPasteText)을 근거로 만든다.
+async function aiClipHook(ev){
+  if(ev) ev.preventDefault();
+  const btn = $('aiClipHookBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '🪝 만드는 중…'; }
+  try{
+    const d = await (await fetch('/api/clip_hook', {method:'POST', body: JSON.stringify({
+      seconds: +$('aiClipDur').value || 10,
+      scene: $('aiClipPrompt').value.trim(),
+      narration: ((window._aiClipRow && window._aiClipRow.querySelector('.sec-narr')) || {}).value || '',
+      product_text: (($('shopPasteText')||{}).value || '')
+    })})).json();
+    if(d.error){ alert(d.error); return; }
+    if(d.scene) $('aiClipPrompt').value = d.scene;
+    if(d.script){
+      $('aiClipHookScript').textContent = d.script;
+      $('aiClipHookOut').classList.remove('hidden');
+    }
+    uiBanner('🪝 후킹 대본·장면을 만들었어요 — 장면은 위 칸에 채웠어요 (고쳐도 됩니다)');
+  } catch(e){ alert('추천 실패 — 잠시 후 다시 눌러주세요: ' + e); }
+  finally{ if(btn){ btn.disabled = false; btn.textContent = '🪝 상품 후킹 대본·장면 추천'; } }
+}
+function aiClipHookApply(ev){
+  if(ev) ev.preventDefault();
+  const s = ($('aiClipHookScript').textContent || '').trim();
+  const nar = window._aiClipRow && window._aiClipRow.querySelector('.sec-narr');
+  if(!s || !nar){ alert('구간 화면에서 연 경우에만 내레이션에 넣을 수 있어요'); return; }
+  nar.value = s;
+  nar.dispatchEvent(new Event('input', {bubbles: true}));   // 자동 저장 배선 그대로 타게
+  uiBanner('✍ 이 구간 내레이션을 후킹 대본으로 바꿨어요');
 }
 // 🖼 장면 검토 화면: 이 장면을 그림 대신 «움직이는 영상»으로 (목록 72)
 function sceneAiClip(ev, i){
   if(ev) ev.preventDefault();
   _aiClipVi = null;
+  window._aiClipRow = null;                 // 장면 검토 경로 — 구간 내레이션 없음 (v1.52)
   _aiClipBtn = (ev && ev.target) || null;
   window._aiClipAspect = (window._jobOrient === 'wide') ? '16:9' : '9:16';
   window._aiClipDone = async function(clipPath){

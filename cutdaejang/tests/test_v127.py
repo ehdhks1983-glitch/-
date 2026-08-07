@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_version():
-    assert __version__ == "1.51.0"
+    assert __version__ == "1.52.0"
 
 
 # ══ ① 🔗 나레이션 끊김 — 마침표가 있어도 이어지는 말 ═══════════════

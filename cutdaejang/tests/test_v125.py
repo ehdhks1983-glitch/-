@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_version():
-    assert __version__ == "1.51.0"
+    assert __version__ == "1.52.0"
 
 
 # ── 39-1. 설치 bat: 블록 안 %VAR%가 빈 값이 되던 함정 ─────────────────

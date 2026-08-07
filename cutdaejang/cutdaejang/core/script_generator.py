@@ -745,6 +745,70 @@ def summarize_product(text: str, model: str = "gemini-2.5-flash", api_key=None) 
             for k in ("name", "desc", "points", "target", "tone", "link")}
 
 
+CLIP_HOOK_PROMPT = """너는 쇼핑 쇼츠 전문 카피라이터다. 아래 상품 정보로 {secs}초짜리 클립 재료를 만든다.
+
+[상품 정보]
+{product}
+
+[참고 — 이 구간 내레이션(있으면)]
+{narration}
+
+[참고 — 화면 메모(있으면)]
+{scene}
+
+만들 것 (JSON):
+1) "script": 이 구간에서 읽을 후킹 내레이션. {max_chars}자 이내 1~2문장.
+   - 첫 마디에서 시선을 잡는다: 질문·숫자·반전 중 하나
+   - 상품 정보에 있는 사실만 쓴다 (없는 효능·근거 없는 최상급 과장 금지)
+   - 해요체로 짧고 리듬 있게, 광고 문구 티(«지금 바로!») 남발 금지
+2) "scene": AI 영상 생성용 장면 묘사 1~2문장 (한국어).
+   - 상품이 주인공인 실사풍 장면 + 카메라 움직임(천천히 줌인, 틸트 등)
+   - 글자·자막·로고를 그리라는 말은 넣지 않는다 (자막은 프로그램이 따로 입힌다)
+
+JSON만 출력: {{"script": "...", "scene": "..."}}"""
+
+
+def clip_hook(product_text: str = "", narration: str = "", scene: str = "",
+              seconds=10, model: str = "gemini-2.5-flash", api_key=None) -> dict:
+    """🪝 상품 정보 → N초 클립용 후킹 내레이션 + 장면 프롬프트 (v1.52 목록 107).
+
+    회원님 51차: "쿠팡파트너스 상품을 끌어왔어… 상품에 대해서 아는 거잖아.
+    10초짜리 정도에 맞게 대본을 후킹성으로 만들어줘"
+    """
+    import os  # noqa: PLC0415
+
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ScriptError("GEMINI_API_KEY가 없어 후킹 대본을 만들 수 없어요 — "
+                          "🔑 API 연동에서 제미나이 키를 넣어주세요")
+    if not (str(product_text).strip() or str(narration).strip() or str(scene).strip()):
+        raise ScriptError("상품 정보가 없어요 — 쇼핑 화면에서 상품을 끌어오거나 "
+                          "상세설명을 붙여넣은 뒤 눌러주세요")
+    try:
+        secs = max(4, min(15, int(seconds or 10)))
+    except (TypeError, ValueError):
+        secs = 10
+    max_chars = secs * 5                      # 한국어 낭독 ≈ 초당 4.5~5.5자
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent")
+    payload = {"contents": [{"parts": [{"text": CLIP_HOOK_PROMPT.format(
+        secs=secs, max_chars=max_chars,
+        product=str(product_text).strip()[:4000] or "(없음)",
+        narration=str(narration).strip()[:500] or "(없음)",
+        scene=str(scene).strip()[:300] or "(없음)")}]}],
+        "generationConfig": {"responseMimeType": "application/json"}}
+    data = _post_ai(url, payload, key)
+    try:
+        out = _as_dict(json.loads(data["candidates"][0]["content"]["parts"][0]["text"]))
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        raise ScriptError(f"후킹 대본 응답 예상 밖: {str(e)[:120]}") from e
+    script = str(out.get("script") or "").strip()[:220]
+    scene_out = str(out.get("scene") or "").strip()[:400]
+    if not script:
+        raise ScriptError("응답이 비었어요 — 한 번 더 눌러주세요")
+    return {"script": script, "scene": scene_out}
+
+
 # 🎬 v1.33 (목록 62) — 회원님 26차:
 #   "나온 대본이 뭔가 부자연스러운 말투야. 글이 이어지는 느낌이 아니고 …
 #    후킹하고 설득시킬 수 있는 글의 구조여야 하잖아"

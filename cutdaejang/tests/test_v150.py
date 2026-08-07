@@ -26,7 +26,7 @@ SRC = Path(webui.__file__).read_text(encoding="utf-8")
 
 
 def test_version():
-    assert __version__ == "1.51.0"
+    assert __version__ == "1.52.0"
 
 
 # ── 100. 검은 서버 창 ──────────────────────────────────────────
