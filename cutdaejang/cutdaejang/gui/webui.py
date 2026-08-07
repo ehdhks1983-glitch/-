@@ -3589,6 +3589,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"hosts": d["hosts"], "debug": d,
                              "profile": str(product_page.login_profile_dir())})
         elif path == "/api/state":
+            type(self.server)._last_poll = time.time()   # 🫀 화면 살아있음 (v1.53 유령 방지)
             self._send_json(self._state())
         elif path.startswith("/video/"):
             self._serve_video(path.split("/", 2)[2])
@@ -5710,7 +5711,7 @@ class _Handler(BaseHTTPRequestHandler):
                     break
                 try:
                     self.wfile.write(chunk)
-                except (BrokenPipeError, ConnectionResetError):
+                except (ConnectionError, TimeoutError):   # 끊김·중단·초기화 전부 (v1.53 목록 112)
                     return
                 remaining -= len(chunk)
 
@@ -5769,6 +5770,21 @@ def _open_ui_window(url: str) -> None:
     webbrowser.open(url)                     # 크롬·엣지가 없으면 지금처럼
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """클라이언트가 연결을 끊은 «소음»은 한 줄 디버그 로그로 (v1.53 목록 112).
+
+    영상 미리보기를 넘기다 창을 닫으면 Windows가 ConnectionAbortedError
+    (WinError 10053)를 던지는데, 기본 처리기가 트레이스백을 통째로 찍어
+    회원이 프로그램 오류로 오해했다 (회원님 52차 스크린샷)."""
+
+    def handle_error(self, request, client_address):  # noqa: N802 — 표준 서명
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            logging.getLogger("cutdaejang").debug("클라이언트 연결 끊김: %s", exc)
+            return
+        super().handle_error(request, client_address)
+
+
 def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
     Path(workdir).mkdir(parents=True, exist_ok=True)
     _attach_ui_log()
@@ -5780,7 +5796,7 @@ def create_server(workdir: str, port: int = 7860) -> ThreadingHTTPServer:
         _lic.mark_first_run()
     except Exception:  # noqa: BLE001 — 라이선스 문제로 서버가 안 뜨면 안 된다
         pass
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    httpd = _QuietServer(("127.0.0.1", port), _Handler)
     httpd.workdir = str(workdir)  # type: ignore[attr-defined]
     return httpd
 
@@ -5798,6 +5814,28 @@ def _setup_file_logging(workdir: str) -> None:
 
 
 def serve(workdir: str = "jobs", port: int = 7860, open_browser: bool = True) -> int:
+    # 🫥 v1.53 (목록 111): "이런 서버가 꼭 열려야지만 사용할 수 있는 거야?
+    # 화면에 안 보이면 좋겠는데" — Windows에서는 자신을 창 없는 프로세스로
+    # 다시 띄우고 이 콘솔은 닫는다. 파이썬·FFmpeg를 준비하는 «첫 설치» 화면은
+    # 여기까지 오기 전이라 그대로 보인다. 문제를 눈으로 봐야 할 때는
+    # CUTDAEJANG_SHOW_CONSOLE=1 로 켜면 예전처럼 보인다 (오류는 로그 파일에도 남는다).
+    if (os.name == "nt" and not os.environ.get("CUTDAEJANG_DETACHED")
+            and not os.environ.get("CUTDAEJANG_SHOW_CONSOLE")):
+        import subprocess  # noqa: PLC0415
+
+        try:
+            subprocess.Popen(
+                [sys.executable, "-m", "cutdaejang", "ui",
+                 "--workdir", str(workdir), "--port", str(port)]
+                + ([] if open_browser else ["--no-open"]),
+                creationflags=0x08000000,            # CREATE_NO_WINDOW
+                close_fds=True,
+                env=dict(os.environ, CUTDAEJANG_DETACHED="1"))
+            print("컷대장을 창 없이 실행합니다 - 곧 화면이 열립니다 (이 검은 창은 자동으로 닫혀요)")
+            print("화면 창을 닫으면 컷대장도 잠시 후 스스로 꺼집니다.")
+            return 0
+        except Exception:  # noqa: BLE001 — 분리 실패 → 보이는 채로 계속 (기능은 그대로)
+            pass
     loaded = config.load_api_keys_into_env()
     if loaded:
         print(f"저장된 API 키 로드: {', '.join(loaded)}")
@@ -5818,6 +5856,26 @@ def serve(workdir: str = "jobs", port: int = 7860, open_browser: bool = True) ->
     print(f"컷대장 UI: {url}   (끝내려면 Ctrl+C - 이 창을 닫으면 UI도 꺼집니다)")
     if open_browser:
         threading.Timer(0.7, lambda: _open_ui_window(url)).start()
+
+    # 🫥 유령 방지 (v1.53 목록 111): 창 없는 서버가 화면도 없이 남지 않게.
+    # 화면(브라우저)의 상태 폴링이 90초 넘게 끊기고 렌더·받기 작업도 없으면
+    # 스스로 꺼진다. 화면이 아예 안 열린 채 15분이 지나도 꺼진다.
+    started = time.time()
+
+    def _idle_exit():
+        while True:
+            time.sleep(15)
+            if _ACTIVE_JOBS > 0 or _BGM_TASK.get("running"):
+                continue                                # 작업 중엔 절대 안 끈다
+            last = float(getattr(type(httpd), "_last_poll", 0) or 0)
+            if last and time.time() - last > 90:
+                break
+            if not last and time.time() - started > 900:
+                break
+        print("화면이 닫혀 컷대장을 종료합니다.")
+        httpd.shutdown()
+
+    threading.Thread(target=_idle_exit, daemon=True).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -6066,6 +6124,11 @@ _HTML = """<!doctype html>
   @keyframes pvPulse { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.06); } }
   @keyframes pvWiggle { 0%, 100% { transform:rotate(0); } 25% { transform:rotate(1.6deg); }
     75% { transform:rotate(-1.6deg); } }
+  @keyframes pvFloat { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.035); } }
+  @keyframes pvSwing { 0%, 100% { transform:rotate(0); } 25% { transform:rotate(3.2deg); }
+    75% { transform:rotate(-3.2deg); } }
+  @keyframes pvBounce { 0%, 100% { transform:scale(1,1); } 50% { transform:scale(.97,1.1); } }
+  @keyframes pvShine { 0%, 100% { filter:none; } 50% { filter:drop-shadow(0 0 7px rgba(255,255,255,.85)); } }
   .fx-demo { display:inline-flex; width:64px; height:38px; border-radius:6px; flex:none;
     background:linear-gradient(135deg,#31406e,#7a4a76 60%,#b8875a);
     align-items:center; justify-content:center; overflow:hidden; }
@@ -6099,7 +6162,7 @@ body.easy #easyBar { display: block; }
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.52.0)</small></h1>
+    <h1>컷대장 <small>유튜브 영상 자동 제작 (v1.53.0)</small></h1>
     <div id="jobsBar" class="hidden" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 100%;order:9;margin:6px 0 2px;padding:8px 10px;border:1px dashed #3a4157;border-radius:10px">
       <span class="hint" style="white-space:nowrap">📋 진행·대기</span>
       <select id="parallelSel" onchange="setParallel(event)" title="동시에 몇 개까지 같이 만들지 — 여러 작업을 걸어두고 병렬로 진행돼요. PC가 버벅이면 낮추세요" style="font-size:12px;padding:2px 6px">
@@ -8147,6 +8210,10 @@ body.easy #easyBar { display: block; }
           <option value="none">없음 — 가만히</option>
           <option value="pulse">💓 두근 — 커졌다 작아졌다</option>
           <option value="wiggle">🫨 갸웃 — 살짝 기울었다 돌아왔다</option>
+          <option value="float">🎈 둥실 — 천천히 부풀었다 가라앉았다</option>
+          <option value="swing">🎶 스윙 — 크게 좌우로 갸웃갸웃</option>
+          <option value="bounce">🐰 콩콩 — 통통 튀듯 늘었다 줄었다</option>
+          <option value="shine">✨ 반짝 — 은은히 빛났다 돌아왔다</option>
         </select>
         <span class="hint">— 등장 효과는 «나타날 때» 한 번, 이건 자막이 떠 있는 동안 계속</span></div>
       <div class="chk" style="gap:8px"><span>🌏 번역 병기 자막</span>
@@ -11549,7 +11616,44 @@ function _pvApplyAnim(fr){
   const motion = (mm && mm.value) || ((($('setSubMotion')||{}).value) || 'none');
   if(motion === 'pulse') parts.push('pvPulse 1.1s ease-in-out .4s infinite');
   else if(motion === 'wiggle') parts.push('pvWiggle 1.4s ease-in-out .4s infinite');
+  else if(motion === 'float') parts.push('pvFloat 1.7s ease-in-out .4s infinite');
+  else if(motion === 'swing') parts.push('pvSwing 1.8s ease-in-out .4s infinite');
+  else if(motion === 'bounce') parts.push('pvBounce .9s ease-in-out .4s infinite');
+  else if(motion === 'shine') parts.push('pvShine 1.3s ease-in-out .4s infinite');
   el.style.animation = parts.join(', ');
+}
+function _syncToneCards(sel){
+  document.querySelectorAll('.tonerow[data-for="' + sel.id + '"] .tonecard').forEach(function(c){
+    c.classList.toggle('sel', c.dataset.v === sel.value);
+  });
+}
+// 🎲 랜덤 꾸미기 (v1.53 목록 109) — 감성 테마 랜덤(v1.24)의 낱개 버전.
+//    고르는 게 많아 모르겠을 때 한 번에 뽑고, 미리보기로 바로 확인한다.
+function rollDeco(ev){
+  if(ev) ev.preventDefault();
+  const w = ev.target.closest('.pvwrap'), fr = w && w.querySelector('.pvframe');
+  const box = fr && fr.closest('details'); if(!fr || !box) return;
+  const ids = PV_IDS[fr.dataset.key] || {};
+  const picks = [];
+  function roll(sel, label){
+    if(!sel || sel.options.length < 2) return;
+    const opts = [...sel.options].map(function(o){ return o.value; })
+      .filter(function(v){ return v !== 'rand'; });
+    if(opts.length < 2) return;
+    let v = opts[Math.floor(Math.random() * opts.length)];
+    if(v === sel.value) v = opts[(opts.indexOf(v) + 1) % opts.length];
+    sel.value = v;
+    sel.dispatchEvent(new Event('change', {bubbles: true}));
+    if(sel.classList.contains('hidden') || sel.id.indexOf('ToneSel') > 0) _syncToneCards(sel);
+    picks.push(label + ' ' + ((sel.options[sel.selectedIndex] || {}).textContent || v).split(' — ')[0].split(' (')[0]);
+  }
+  roll($(ids.sub), '자막');
+  roll($(ids.hook), '제목');
+  roll($(ids.font), '글씨체');
+  roll($(ids.tone), '톤');
+  roll(box.querySelector('.qd-anim'), '등장');
+  roll(box.querySelector('.qd-motion'), '움직임');
+  if(picks.length) uiBanner('🎲 ' + picks.join(' · ') + ' — 미리보기를 확인하세요. 마음에 안 들면 또 굴려요!');
 }
 function pvReplay(ev){
   if(ev) ev.preventDefault();
@@ -11612,7 +11716,7 @@ function _mountPvFrame(box, key){
     + '<div class="pvhook"><span class="pvhooktxt">제목이 여기에!</span></div>'
     + '<div class="pvsub"><span class="pvsubtxt"></span></div></div>'
     + '<div class="pvcap hint">📺 지금 고른 그대로 <b>미리보기</b>'
-    + ' <button class="ghost" style="width:auto;margin:0;padding:2px 10px" onclick="pvReplay(event)">▶ 효과 다시</button></div>'
+    + ' <button class="ghost" style="width:auto;margin:0;padding:2px 10px" onclick="pvReplay(event)">▶ 효과 다시</button> <button class="ghost" style="width:auto;margin:0;padding:2px 10px" onclick="rollDeco(event)" title="자막·제목·글씨체·톤·등장·움직임을 한 번에 무작위로">🎲 랜덤 꾸미기</button></div>'
     + '<div class="pvonly hint" style="margin-top:2px;opacity:.7"></div>';
   const sum = box.querySelector('summary');
   if(sum && sum.nextSibling) box.insertBefore(w, sum.nextSibling);
@@ -12611,8 +12715,35 @@ function renderShopPhotoPrev(){
       '<button class="ghost" style="padding:1px 5px" onclick="moveShopPhoto(event,' + i + ',1)" title="뒤로">→</button>' +
       '<button class="ghost" style="padding:1px 5px;color:#ff8e8e" onclick="removeShopPhoto(event,' + i + ')" title="영상에서 제외">×</button></div></div>';
   }).join('');
+  _wirePhotoDrag(box, '.shop-photo-item', function(from, to){
+    const ps = window._shopPhotos || [], pv = window._shopPrev || [];
+    ps.splice(to, 0, ps.splice(from, 1)[0]);
+    pv.splice(to, 0, pv.splice(from, 1)[0]);
+    renderShopPhotoPrev();
+  });
   if(photos.length) $('shopPhotoCnt').textContent =
-    '✅ 영상에 반영할 사진 ' + photos.length + '장 · 아래 번호 순서대로 모두 사용';
+    '✅ 영상에 반영할 사진 ' + photos.length + '장 · 아래 번호 순서대로 모두 사용'
+    + ' · 🖱 사진을 끌어다 놓으면 순서가 바뀌어요';
+}
+// 🖱 사진 카드 드래그 순서 바꾸기 (v1.53 목록 108) — 화살표는 그대로, 끌기를 얹는다
+function _wirePhotoDrag(box, sel, onMove){
+  box.querySelectorAll(sel).forEach(function(el, i){
+    el.draggable = true;
+    el.addEventListener('dragstart', function(e){
+      box._dragFrom = i; el.style.opacity = '.4';
+      try{ e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move'; }catch(_e){}
+    });
+    el.addEventListener('dragend', function(){ el.style.opacity = ''; });
+    el.addEventListener('dragover', function(e){ e.preventDefault(); el.style.borderColor = '#4266d5'; });
+    el.addEventListener('dragleave', function(){ el.style.borderColor = ''; });
+    el.addEventListener('drop', function(e){
+      e.preventDefault(); el.style.borderColor = '';
+      const from = box._dragFrom;
+      box._dragFrom = null;
+      if(from == null || from === i) return;
+      onMove(from, i);
+    });
+  });
 }
 function addShopPhotos(paths, previews){
   window._shopPhotos = window._shopPhotos || [];

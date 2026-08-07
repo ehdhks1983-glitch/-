@@ -440,6 +440,14 @@ def _motion_tags(dur_ms: int, motion: str) -> str:
         a, b, neutral, half = "\\fscx106\\fscy106", "\\fscx100\\fscy100", "\\fscx100\\fscy100", 550
     elif motion == "wiggle":  # 🫨 갸웃 — 살짝 기울었다 돌아왔다
         a, b, neutral, half = "\\frz1.6", "\\frz-1.6", "\\frz0", 700
+    elif motion == "float":   # 🎈 둥실 — 천천히 부풀었다 가라앉았다 (v1.53)
+        a, b, neutral, half = "\\fscx103\\fscy103", "\\fscx100\\fscy100", "\\fscx100\\fscy100", 850
+    elif motion == "swing":   # 🎶 스윙 — 크게 좌우로 갸웃갸웃 (v1.53)
+        a, b, neutral, half = "\\frz3.2", "\\frz-3.2", "\\frz0", 900
+    elif motion == "bounce":  # 🐰 콩콩 — 통통 튀듯 늘었다 줄었다 (v1.53)
+        a, b, neutral, half = "\\fscy110\\fscx97", "\\fscy100\\fscx100", "\\fscx100\\fscy100", 450
+    elif motion == "shine":   # ✨ 반짝 — 은은히 빛났다 돌아왔다 (v1.53)
+        a, b, neutral, half = "\\blur2.4", "\\blur0", "\\blur0", 650
     else:
         return ""
     start = 400

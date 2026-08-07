@@ -21,7 +21,7 @@ JS = "\n".join(re.findall(r"<script>(.*?)</script>", HTML, re.S))
 
 
 def test_version():
-    assert __version__ == "1.52.0"
+    assert __version__ == "1.53.0"
 
 
 # ── 104. 즐겨찾기 성우 따로 보기 ───────────────────────────────

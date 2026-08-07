@@ -41,7 +41,8 @@ if exist "windows\ffmpeg\bin\ffmpeg.exe" (
 )
 echo.
 echo 잠시 후 브라우저에 컷대장 화면이 열립니다.
-echo 이 검은 창은 서버라 최소화된 채 두면 됩니다 — 닫으면 컷대장도 꺼져요.
+echo 준비가 끝나면 이 검은 창은 자동으로 닫히고, 컷대장은 창 없이 돌아갑니다.
+echo (컷대장 화면을 닫으면 프로그램도 잠시 후 스스로 꺼져요)
 echo.
 "%PY%" -m cutdaejang ui --workdir windows\jobs
 if errorlevel 1 (

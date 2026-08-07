@@ -40,7 +40,7 @@ def _default_events(txt):
 
 
 def test_version():
-    assert __version__ == "1.52.0"
+    assert __version__ == "1.53.0"
 
 
 # ── 렌더 — \t 사슬 ──────────────────────────────────────────────

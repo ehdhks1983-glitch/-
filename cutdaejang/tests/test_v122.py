@@ -25,7 +25,7 @@ from tests.conftest import requires_ffmpeg
 
 
 def test_version():
-    assert __version__ == "1.52.0"
+    assert __version__ == "1.53.0"
 
 
 # ── 🎨 32: 테마 시스템 ───────────────────────────────────────────
