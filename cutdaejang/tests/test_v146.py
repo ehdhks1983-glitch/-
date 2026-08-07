@@ -24,7 +24,7 @@ JS = "\n".join(re.findall(r"<script>(.*?)</script>", HTML, re.S))
 
 
 def test_version():
-    assert __version__ == "1.47.2"
+    assert __version__ == "1.48.0"
 
 
 # ── 91 네이버 클립 챌린지 카운팅 ────────────────────────────────

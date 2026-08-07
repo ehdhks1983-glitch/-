@@ -38,7 +38,11 @@ EOF
 echo "== 3) zip 생성 =="
 rm -f "$ZIP"
 cd "$ROOT"
-zip -qr "$ZIP" "$NAME" -x "*/__pycache__/*" -x "*.pyc" -x "*/.pytest_cache/*"
+# 📦 v1.48 (목록 98) — 구매자 zip에는 제품만: 내부 문서(경쟁분석·로드맵·오류
+#   목록·개발기획 등)와 시험 묶음은 판매자 전용이라 뺀다. 구매자가 쓰는 문서는
+#   루트의 실행가이드.md 와 판매문서/ 뿐이다.
+zip -qr "$ZIP" "$NAME" -x "*/__pycache__/*" -x "*.pyc" -x "*/.pytest_cache/*" \
+    -x "$NAME/docs/*" -x "$NAME/tests/*"
 
 echo "== 4) 검증 =="
 unzip -qt "$ZIP" >/dev/null && echo "  ✔ 무결성"
@@ -46,6 +50,10 @@ if unzip -l "$ZIP" | grep -E "api_keys\.json|settings\.json|ffmpeg\.exe"; then
   echo "  ✘ 비밀·대용량 파일 포함!" && exit 1
 fi
 echo "  ✔ api_keys/settings/ffmpeg 없음"
+if unzip -l "$ZIP" | grep -qE "$NAME/(docs|tests)/"; then
+  echo "  ✘ 내부 문서·시험이 구매자 zip에 포함!" && exit 1
+fi
+echo "  ✔ 내부 문서(docs)·시험(tests) 없음 — 구매자 zip은 제품만"
 
 VDIR=$(mktemp -d)
 unzip -q "$ZIP" -d "$VDIR"
