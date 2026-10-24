@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { deleteProject, selectMyProjectById, updateProject, type ProjectPatch } from "@/lib/db/projects";
+import { logApproval } from "@/lib/db/complianceLogs";
 import { parseApproval, validateApproval } from "@/lib/compliance/approval";
 import type { SectionCopy, TemplateId } from "@/lib/ai/types";
 
@@ -76,6 +77,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
     const project = await updateProject(supabase, id, user.id, patch);
     if (!project) return NextResponse.json({ error: "찾을 수 없어요." }, { status: 404 });
+    if (patch.compliance) {
+      await logApproval(supabase, {
+        projectId: project.id,
+        owner: user.id,
+        record: patch.compliance,
+        template: project.template,
+        copy: project.copy,
+      });
+    }
     return NextResponse.json({ id: project.id, slug: project.slug });
   } catch (err) {
     console.error("[api/projects/:id] PATCH 실패:", err);

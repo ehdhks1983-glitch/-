@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { insertProject } from "@/lib/db/projects";
+import { logApproval } from "@/lib/db/complianceLogs";
 import { rateLimit, clientKey, sweep } from "@/lib/rateLimit";
 import { parseApproval, validateApproval } from "@/lib/compliance/approval";
 import type { BizInfo, SectionCopy, TemplateId } from "@/lib/ai/types";
@@ -59,6 +60,8 @@ export async function POST(req: Request) {
     );
   }
 
+  const record = { ...approval.record, approved_by: user.id };
+
   try {
     const project = await insertProject(supabase, user.id, {
       title: typeof body.title === "string" ? body.title : "",
@@ -66,9 +69,10 @@ export async function POST(req: Request) {
       template,
       biz_info: biz,
       copy,
-      compliance: { ...approval.record, approved_by: user.id },
+      compliance: record,
       publish: true,
     });
+    await logApproval(supabase, { projectId: project.id, owner: user.id, record, template, copy });
     return NextResponse.json({ id: project.id, slug: project.slug });
   } catch (err) {
     console.error("[api/projects] 저장 실패:", err);

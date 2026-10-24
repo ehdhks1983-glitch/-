@@ -104,3 +104,33 @@ create policy "leads_public_insert" on public.leads
   for insert with check (
     exists (select 1 from public.projects p where p.id = leads.project_id and p.published = true)
   );
+
+-- ───────────────────────── compliance_logs ─────────────────────────
+-- 게시 승인 감사 로그: 승인할 때마다 승인 기록 + 그때의 카피·템플릿 스냅샷을 쌓는다(덮어쓰지 않음).
+-- 실증 자료 제출 요구(실증고시: 15일 이내) 등에 "무엇을 언제 누가 승인했는지"를 보여 주기 위함.
+-- 프로젝트를 지워도 로그는 남는다(project_id 만 null).
+create table if not exists public.compliance_logs (
+  id          uuid primary key default gen_random_uuid(),
+  project_id  uuid references public.projects (id) on delete set null,
+  owner       uuid not null references auth.users (id) on delete cascade,
+  record      jsonb not null,
+  template    text not null default '',
+  copy        jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists compliance_logs_project_idx on public.compliance_logs (project_id);
+
+alter table public.compliance_logs enable row level security;
+
+-- 소유자만 조회·추가. 수정·삭제 정책은 두지 않는다(감사 로그는 append-only).
+drop policy if exists "compliance_logs_owner_select" on public.compliance_logs;
+create policy "compliance_logs_owner_select" on public.compliance_logs
+  for select using (auth.uid() = owner);
+
+drop policy if exists "compliance_logs_owner_insert" on public.compliance_logs;
+create policy "compliance_logs_owner_insert" on public.compliance_logs
+  for insert with check (
+    auth.uid() = owner
+    and exists (select 1 from public.projects p where p.id = compliance_logs.project_id and p.owner = auth.uid())
+  );

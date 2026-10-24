@@ -45,7 +45,11 @@ export default async function PublicPage({ params }: Params) {
       </h2>
       <p className="mt-3 text-slate-300">이메일을 남기면 가장 먼저 알려드릴게요.</p>
       <div className="mt-8">
-        <LeadForm projectId={project.id} buttonLabel={project.copy?.cta?.button || "신청하기"} />
+        <LeadForm
+          projectId={project.id}
+          buttonLabel={project.copy?.cta?.button || "신청하기"}
+          operator={project.biz_info?.service_name || project.title}
+        />
       </div>
     </section>
   );

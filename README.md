@@ -52,7 +52,7 @@ AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적
 
 1. [supabase.com](https://supabase.com) 에서 프로젝트 생성
 2. **SQL Editor** 에 `database/schema.sql` 전체를 붙여 실행 (profiles/projects/leads + RLS + 가입 트리거)
-   - 이미 배포한 DB도 다시 실행하면 됩니다(재실행 안전). 게시 승인 기록용 `projects.compliance` 컬럼이 추가됩니다.
+   - 이미 배포한 DB도 다시 실행하면 됩니다(재실행 안전). 게시 승인 기록용 `projects.compliance` 컬럼과 `compliance_logs` 테이블이 추가됩니다.
 3. **Project Settings → API** 에서 URL·anon 키를 복사해 `.env.local`(또는 Vercel)에 입력
 4. Auth → 이메일 가입을 사용하면 됩니다(기본). 확인 메일 설정은 Supabase Auth 설정에서 조정
 
@@ -106,6 +106,8 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
   생성 직후 block 이 나오면 문제 표현을 피드백으로 주고 1회 다시 씁니다.
 - **게시 전 확인**: 검사 결과, 업종 필수 표시(학원 등록번호·교습비, 건기식 자율심의 번호), AI 표시 설정, 사장님 승인 체크.
   서버(`/api/projects`)가 카피를 다시 검사해 통과할 때만 저장하고 승인 기록(시각·사용자·고지 버전·남은 경고)을 `projects.compliance` 에 남깁니다.
+- **승인 감사 로그**: 승인할 때마다 기록 + 그때의 카피·템플릿 스냅샷을 `compliance_logs` 에 쌓습니다(append-only, 프로젝트 삭제 후에도 보존).
+- **신청 폼 개인정보 동의**: 수집 항목·목적·보유기간·거부권을 고지하고 필수 동의를 받습니다. 서버도 동의를 확인하고 동의 버전·시각을 `leads.meta` 에 남깁니다.
 - **AI 사전고지·결과물 표시**: 생성 화면·회원가입(동의 기록)에 사전고지, 공개 페이지 하단에 ‘생성형 AI로 작성’ 표시(기본 켜짐, 끄려면 확인 필요).
 - 문구를 바꾸면 `lib/compliance/notice.ts` 의 `AI_NOTICE_VERSION` 을 올리세요.
 

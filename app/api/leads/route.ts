@@ -1,12 +1,14 @@
 // app/api/leads/route.ts  [신규]
 // 공개 페이지의 이메일 신청을 leads 에 저장. IP 기준 rate limit + 이메일 검증.
-// RLS 정책상 '게시된 프로젝트'에만 insert 된다.
+// RLS 정책상 '게시된 프로젝트'에만 insert 된다. 개인정보 수집·이용 동의(필수)를 받은 신청만 저장하고,
+// 동의 버전·시각을 meta 에 남긴다.
 
 import { NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { collectLead, isValidEmail } from "@/lib/db/leads";
 import { rateLimit, clientKey, sweep } from "@/lib/rateLimit";
+import { LEAD_CONSENT_VERSION } from "@/lib/compliance/privacy";
 
 export const runtime = "nodejs";
 
@@ -39,10 +41,15 @@ export async function POST(req: Request) {
   if (!isValidEmail(email)) {
     return NextResponse.json({ error: "이메일 형식을 확인해 주세요." }, { status: 400 });
   }
+  if (body.consent !== true) {
+    return NextResponse.json({ error: "개인정보 수집·이용에 동의해 주세요." }, { status: 400 });
+  }
 
   try {
     const supabase = await createSupabaseServer();
-    await collectLead(supabase, projectId, email);
+    await collectLead(supabase, projectId, email, {
+      consent: { version: LEAD_CONSENT_VERSION, at: new Date().toISOString() },
+    });
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[api/leads] 실패:", err);
