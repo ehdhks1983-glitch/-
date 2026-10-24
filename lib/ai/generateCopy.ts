@@ -4,6 +4,15 @@
 
 import { withFallback, safeParseJson } from "./core";
 import type { BizInfo, SectionCopy } from "./types";
+import { detectIndustry, getIndustry } from "@/lib/compliance/industries";
+import { checkCopy, findingsToFeedback, hasBlocking } from "@/lib/compliance/check";
+
+/** 업종 프리셋 규칙을 프롬프트 줄로. 업종 규칙은 한국어 법규 기준이라 영어 프롬프트에도 그대로 넣는다. */
+function industryRules(biz: BizInfo): string {
+  const preset = getIndustry(biz.industry ?? detectIndustry(biz));
+  if (!preset.promptRules.length) return "";
+  return `\n[업종 규칙 — ${preset.name}]\n${preset.promptRules.map((r) => `- ${r}`).join("\n")}`;
+}
 
 function buildSystem(biz: BizInfo): string {
   const ko = biz.language === "ko";
@@ -34,6 +43,8 @@ function buildSystem(biz: BizInfo): string {
 [안전 규칙]
 - 건강/의료 주제라도 '의사','병원','전문의' 등 의료 전문가 사칭/연상 금지. 개인 경험·객관 사실 위주.
 - 허위·과장 효능, 보장 표현("100% 완치") 금지.
+- 손님·고객 시점의 1인칭 체험담·후기("직접 먹어봤는데", "고객들이 극찬")를 쓰지 않는다. 운영자 시점에서 사실만 쓴다.
+- 근거가 필요한 표현('최고·1위·유일·최초·100%·보장·무조건', 'AI 기술로 더 ~한')을 쓰지 않는다.${industryRules(biz)}
 
 [톤] ${biz.tone}
 [분량] features.items 3~5개, faq 3~5개. 간결하게.
@@ -56,6 +67,8 @@ Flow: agitate the pain (in the customer's words) -> solution -> one clear CTA. F
 Write like a human; short sentences, rhythm.
 [Banned clichés] "in today's fast-paced world","revolutionary","game-changer","one-stop","unparalleled","best-in-class","seamless","unlock","elevate","optimize your experience". Replace with concrete wording.
 [Safety] No impersonating medical professionals; no false/guarantee claims.
+No first-person customer testimonials or reviews; write from the operator's side, facts only.
+No claims that need substantiation ("best", "#1", "only", "first", "100%", "guaranteed", "smarter with AI").${industryRules(biz)}
 [Tone] ${biz.tone}
 [Length] features.items 3-5, faq 3-5. Concise.
 Schema:
@@ -85,9 +98,20 @@ function buildUser(biz: BizInfo, extraContext?: string): string {
  * @param extraContext 보완질문 답변 등 추가 맥락 (clarifyQuestions의 answersToContext 결과)
  */
 export async function generateCopy(biz: BizInfo, extraContext?: string): Promise<SectionCopy> {
+  const copy = await requestCopy(biz, buildUser(biz, extraContext));
+
+  // 업종 금칙어(block)가 나오면 문제 표현을 피드백으로 주고 1회만 다시 쓴다(비용 상한).
+  // 그래도 남으면 그대로 반환 → 게시 전 확인 화면이 게시를 막고 '다시 생성'을 안내한다.
+  const findings = checkCopy(copy, biz.industry ?? detectIndustry(biz));
+  if (!hasBlocking(findings)) return copy;
+  const feedback = `${buildUser(biz, extraContext)}\n\n직전 초안에 광고 규정상 쓸 수 없는 표현이 있었다. 아래 표현과 같은 뜻의 문장을 모두 빼고 다시 작성하라:\n${findingsToFeedback(findings.filter((f) => f.severity === "block"))}`;
+  return requestCopy(biz, feedback);
+}
+
+async function requestCopy(biz: BizInfo, user: string): Promise<SectionCopy> {
   const raw = await withFallback("copy", {
     system: buildSystem(biz),
-    user: buildUser(biz, extraContext),
+    user,
     json: true,
   });
 

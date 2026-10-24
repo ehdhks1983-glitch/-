@@ -1,11 +1,13 @@
 // app/api/projects/route.ts  [신규]
 // 생성 결과를 projects 에 저장(+게시). 로그인 필요. IP 기준 rate limit.
+// 게시 전 승인(compliance)이 필수 — 서버가 카피를 다시 검사해 통과할 때만 저장한다.
 
 import { NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { insertProject } from "@/lib/db/projects";
 import { rateLimit, clientKey, sweep } from "@/lib/rateLimit";
+import { parseApproval, validateApproval } from "@/lib/compliance/approval";
 import type { BizInfo, SectionCopy, TemplateId } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
@@ -49,6 +51,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "생성된 페이지 정보가 올바르지 않습니다." }, { status: 400 });
   }
 
+  const approval = validateApproval(copy, parseApproval(body.compliance));
+  if (!approval.ok) {
+    return NextResponse.json(
+      { error: approval.error, findings: approval.findings, missing: approval.missing },
+      { status: 422 },
+    );
+  }
+
   try {
     const project = await insertProject(supabase, user.id, {
       title: typeof body.title === "string" ? body.title : "",
@@ -56,6 +66,7 @@ export async function POST(req: Request) {
       template,
       biz_info: biz,
       copy,
+      compliance: { ...approval.record, approved_by: user.id },
       publish: true,
     });
     return NextResponse.json({ id: project.id, slug: project.slug });

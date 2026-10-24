@@ -1,5 +1,5 @@
 // app/s/[slug]/page.tsx  [신규] — ★공개 게시 페이지(멀티테넌트).
-// slug 로 게시된 프로젝트를 조회해 템플릿 + 이메일 신청 폼을 서빙한다.
+// slug 로 게시된 프로젝트를 조회해 템플릿 + 이메일 신청 폼 + 고지 띠(AI 표시·업종 필수 표시)를 서빙한다.
 
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -8,6 +8,8 @@ import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { selectPublishedBySlug } from "@/lib/db/projects";
 import TemplateRenderer from "@/components/templates/TemplateRenderer";
 import LeadForm from "@/components/LeadForm";
+import ComplianceFooter from "@/components/ComplianceFooter";
+import { detectIndustry, isIndustryId } from "@/lib/compliance/industries";
 import { buildPageMetadata } from "@/lib/seo/meta";
 
 export const dynamic = "force-dynamic";
@@ -48,13 +50,25 @@ export default async function PublicPage({ params }: Params) {
     </section>
   );
 
+  // 승인 기록이 없는 이전 게시물도 AI 표시는 기본으로 보인다(안전한 기본값).
+  const compliance = project.compliance ?? {};
+  const lang = project.biz_info?.language ?? "ko";
+
   return (
-    <TemplateRenderer
-      templateId={project.template}
-      copy={project.copy}
-      lang={project.biz_info?.language ?? "ko"}
-      biz={project.biz_info}
-      signupSlot={signupSlot}
-    />
+    <>
+      <TemplateRenderer
+        templateId={project.template}
+        copy={project.copy}
+        lang={lang}
+        biz={project.biz_info}
+        signupSlot={signupSlot}
+      />
+      <ComplianceFooter
+        lang={lang}
+        aiLabel={compliance.ai_label !== false}
+        industry={isIndustryId(compliance.industry) ? compliance.industry : detectIndustry(project.biz_info)}
+        disclosures={compliance.disclosures}
+      />
+    </>
   );
 }

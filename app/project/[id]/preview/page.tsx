@@ -8,12 +8,15 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import TemplateRenderer from "@/components/templates/TemplateRenderer";
+import ComplianceFooter from "@/components/ComplianceFooter";
 import type { BizInfo, SectionCopy, TemplateId } from "@/lib/ai/types";
+import type { Disclosures, IndustryId } from "@/lib/compliance/industries";
 
 interface Saved {
   biz: BizInfo;
   template: TemplateId;
   copy: SectionCopy;
+  compliance?: { industry: IndustryId; aiLabel: boolean; disclosures: Disclosures };
 }
 
 type ViewState = { status: "loading" | "ready" | "empty"; data: Saved | null };
@@ -70,6 +73,12 @@ export default function PreviewPage() {
         copy={data.copy}
         lang={data.biz?.language ?? "ko"}
         biz={data.biz}
+      />
+      <ComplianceFooter
+        lang={data.biz?.language ?? "ko"}
+        aiLabel={data.compliance?.aiLabel ?? true}
+        industry={data.compliance?.industry}
+        disclosures={data.compliance?.disclosures}
       />
     </div>
   );

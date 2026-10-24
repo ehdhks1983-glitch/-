@@ -1,10 +1,11 @@
 // app/page.tsx  [신규] — PromptSite 마케팅 홈
 import Link from "next/link";
+import { AI_PRE_NOTICE_SHORT } from "@/lib/compliance/notice";
 
 const STEPS = [
   { n: "1", t: "한 줄로 설명", d: "무슨 사업·서비스인지 자유롭게 적어요." },
   { n: "2", t: "AI가 작성", d: "팔리는 카피와 어울리는 디자인을 만들어요." },
-  { n: "3", t: "딸깍 게시", d: "공개 주소로 바로 띄우고 신청을 받아요." },
+  { n: "3", t: "확인하고 게시", d: "광고 문구 검사 결과를 보고 승인하면 공개 주소로 띄워요." },
 ];
 
 export default function Home() {
@@ -37,7 +38,7 @@ export default function Home() {
             </h1>
             <p className="mx-auto mt-6 max-w-xl text-lg leading-8 text-slate-600">
               무엇을 위한 페이지인지 적기만 하세요. 팔리는 카피, 어울리는 디자인,
-              신청 폼까지 — AI가 만들어 바로 게시합니다.
+              신청 폼까지 — AI가 만들고, 확인 후 바로 게시합니다.
             </p>
             <div className="mt-10 flex justify-center gap-3">
               <Link
@@ -73,7 +74,8 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-slate-100 px-6 py-8">
         <div className="mx-auto max-w-5xl text-center text-sm text-slate-400">
-          PromptSite — 딸깍으로 만드는 랜딩페이지
+          <p>PromptSite — 딸깍으로 만드는 랜딩페이지</p>
+          <p className="mt-1 text-xs">{AI_PRE_NOTICE_SHORT}</p>
         </div>
       </footer>
     </div>

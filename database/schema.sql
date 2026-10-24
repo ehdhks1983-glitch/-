@@ -53,6 +53,10 @@ create table if not exists public.projects (
   updated_at  timestamptz not null default now()
 );
 
+-- 게시 전 승인 기록(업종·AI 표시·필수 표시 항목·승인 시각/사용자·사전고지 버전·남은 경고).
+-- 기존 배포는 이 파일을 다시 실행하면 컬럼만 추가된다.
+alter table public.projects add column if not exists compliance jsonb not null default '{}'::jsonb;
+
 create index if not exists projects_owner_idx on public.projects (owner);
 create index if not exists projects_slug_idx on public.projects (slug);
 

@@ -1,6 +1,8 @@
 // lib/ai/types.ts  [기존 — promptsite-ai-core]
 // 파이프라인 전역 도메인 타입. analyzePrompt → clarifyQuestions → generateCopy 가 공유한다.
 
+import type { IndustryId } from "@/lib/compliance/industries";
+
 export type Lang = "ko" | "en";
 
 /** analyzePrompt 결과: 구조화된 사업정보 + 강한 카피에 부족한 정보(missing) */
@@ -13,6 +15,8 @@ export interface BizInfo {
   tone: string;
   language: Lang;
   missing: string[];
+  /** 업종 프리셋(광고 규제 단위). 없으면 detectIndustry 로 추정. */
+  industry?: IndustryId;
 }
 
 export interface HeroCopy {

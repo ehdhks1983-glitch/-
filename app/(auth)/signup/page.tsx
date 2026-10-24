@@ -6,12 +6,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser, isSupabaseConfigured } from "@/lib/db/supabase";
 import { AuthShell, Field } from "@/components/auth";
+import { AI_NOTICE_VERSION, AI_PRE_NOTICE } from "@/lib/compliance/notice";
 
 export default function SignupPage() {
   const router = useRouter();
   const configured = isSupabaseConfigured();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [aiNoticeAck, setAiNoticeAck] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -26,11 +28,20 @@ export default function SignupPage() {
       setError("비밀번호는 6자 이상이어야 해요.");
       return;
     }
+    if (!aiNoticeAck) {
+      setError("생성형 AI 서비스 안내를 확인해 주세요.");
+      return;
+    }
     setLoading(true);
     setError("");
     setMessage("");
     const supabase = createSupabaseBrowser();
-    const { data, error: err } = await supabase.auth.signUp({ email: email.trim(), password });
+    // AI 기본법 사전고지 동의 기록(버전·시각) — 사용자 메타데이터에 남긴다.
+    const { data, error: err } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: { data: { ai_notice_version: AI_NOTICE_VERSION, ai_notice_ack_at: new Date().toISOString() } },
+    });
     setLoading(false);
     if (err) {
       setError(/registered|exists/i.test(err.message) ? "이미 가입된 이메일이에요." : "회원가입에 실패했어요. 다시 시도해 주세요.");
@@ -58,6 +69,18 @@ export default function SignupPage() {
             onChange={setPassword}
             autoComplete="new-password"
           />
+          <div className="rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+            <p>{AI_PRE_NOTICE}</p>
+            <label className="mt-2 flex items-start gap-2 font-medium text-slate-700">
+              <input
+                type="checkbox"
+                checked={aiNoticeAck}
+                onChange={(e) => setAiNoticeAck(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>위 내용을 확인했습니다. (필수)</span>
+            </label>
+          </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
           <button
             type="submit"

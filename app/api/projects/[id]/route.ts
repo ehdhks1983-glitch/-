@@ -1,10 +1,12 @@
 // app/api/projects/[id]/route.ts  [신규]
 // 단건 프로젝트: GET(불러오기/편집용) · PATCH(재게시·수정) · DELETE(삭제). 모두 소유자만(RLS).
+// PATCH 로 게시 상태의 내용(카피·템플릿)이 바뀌거나 게시를 켜면 게시 전 승인을 다시 받는다.
 
 import { NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { deleteProject, selectMyProjectById, updateProject, type ProjectPatch } from "@/lib/db/projects";
+import { parseApproval, validateApproval } from "@/lib/compliance/approval";
 import type { SectionCopy, TemplateId } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
@@ -56,6 +58,22 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (typeof body.title === "string") patch.title = body.title;
 
   try {
+    const current = await selectMyProjectById(supabase, id, user.id);
+    if (!current) return NextResponse.json({ error: "찾을 수 없어요." }, { status: 404 });
+
+    const willBePublished = patch.published ?? current.published;
+    const contentChanged = patch.copy !== undefined || patch.template !== undefined;
+    if (willBePublished && (contentChanged || patch.published === true || body.compliance !== undefined)) {
+      const approval = validateApproval(patch.copy ?? current.copy, parseApproval(body.compliance));
+      if (!approval.ok) {
+        return NextResponse.json(
+          { error: approval.error, findings: approval.findings, missing: approval.missing },
+          { status: 422 },
+        );
+      }
+      patch.compliance = { ...approval.record, approved_by: user.id };
+    }
+
     const project = await updateProject(supabase, id, user.id, patch);
     if (!project) return NextResponse.json({ error: "찾을 수 없어요." }, { status: 404 });
     return NextResponse.json({ id: project.id, slug: project.slug });

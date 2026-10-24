@@ -1,15 +1,21 @@
 "use client";
 
 // app/project/[id]/page.tsx
-// 핵심 "딸깍" 화면: 프롬프트 입력 → (보완질문) → 생성 → 인라인 미리보기 → 게시.
+// 핵심 "딸깍" 화면: 프롬프트 입력 → (보완질문) → 생성 → 인라인 미리보기 → 게시 전 확인(승인) → 게시.
 // id가 "new"가 아니면 저장본(DB)을 불러와 편집/재게시(업데이트)한다.
 // 미저장 결과는 sessionStorage 로 /preview(전체화면)와 공유.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import TemplateRenderer from "@/components/templates/TemplateRenderer";
+import ComplianceFooter from "@/components/ComplianceFooter";
+import PublishReview from "@/components/PublishReview";
 import { TEMPLATE_META } from "@/lib/ai/renderPage";
+import { INDUSTRIES, detectIndustry, isIndustryId, type Disclosures, type IndustryId } from "@/lib/compliance/industries";
+import { checkCopy } from "@/lib/compliance/check";
+import type { ApprovalInput, ComplianceRecord } from "@/lib/compliance/approval";
+import { AI_PRE_NOTICE } from "@/lib/compliance/notice";
 import type { BizInfo, SectionCopy, TemplateId } from "@/lib/ai/types";
 import type { ClarifyQuestion } from "@/lib/ai/clarifyQuestions";
 
@@ -38,6 +44,13 @@ function storageKey(id: string) {
   return `promptsite:project:${id}`;
 }
 
+/** /preview 와 공유하는 게시 전 설정(고지 띠 미리보기용). */
+interface ComplianceDraft {
+  industry: IndustryId;
+  aiLabel: boolean;
+  disclosures: Disclosures;
+}
+
 export default function ProjectPage() {
   const params = useParams();
   const projectId = String(params?.id ?? "new");
@@ -52,6 +65,11 @@ export default function ProjectPage() {
   const [questions, setQuestions] = useState<ClarifyQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [copy, setCopy] = useState<SectionCopy | null>(null);
+
+  const [industry, setIndustry] = useState<IndustryId>("general");
+  const [aiLabel, setAiLabel] = useState(true);
+  const [disclosures, setDisclosures] = useState<Disclosures>({});
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   const [publishing, setPublishing] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState("");
@@ -82,12 +100,25 @@ export default function ProjectPage() {
           if (res.ok) {
             const { project } = (await res.json()) as { project?: ProjectShape };
             if (!cancelled && project?.copy) {
+              const c = project.compliance ?? {};
+              const draft: ComplianceDraft = {
+                industry: isIndustryId(c.industry)
+                  ? c.industry
+                  : isIndustryId(project.biz_info?.industry)
+                    ? project.biz_info.industry
+                    : detectIndustry(project.biz_info),
+                aiLabel: c.ai_label !== false,
+                disclosures: c.disclosures ?? {},
+              };
               setBiz(project.biz_info);
               setTemplate(project.template);
               setCopy(project.copy);
               setPrompt(project.prompt || "");
               setSavedProjectId(project.id);
-              persist(project.id, { biz: project.biz_info, template: project.template, copy: project.copy });
+              setIndustry(draft.industry);
+              setAiLabel(draft.aiLabel);
+              setDisclosures(draft.disclosures);
+              persist(project.id, { biz: project.biz_info, template: project.template, copy: project.copy, compliance: draft });
               setPhase("preview");
             }
           }
@@ -102,7 +133,13 @@ export default function ProjectPage() {
     };
   }, [projectId]);
 
-  function persist(id: string, next: { biz: BizInfo; template: TemplateId; copy: SectionCopy }) {
+  // 업종 규칙 검사(클라이언트 미리보기용). 게시 API가 서버에서 같은 검사를 다시 한다.
+  const findings = useMemo(() => (copy ? checkCopy(copy, industry) : []), [copy, industry]);
+
+  function persist(
+    id: string,
+    next: { biz: BizInfo; template: TemplateId; copy: SectionCopy; compliance?: ComplianceDraft },
+  ) {
     try {
       sessionStorage.setItem(storageKey(id), JSON.stringify(next));
     } catch {
@@ -122,15 +159,22 @@ export default function ProjectPage() {
   }
 
   function applyResult(r: GenerateResult) {
+    const nextIndustry = isIndustryId(r.biz.industry) ? r.biz.industry : detectIndustry(r.biz);
     setBiz(r.biz);
     setTemplate(r.template);
+    setIndustry(nextIndustry);
     if (r.stage === "clarify") {
       setQuestions(r.questions ?? []);
       setAnswers({});
       setPhase("clarify");
     } else if (r.copy) {
       setCopy(r.copy);
-      persist(projectId, { biz: r.biz, template: r.template, copy: r.copy });
+      persist(projectId, {
+        biz: r.biz,
+        template: r.template,
+        copy: r.copy,
+        compliance: { industry: nextIndustry, aiLabel, disclosures },
+      });
       setPublishedUrl("");
       setPhase("preview");
     }
@@ -178,7 +222,7 @@ export default function ProjectPage() {
     setError("");
     setLoading(true);
     try {
-      applyResult(await callGenerate({ biz, skipClarify: true }));
+      applyResult(await callGenerate({ biz, skipClarify: true, industry }));
     } catch (e) {
       setError(toMessage(e));
     } finally {
@@ -186,10 +230,21 @@ export default function ProjectPage() {
     }
   }
 
-  async function publish() {
+  function openReview() {
+    setError("");
+    setReviewOpen(true);
+  }
+
+  async function regenerateFromReview() {
+    setReviewOpen(false);
+    await onRegenerate();
+  }
+
+  async function publish(labelOffAck: boolean) {
     if (!biz || !copy) return;
     setError("");
     setPublishing(true);
+    const compliance: ApprovalInput = { industry, ai_label: aiLabel, label_off_ack: labelOffAck, disclosures, approved: true };
     try {
       const isUpdate = Boolean(savedProjectId);
       const res = await fetch(isUpdate ? `/api/projects/${savedProjectId}` : "/api/projects", {
@@ -197,8 +252,8 @@ export default function ProjectPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           isUpdate
-            ? { template, copy, published: true, title: biz.service_name }
-            : { prompt, title: biz.service_name, template, biz_info: biz, copy },
+            ? { template, copy, published: true, title: biz.service_name, compliance }
+            : { prompt, title: biz.service_name, template, biz_info: { ...biz, industry }, copy, compliance },
         ),
       });
       const data = (await res.json().catch(() => ({}))) as { id?: string; slug?: string; error?: string };
@@ -207,6 +262,7 @@ export default function ProjectPage() {
         return;
       }
       if (!res.ok) throw new Error(data?.error || "게시에 실패했어요. 잠시 후 다시 시도해 주세요.");
+      setReviewOpen(false);
       if (data.id) setSavedProjectId(data.id);
       if (data.slug) {
         setPublishedUrl(`${window.location.origin}/s/${data.slug}`);
@@ -231,7 +287,16 @@ export default function ProjectPage() {
 
   function switchTemplate(id: TemplateId) {
     setTemplate(id);
-    if (biz && copy) persist(projectId, { biz, template: id, copy });
+    if (biz && copy) persist(projectId, { biz, template: id, copy, compliance: { industry, aiLabel, disclosures } });
+  }
+
+  /** 업종·AI 표시·필수 표시 항목 변경 → 상태 + /preview 공유본 동기화. */
+  function updateDraft(patch: Partial<ComplianceDraft>) {
+    const next: ComplianceDraft = { industry, aiLabel, disclosures, ...patch };
+    setIndustry(next.industry);
+    setAiLabel(next.aiLabel);
+    setDisclosures(next.disclosures);
+    if (biz && copy) persist(projectId, { biz, template, copy, compliance: next });
   }
 
   function reset() {
@@ -243,6 +308,10 @@ export default function ProjectPage() {
     setError("");
     setPublishedUrl("");
     setSavedProjectId("");
+    setIndustry("general");
+    setAiLabel(true);
+    setDisclosures({});
+    setReviewOpen(false);
   }
 
   if (bootLoading) {
@@ -274,7 +343,7 @@ export default function ProjectPage() {
             {phase === "preview" && (
               <>
                 <button
-                  onClick={publish}
+                  onClick={openReview}
                   disabled={publishing}
                   className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
                 >
@@ -360,6 +429,9 @@ export default function ProjectPage() {
                 </button>
               </div>
             </div>
+            <p className="mt-3 rounded-lg bg-slate-100 px-4 py-3 text-xs leading-5 text-slate-500">
+              ⓘ {AI_PRE_NOTICE}
+            </p>
 
             <div className="mt-6">
               <p className="mb-2 text-center text-xs font-medium uppercase tracking-wide text-slate-400">
@@ -484,11 +556,58 @@ export default function ProjectPage() {
                 </button>
               ))}
             </div>
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-slate-500">업종</span>
+              {INDUSTRIES.map((ind) => (
+                <button
+                  key={ind.id}
+                  onClick={() => updateDraft({ industry: ind.id })}
+                  className={
+                    "rounded-full border px-3 py-1.5 text-sm transition " +
+                    (industry === ind.id
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-200 bg-white hover:border-slate-400")
+                  }
+                >
+                  {ind.name}
+                </button>
+              ))}
+              {findings.length > 0 && (
+                <span
+                  className={
+                    "ml-auto rounded-full px-3 py-1 text-xs font-medium " +
+                    (findings.some((f) => f.severity === "block")
+                      ? "bg-red-100 text-red-700"
+                      : "bg-amber-100 text-amber-800")
+                  }
+                >
+                  광고 문구 검사: {findings.some((f) => f.severity === "block") ? "게시 불가 표현 있음" : `확인 필요 ${findings.length}건`}
+                </span>
+              )}
+            </div>
 
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
               <TemplateRenderer templateId={template} copy={copy} lang={biz?.language ?? "ko"} biz={biz} />
+              <ComplianceFooter lang={biz?.language ?? "ko"} aiLabel={aiLabel} industry={industry} disclosures={disclosures} />
             </div>
           </div>
+        )}
+
+        {reviewOpen && copy && (
+          <PublishReview
+            findings={findings}
+            industry={industry}
+            aiLabel={aiLabel}
+            onAiLabelChange={(v) => updateDraft({ aiLabel: v })}
+            disclosures={disclosures}
+            onDisclosuresChange={(v) => updateDraft({ disclosures: v })}
+            publishing={publishing}
+            isUpdate={Boolean(savedProjectId)}
+            error={error}
+            onCancel={() => setReviewOpen(false)}
+            onConfirm={({ labelOffAck }) => publish(labelOffAck)}
+            onRegenerate={regenerateFromReview}
+          />
         )}
       </main>
     </div>
@@ -501,6 +620,7 @@ interface ProjectShape {
   biz_info: BizInfo;
   copy: SectionCopy;
   prompt: string;
+  compliance?: Partial<ComplianceRecord>;
 }
 
 function toMessage(e: unknown): string {

@@ -7,7 +7,8 @@
 ## 핵심 파이프라인
 
 ```
-프롬프트 → analyzePrompt → (clarifyQuestions) → generateCopy → selectTemplate → 미리보기 → 게시(s/[slug]) → 리드 수집
+프롬프트 → analyzePrompt → (clarifyQuestions) → generateCopy(+업종 금칙어 검사·1회 자동 재작성) → selectTemplate
+        → 미리보기 → 게시 전 확인(승인) → 게시(s/[slug], AI 생성 표시) → 리드 수집
 ```
 
 ## 기술 스택
@@ -26,6 +27,7 @@ npm run dev                  # http://localhost:3000
 
 - **`/`** 마케팅 홈 → **`/project/new`** 에서 바로 생성 체험
 - 파이프라인만 콘솔로 확인: `npm run test:ai "온라인 PT 코칭 랜딩, 30대 직장인, 무료 상담"`
+- 업종 감지·금칙어·게시 승인 검증: `npm run test:compliance` (키·DB 불필요)
 
 ### 목(mock) 모드
 
@@ -50,6 +52,7 @@ AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적
 
 1. [supabase.com](https://supabase.com) 에서 프로젝트 생성
 2. **SQL Editor** 에 `database/schema.sql` 전체를 붙여 실행 (profiles/projects/leads + RLS + 가입 트리거)
+   - 이미 배포한 DB도 다시 실행하면 됩니다(재실행 안전). 게시 승인 기록용 `projects.compliance` 컬럼이 추가됩니다.
 3. **Project Settings → API** 에서 URL·anon 키를 복사해 `.env.local`(또는 Vercel)에 입력
 4. Auth → 이메일 가입을 사용하면 됩니다(기본). 확인 메일 설정은 Supabase Auth 설정에서 조정
 
@@ -77,6 +80,8 @@ app/
   api/generate · api/projects · api/leads
 components/templates/          SaasLaunch · Waitlist · Agency + TemplateRenderer
 lib/ai/                        types·config·core + analyze/clarify/generate/select/render
+lib/compliance/                업종 프리셋·금칙어 규칙·검사·게시 승인·AI 고지 문구
+components/PublishReview.tsx   게시 전 확인 창 · ComplianceFooter.tsx 공개 페이지 고지 띠
 lib/db/                        supabase(브라우저/서버) + projects/leads
 lib/sanitize.ts · lib/rateLimit.ts · lib/seo/meta.ts
 database/schema.sql            테이블 + RLS
@@ -89,6 +94,20 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 - **analyze/clarify**(비용·속도 우선): Claude Sonnet → Gemini Flash → OpenAI
 - 상위 모델 실패/타임아웃 시 자동으로 하위로 폴백. 키 없는 프로바이더는 건너뜀.
 - 모델 ID·타임아웃·재시도는 전부 `config.ts`(또는 env)에서만 관리(하드코딩 금지).
+
+## 광고 규정·AI 고지 (`lib/compliance/`)
+
+2026년 시행 규정(AI 기본법, 공정위 추천·보증 지침·실증고시, 식품표시광고법·의료법·학원법·화장품법)에 맞춰
+생성 → 게시 사이에 컴플라이언스 층을 둡니다. 조사 근거는 `reports/곰대리 자동화 2026 기능 업데이트.md` 참고(법률 자문 아님).
+
+- **업종 프리셋 7종**(일반·식당카페·미용·학원·병원·건강기능식품·화장품): 키워드로 자동 추정, 미리보기에서 변경 가능.
+  업종 규칙이 생성 프롬프트에 들어갑니다.
+- **금칙어 검사**: `block`(게시 불가 — 질병 효능, 의사·약사 추천, 의료 안전 단정, 합격 보장 등)과 `warn`(확인 후 게시 — 최상급·보장·손님 체험담 등).
+  생성 직후 block 이 나오면 문제 표현을 피드백으로 주고 1회 다시 씁니다.
+- **게시 전 확인**: 검사 결과, 업종 필수 표시(학원 등록번호·교습비, 건기식 자율심의 번호), AI 표시 설정, 사장님 승인 체크.
+  서버(`/api/projects`)가 카피를 다시 검사해 통과할 때만 저장하고 승인 기록(시각·사용자·고지 버전·남은 경고)을 `projects.compliance` 에 남깁니다.
+- **AI 사전고지·결과물 표시**: 생성 화면·회원가입(동의 기록)에 사전고지, 공개 페이지 하단에 ‘생성형 AI로 작성’ 표시(기본 켜짐, 끄려면 확인 필요).
+- 문구를 바꾸면 `lib/compliance/notice.ts` 의 `AI_NOTICE_VERSION` 을 올리세요.
 
 ## 보안
 

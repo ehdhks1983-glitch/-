@@ -5,6 +5,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { BizInfo, SectionCopy, TemplateId } from "@/lib/ai/types";
+import type { ComplianceRecord } from "@/lib/compliance/approval";
 
 export interface ProjectRow {
   id: string;
@@ -16,6 +17,8 @@ export interface ProjectRow {
   biz_info: BizInfo;
   copy: SectionCopy;
   published: boolean;
+  /** 게시 전 승인 기록. 이 기능 이전에 게시된 행은 빈 객체. */
+  compliance: Partial<ComplianceRecord>;
   created_at: string;
   updated_at: string;
 }
@@ -26,6 +29,7 @@ export interface NewProject {
   template: TemplateId;
   biz_info: BizInfo;
   copy: SectionCopy;
+  compliance: ComplianceRecord;
   publish?: boolean;
 }
 
@@ -34,6 +38,7 @@ export interface ProjectPatch {
   copy?: SectionCopy;
   published?: boolean;
   title?: string;
+  compliance?: ComplianceRecord;
 }
 
 /** 사람이 읽기 쉬운 + 충돌 적은 slug 생성(ASCII 영숫자 + 랜덤 접미). */
@@ -63,6 +68,7 @@ export async function insertProject(
       template: input.template,
       biz_info: input.biz_info,
       copy: input.copy,
+      compliance: input.compliance,
       published: input.publish ?? true,
     })
     .select()

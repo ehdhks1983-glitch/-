@@ -3,6 +3,7 @@
 // 2단계 흐름:
 //   1) { prompt } 만 보내면 → 분석 후 보완질문이 있으면 질문 반환(stage:"clarify")
 //   2) { biz, answers } 또는 { biz, skipClarify } 보내면 → 카피 반환(stage:"done")
+//   공통: { industry } 를 보내면 업종 프리셋을 덮어쓴다(없으면 키워드로 추정).
 // AI 에러는 사용자 친화 메시지로만 응답한다(코드·모델 정보 노출 금지).
 
 import { NextResponse } from "next/server";
@@ -11,6 +12,7 @@ import { clarifyQuestions, answersToContext, type ClarifyAnswer } from "@/lib/ai
 import { generateCopy } from "@/lib/ai/generateCopy";
 import { selectTemplate } from "@/lib/ai/selectTemplate";
 import { rateLimit, clientKey, sweep } from "@/lib/rateLimit";
+import { detectIndustry, isIndustryId } from "@/lib/compliance/industries";
 import type { BizInfo } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
@@ -53,7 +55,14 @@ export async function POST(req: Request) {
   }
 
   try {
-    const biz: BizInfo = hasBiz ? bizIn : await analyzePrompt((promptRaw as string).trim());
+    const analyzed: BizInfo = hasBiz ? bizIn : await analyzePrompt((promptRaw as string).trim());
+    // 업종: 화면에서 고른 값 > 기존 값 > 키워드 추정. 생성 프롬프트·금칙어 검사가 이 값을 쓴다.
+    const industry = isIndustryId(body.industry)
+      ? body.industry
+      : isIndustryId(analyzed.industry)
+        ? analyzed.industry
+        : detectIndustry(analyzed);
+    const biz: BizInfo = { ...analyzed, industry };
     const template = selectTemplate(biz);
 
     const answers = normalizeAnswers(body.answers);
