@@ -134,3 +134,47 @@ create policy "compliance_logs_owner_insert" on public.compliance_logs
     auth.uid() = owner
     and exists (select 1 from public.projects p where p.id = compliance_logs.project_id and p.owner = auth.uid())
   );
+
+-- ───────────────────────── page_stats ─────────────────────────
+-- 공개 페이지 방문 집계(일·유입 경로 단위 카운터). 개인 식별 정보(IP·UA)는 저장하지 않는다.
+-- 방문 기록은 아래 record_page_view() 함수로만 증가시킨다(직접 insert/update 정책 없음).
+create table if not exists public.page_stats (
+  project_id  uuid not null references public.projects (id) on delete cascade,
+  day         date not null,
+  source      text not null,
+  views       integer not null default 0,
+  primary key (project_id, day, source)
+);
+
+alter table public.page_stats enable row level security;
+
+drop policy if exists "page_stats_owner_select" on public.page_stats;
+create policy "page_stats_owner_select" on public.page_stats
+  for select using (
+    exists (select 1 from public.projects p where p.id = page_stats.project_id and p.owner = auth.uid())
+  );
+
+-- 게시된 프로젝트에 한해 오늘(KST)·경로 카운터를 1 올린다. 경로 값은 앱의 고정 목록(lib/analytics/source.ts)만 허용.
+create or replace function public.record_page_view(p_project uuid, p_source text)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_source text := p_source;
+begin
+  if v_source is null or v_source not in
+     ('naver','instagram','kakao','threads','youtube','google','daum','facebook','direct','other') then
+    v_source := 'other';
+  end if;
+  if not exists (select 1 from public.projects where id = p_project and published = true) then
+    return;
+  end if;
+  insert into public.page_stats (project_id, day, source, views)
+  values (p_project, (now() at time zone 'Asia/Seoul')::date, v_source, 1)
+  on conflict (project_id, day, source) do update set views = public.page_stats.views + 1;
+end;
+$$;
+
+revoke all on function public.record_page_view(uuid, text) from public;
+grant execute on function public.record_page_view(uuid, text) to anon, authenticated;

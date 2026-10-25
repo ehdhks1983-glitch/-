@@ -7,6 +7,8 @@ import type { BizInfo, SectionCopy } from "../lib/ai/types";
 import { detectIndustry, type IndustryId } from "../lib/compliance/industries";
 import { checkCopy, hasBlocking } from "../lib/compliance/check";
 import { parseApproval, validateApproval } from "../lib/compliance/approval";
+import { buildRulesFeed } from "../lib/compliance/feed";
+import { RULES } from "../lib/compliance/rules";
 
 function copyWith(headline: string, body = ""): SectionCopy {
   return {
@@ -108,6 +110,19 @@ test("승인 검증: 승인·필수 항목·AI 표시 확인", () => {
   assert.ok(!blocked.ok && blocked.findings?.some((f) => f.severity === "block"));
 
   assert.equal(parseApproval({ ...base, industry: "casino" }), null);
+});
+
+test("규제 피드: 직렬화한 정규식이 원본과 같은 결과", () => {
+  const feed = buildRulesFeed();
+  assert.ok(feed.version && feed.rules.length === RULES.length);
+  const samples = ["면역력 강화", "약사가 추천", "부작용 없는", "합격 보장", "업계 최고", "평범한 문장"];
+  for (const r of feed.rules) {
+    const original = RULES.find((x) => x.id === r.id)!;
+    const revived = new RegExp(r.pattern, r.flags);
+    for (const text of samples) assert.equal(revived.test(text), original.pattern.test(text), `${r.id}: ${text}`);
+    if (r.industries !== "all") for (const id of r.industries) assert.ok(feed.industries.some((i) => i.id === id));
+  }
+  assert.ok(JSON.parse(JSON.stringify(feed)).rules[0].pattern);
 });
 
 console.log(`\n${passed}개 통과`);

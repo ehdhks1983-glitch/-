@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { selectMyProjects } from "@/lib/db/projects";
+import { selectLeadStats, selectStats } from "@/lib/db/stats";
+import { lastDays, leadsSinceIso, totalsByProject } from "@/lib/analytics/report";
 import LogoutButton from "@/components/LogoutButton";
 import DeleteProjectButton from "@/components/DeleteProjectButton";
 
@@ -32,6 +34,7 @@ export default async function DashboardPage() {
   if (!user) redirect("/login");
 
   const projects = await selectMyProjects(supabase, user.id);
+  const totals = await recentTotals(supabase, projects.map((p) => p.id));
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -73,6 +76,11 @@ export default async function DashboardPage() {
                       )}
                     </div>
                     <p className="mt-1 text-sm text-slate-400">/s/{p.slug}</p>
+                    {totals && (
+                      <p className="mt-1 text-sm text-slate-500">
+                        최근 {SUMMARY_DAYS}일 방문 {totals.get(p.id)?.views ?? 0} · 신청 {totals.get(p.id)?.leads ?? 0}
+                      </p>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-2 text-sm">
                     <Link
@@ -87,6 +95,12 @@ export default async function DashboardPage() {
                       className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium transition hover:bg-slate-50"
                     >
                       공개 페이지
+                    </Link>
+                    <Link
+                      href={`/dashboard/${p.id}/stats`}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium transition hover:bg-slate-50"
+                    >
+                      성과
                     </Link>
                     <Link
                       href={`/dashboard/${p.id}/leads`}
@@ -104,6 +118,22 @@ export default async function DashboardPage() {
       </main>
     </div>
   );
+}
+
+const SUMMARY_DAYS = 7;
+
+/** 프로젝트별 최근 방문·신청 합계. 성과 테이블이 없는 DB(스키마 미적용)면 null → 요약을 숨긴다. */
+async function recentTotals(supabase: Awaited<ReturnType<typeof createSupabaseServer>>, ids: string[]) {
+  try {
+    const [stats, leads] = await Promise.all([
+      selectStats(supabase, ids, lastDays(SUMMARY_DAYS)[0]),
+      selectLeadStats(supabase, ids, leadsSinceIso(SUMMARY_DAYS)),
+    ]);
+    return totalsByProject(stats, leads, SUMMARY_DAYS);
+  } catch (err) {
+    console.error("[dashboard] 성과 요약 조회 실패:", err);
+    return null;
+  }
 }
 
 function Centered({ children }: { children: React.ReactNode }) {

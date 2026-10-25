@@ -6,6 +6,18 @@
 
 import { useState, type FormEvent } from "react";
 import { leadConsentItems } from "@/lib/compliance/privacy";
+import { detectSource, sourceStorageKey } from "@/lib/analytics/source";
+
+/** 방문 집계(ViewTracker)가 남긴 유입 경로. 없으면 지금 판별. */
+function currentSource(projectId: string): string {
+  try {
+    const saved = sessionStorage.getItem(sourceStorageKey(projectId));
+    if (saved) return saved;
+  } catch {
+    // sessionStorage 불가 → 아래에서 판별
+  }
+  return detectSource(document.referrer, location.search, navigator.userAgent, location.hostname);
+}
 
 export default function LeadForm({
   projectId,
@@ -34,7 +46,7 @@ export default function LeadForm({
       const res = await fetch("/api/leads", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ projectId, email: email.trim(), consent }),
+        body: JSON.stringify({ projectId, email: email.trim(), consent, source: currentSource(projectId) }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data?.error || "신청에 실패했어요. 잠시 후 다시 시도해 주세요.");

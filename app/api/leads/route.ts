@@ -9,6 +9,7 @@ import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { collectLead, isValidEmail } from "@/lib/db/leads";
 import { rateLimit, clientKey, sweep } from "@/lib/rateLimit";
 import { LEAD_CONSENT_VERSION } from "@/lib/compliance/privacy";
+import { isTrafficSource } from "@/lib/analytics/source";
 
 export const runtime = "nodejs";
 
@@ -49,6 +50,7 @@ export async function POST(req: Request) {
     const supabase = await createSupabaseServer();
     await collectLead(supabase, projectId, email, {
       consent: { version: LEAD_CONSENT_VERSION, at: new Date().toISOString() },
+      source: isTrafficSource(body.source) ? body.source : "other",
     });
     return NextResponse.json({ ok: true });
   } catch (err) {

@@ -27,7 +27,8 @@ npm run dev                  # http://localhost:3000
 
 - **`/`** 마케팅 홈 → **`/project/new`** 에서 바로 생성 체험
 - 파이프라인만 콘솔로 확인: `npm run test:ai "온라인 PT 코칭 랜딩, 30대 직장인, 무료 상담"`
-- 업종 감지·금칙어·게시 승인 검증: `npm run test:compliance` (키·DB 불필요)
+- 업종 감지·금칙어·게시 승인·규제 피드 검증: `npm run test:compliance` (키·DB 불필요)
+- 유입 경로 판별·성과 집계 검증: `npm run test:analytics` (키·DB 불필요)
 
 ### 목(mock) 모드
 
@@ -52,7 +53,8 @@ AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적
 
 1. [supabase.com](https://supabase.com) 에서 프로젝트 생성
 2. **SQL Editor** 에 `database/schema.sql` 전체를 붙여 실행 (profiles/projects/leads + RLS + 가입 트리거)
-   - 이미 배포한 DB도 다시 실행하면 됩니다(재실행 안전). 게시 승인 기록용 `projects.compliance` 컬럼과 `compliance_logs` 테이블이 추가됩니다.
+   - 이미 배포한 DB도 다시 실행하면 됩니다(재실행 안전). 게시 승인 기록용 `projects.compliance` 컬럼, `compliance_logs`(승인 감사 로그),
+     `page_stats`(방문 집계)와 `record_page_view()` 함수가 추가됩니다.
 3. **Project Settings → API** 에서 URL·anon 키를 복사해 `.env.local`(또는 Vercel)에 입력
 4. Auth → 이메일 가입을 사용하면 됩니다(기본). 확인 메일 설정은 Supabase Auth 설정에서 조정
 
@@ -75,7 +77,7 @@ app/
   project/[id]/page.tsx        ★생성·보완질문·미리보기·게시
   project/[id]/preview         전체화면 미리보기
   s/[slug]/page.tsx            ★공개 게시 페이지(멀티테넌트) + 신청 폼
-  dashboard/                   내 프로젝트 / [projectId]/leads 신청자
+  dashboard/                   내 프로젝트 / [projectId]/leads 신청자 / [projectId]/stats 성과
   (auth)/login·signup
   api/generate · api/projects · api/leads
 components/templates/          SaasLaunch · Waitlist · Agency + TemplateRenderer
@@ -110,6 +112,17 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 - **신청 폼 개인정보 동의**: 수집 항목·목적·보유기간·거부권을 고지하고 필수 동의를 받습니다. 서버도 동의를 확인하고 동의 버전·시각을 `leads.meta` 에 남깁니다.
 - **AI 사전고지·결과물 표시**: 생성 화면·회원가입(동의 기록)에 사전고지, 공개 페이지 하단에 ‘생성형 AI로 작성’ 표시(기본 켜짐, 끄려면 확인 필요).
 - 문구를 바꾸면 `lib/compliance/notice.ts` 의 `AI_NOTICE_VERSION` 을 올리세요.
+- **규제 피드** `GET /api/compliance/rules`: 업종 프리셋·금칙어 규칙(정규식 source+flags)·AI 고지 문구를 JSON 으로 공개합니다.
+  블로그·카페·쇼츠·스레드 등 다른 곰대리 프로그램이 같은 규칙을 받아 쓰는 단일 출처입니다. `version` 을 저장해 두고
+  `If-None-Match: "<version>"` 으로 요청하면 변경이 없을 때 304 를 받습니다. 규칙을 바꾸면 `RULES_VERSION` 을 올리세요.
+
+## 성과 리포트 (`/dashboard/[projectId]/stats`)
+
+- '만든 페이지 수'가 아니라 **방문 → 신청 전환**을 보여 줍니다: 최근 30일 방문·신청·전환율, 일별 방문(14일), 유입 경로별 방문·신청·전환율.
+- 방문은 공개 페이지에서 탭당 1회만 세고(`ViewTracker` → `/api/views`), 봇·링크 미리보기는 제외합니다.
+  IP·UA 원문은 저장하지 않고 일·경로 단위 카운터만 올립니다(`record_page_view()` — 게시된 페이지만 반영).
+- 유입 경로는 `utm_source` → 인앱 브라우저(카카오톡·인스타) → referrer 순으로 판별합니다. 성과 화면의
+  **채널별 공유 링크**(utm 자동 부착)를 쓰면 경로가 정확해집니다. 신청에도 같은 경로가 기록돼 경로별 전환율이 나옵니다.
 
 ## 보안
 

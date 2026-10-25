@@ -5,6 +5,9 @@
 
 import type { IndustryId } from "./industries";
 
+/** 규칙·업종 프리셋을 바꾸면 올린다. 규제 피드(/api/compliance/rules)를 받는 다른 프로그램이 이 값으로 갱신을 판단한다. */
+export const RULES_VERSION = "2026-10-25";
+
 export type Severity = "block" | "warn";
 
 export interface ComplianceRule {

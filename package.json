@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test:ai": "tsx scripts/test-ai.ts",
     "demo": "tsx scripts/build-demo.tsx",
-    "test:compliance": "tsx scripts/test-compliance.ts"
+    "test:compliance": "tsx scripts/test-compliance.ts",
+    "test:analytics": "tsx scripts/test-analytics.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

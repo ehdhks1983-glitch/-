@@ -9,6 +9,7 @@ import { selectPublishedBySlug } from "@/lib/db/projects";
 import TemplateRenderer from "@/components/templates/TemplateRenderer";
 import LeadForm from "@/components/LeadForm";
 import ComplianceFooter from "@/components/ComplianceFooter";
+import ViewTracker from "@/components/ViewTracker";
 import { detectIndustry, isIndustryId } from "@/lib/compliance/industries";
 import { buildPageMetadata } from "@/lib/seo/meta";
 
@@ -60,6 +61,7 @@ export default async function PublicPage({ params }: Params) {
 
   return (
     <>
+      <ViewTracker projectId={project.id} />
       <TemplateRenderer
         templateId={project.template}
         copy={project.copy}
