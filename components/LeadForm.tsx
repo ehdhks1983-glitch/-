@@ -5,7 +5,9 @@
 // 개인정보 수집·이용 동의(필수)를 받아야 제출된다 — 서버도 동의 여부를 다시 확인한다.
 
 import { useState, type FormEvent } from "react";
-import { leadConsentItems } from "@/lib/compliance/privacy";
+import { consentText, leadConsentItems } from "@/lib/compliance/privacy";
+import type { PageLang } from "@/lib/i18n/langs";
+import { uiText } from "@/lib/i18n/ui";
 import { detectSource, sourceStorageKey } from "@/lib/analytics/source";
 
 /** 방문 집계(ViewTracker)가 남긴 유입 경로. 없으면 지금 판별. */
@@ -21,14 +23,19 @@ function currentSource(projectId: string): string {
 
 export default function LeadForm({
   projectId,
-  buttonLabel = "신청하기",
+  buttonLabel,
   operator = "",
+  lang = "ko",
 }: {
   projectId: string;
   buttonLabel?: string;
   /** 동의 고지의 '수집하는 곳'(브랜드명). */
   operator?: string;
+  /** 외국인 손님용 페이지 언어 — 폼 문구와 동의 고지를 같은 언어로 보여 준다. */
+  lang?: PageLang;
 }) {
+  const t = uiText(lang).signup;
+  const consentT = consentText(lang);
   const [email, setEmail] = useState("");
   const [consent, setConsent] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "done">("idle");
@@ -37,7 +44,7 @@ export default function LeadForm({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!consent) {
-      setError("개인정보 수집·이용에 동의해 주세요.");
+      setError(consentT.required);
       return;
     }
     setStatus("loading");
@@ -49,10 +56,11 @@ export default function LeadForm({
         body: JSON.stringify({ projectId, email: email.trim(), consent, source: currentSource(projectId) }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(data?.error || "신청에 실패했어요. 잠시 후 다시 시도해 주세요.");
+      // 서버 오류 문구는 한국어라, 외국어 페이지에서는 같은 언어의 일반 안내로 바꿔 보여 준다
+      if (!res.ok) throw new Error(lang === "ko" ? data?.error || t.failed : t.failed);
       setStatus("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "신청에 실패했어요.");
+      setError(err instanceof Error ? err.message : t.failed);
       setStatus("idle");
     }
   }
@@ -60,7 +68,7 @@ export default function LeadForm({
   if (status === "done") {
     return (
       <div className="mx-auto max-w-md rounded-xl bg-white/10 px-6 py-5 text-center text-white">
-        신청이 접수됐어요. 곧 연락드릴게요! 🎉
+        {t.done}
       </div>
     );
   }
@@ -73,7 +81,7 @@ export default function LeadForm({
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="이메일 주소"
+          placeholder={t.email}
           maxLength={254}
           className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none focus:border-indigo-400"
         />
@@ -82,7 +90,7 @@ export default function LeadForm({
           disabled={status === "loading"}
           className="rounded-lg bg-indigo-600 px-6 py-3 font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
         >
-          {status === "loading" ? "신청 중…" : buttonLabel}
+          {status === "loading" ? t.submitting : buttonLabel || t.submit}
         </button>
       </form>
       <div className="mt-4 rounded-lg bg-white/5 px-4 py-3 text-left text-xs leading-5 text-slate-300">
@@ -93,10 +101,10 @@ export default function LeadForm({
             onChange={(e) => setConsent(e.target.checked)}
             className="mt-0.5"
           />
-          <span>[필수] 개인정보 수집·이용에 동의합니다.</span>
+          <span>{consentT.label}</span>
         </label>
         <dl className="mt-2 space-y-0.5 pl-5">
-          {leadConsentItems(operator).map((i) => (
+          {leadConsentItems(operator, lang).map((i) => (
             <div key={i.label} className="flex gap-2">
               <dt className="shrink-0 text-slate-400">{i.label}</dt>
               <dd>{i.value}</dd>

@@ -4,7 +4,8 @@
 // 주의: 서버 전용(core/SDK)은 import 하지 않는다 → 클라이언트 번들 안전.
 
 import type { ReactNode } from "react";
-import type { Lang, SectionCopy, TemplateId } from "./types";
+import type { SectionCopy, TemplateId } from "./types";
+import type { PageLang } from "@/lib/i18n/langs";
 import { THEMES, type Theme } from "./theme";
 import SaasLaunch from "@/components/templates/SaasLaunch";
 import Waitlist from "@/components/templates/Waitlist";
@@ -23,7 +24,7 @@ export const TEMPLATE_META: TemplateMeta[] = [
 ];
 
 export interface RenderOptions {
-  lang?: Lang;
+  lang?: PageLang;
   theme?: Theme;
   brand?: string;
   signupSlot?: ReactNode;

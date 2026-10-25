@@ -4,8 +4,8 @@
 
 export type Provider = "anthropic" | "google" | "openai";
 
-/** 파이프라인 작업 종류. analyze 체인은 clarify도 함께 사용한다. */
-export type TaskKind = "analyze" | "copy";
+/** 파이프라인 작업 종류. analyze 체인은 clarify도 함께 사용한다. translate = 외국인 손님용 번역. */
+export type TaskKind = "analyze" | "copy" | "translate";
 
 export interface ModelSpec {
   provider: Provider;
@@ -51,6 +51,12 @@ export const MODEL_CHAINS: Record<TaskKind, ModelSpec[]> = {
     { provider: "anthropic", model: MODEL_IDS.claudePrimary, maxTokens: 4096 },
     { provider: "anthropic", model: MODEL_IDS.claudeSecondary, maxTokens: 4096 },
     { provider: "google", model: MODEL_IDS.geminiPrimary, maxTokens: 4096 },
+    { provider: "openai", model: MODEL_IDS.openaiText, maxTokens: 4096 },
+  ],
+  // 번역 = 원문 뜻 유지가 핵심, 언어 4개를 병렬로 돌리므로 비용·속도 우선: Sonnet → Gemini Flash → OpenAI
+  translate: [
+    { provider: "anthropic", model: MODEL_IDS.claudeSecondary, maxTokens: 4096 },
+    { provider: "google", model: MODEL_IDS.geminiSecondary, maxTokens: 4096 },
     { provider: "openai", model: MODEL_IDS.openaiText, maxTokens: 4096 },
   ],
   // 분석/보완질문 = 비용·속도 우선: Sonnet → Gemini Flash → OpenAI

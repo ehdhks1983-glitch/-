@@ -9,6 +9,8 @@ import { deleteProject, selectMyProjectById, updateProject, type ProjectPatch } 
 import { logApproval } from "@/lib/db/complianceLogs";
 import { isMyStore } from "@/lib/db/stores";
 import { parseApproval, validateApproval } from "@/lib/compliance/approval";
+import { parsePlace } from "@/lib/i18n/place";
+import { parseTranslations } from "@/lib/i18n/translations";
 import type { SectionCopy, TemplateId } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
@@ -58,6 +60,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (body.copy && typeof body.copy === "object") patch.copy = body.copy as SectionCopy;
   if (typeof body.published === "boolean") patch.published = body.published;
   if (typeof body.title === "string") patch.title = body.title;
+  if (body.place !== undefined) patch.place = parsePlace(body.place);
+  if (body.translations !== undefined) patch.translations = parseTranslations(body.translations);
   // 매장 지정(내 매장 id) 또는 해제(null). 내용이 바뀌지 않으므로 게시 승인은 필요 없다.
   if (body.store_id === null) patch.store_id = null;
   else if (typeof body.store_id === "string") {
@@ -72,7 +76,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (!current) return NextResponse.json({ error: "찾을 수 없어요." }, { status: 404 });
 
     const willBePublished = patch.published ?? current.published;
-    const contentChanged = patch.copy !== undefined || patch.template !== undefined;
+    // 매장 정보·번역본도 공개 페이지에 보이는 내용이라 바뀌면 게시 승인을 다시 받는다
+    const contentChanged =
+      patch.copy !== undefined || patch.template !== undefined || patch.place !== undefined || patch.translations !== undefined;
     if (willBePublished && (contentChanged || patch.published === true || body.compliance !== undefined)) {
       const approval = validateApproval(patch.copy ?? current.copy, parseApproval(body.compliance));
       if (!approval.ok) {

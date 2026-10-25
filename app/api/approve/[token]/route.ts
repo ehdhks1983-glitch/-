@@ -48,6 +48,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
       copy: request.copy,
       published: true,
       compliance: record,
+      ...(request.draft.place ? { place: request.draft.place } : {}),
+      ...(request.draft.translations ? { translations: request.draft.translations } : {}),
     });
     if (!project) {
       await admin.from("approval_requests").update({ status: "pending", approved_at: null, approver_name: null }).eq("id", request.id);

@@ -6,6 +6,7 @@
 import { DISCLOSURE_META, INDUSTRIES } from "./industries";
 import { RULES, RULES_VERSION } from "./rules";
 import { AI_NOTICE_VERSION, AI_PRE_NOTICE, aiOutputLabel } from "./notice";
+import { FOREIGN_LANGS } from "@/lib/i18n/langs";
 
 export interface RulesFeed {
   version: string;
@@ -22,7 +23,7 @@ export interface RulesFeed {
     message: string;
     basis: string;
   }[];
-  notices: { pre_notice: string; ai_label: { ko: string; en: string } };
+  notices: { pre_notice: string; ai_label: Record<string, string> };
 }
 
 export function buildRulesFeed(): RulesFeed {
@@ -43,6 +44,9 @@ export function buildRulesFeed(): RulesFeed {
       message: r.message,
       basis: r.basis,
     })),
-    notices: { pre_notice: AI_PRE_NOTICE, ai_label: { ko: aiOutputLabel("ko"), en: aiOutputLabel("en") } },
+    notices: {
+      pre_notice: AI_PRE_NOTICE,
+      ai_label: Object.fromEntries((["ko", ...FOREIGN_LANGS] as const).map((l) => [l, aiOutputLabel(l)])),
+    },
   };
 }

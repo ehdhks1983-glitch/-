@@ -30,6 +30,7 @@ npm run dev                  # http://localhost:3000
 - 업종 감지·금칙어·게시 승인·규제 피드 검증: `npm run test:compliance` (키·DB 불필요)
 - 유입 경로 판별·성과 집계 검증: `npm run test:analytics` (키·DB 불필요)
 - MCP(AI 비서 연동) 프로토콜 검증: `npm run test:mcp` (키·DB 불필요)
+- 외국인 손님 패키지(매장 정보·지도 링크·JSON-LD·번역본·5개 언어 문구) 검증: `npm run test:i18n` (키·DB 불필요)
 
 ### 목(mock) 모드
 
@@ -56,7 +57,7 @@ AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적
 2. **SQL Editor** 에 `database/schema.sql` 전체를 붙여 실행 (profiles/projects/leads + RLS + 가입 트리거)
    - 이미 배포한 DB도 다시 실행하면 됩니다(재실행 안전). 게시 승인 기록용 `projects.compliance` 컬럼, `compliance_logs`(승인 감사 로그),
      `page_stats`(방문 집계)와 `record_page_view()` 함수, `api_tokens`(AI 비서 연동 토큰),
-     `stores`·`projects.store_id`(여러 매장), `approval_requests`(사장님 승인 요청)가 추가됩니다.
+     `stores`·`projects.store_id`(여러 매장), `approval_requests`(사장님 승인 요청), `projects.place`·`projects.translations`(외국인 손님 패키지)가 추가됩니다.
 3. **Project Settings → API** 에서 URL·anon 키를 복사해 `.env.local`(또는 Vercel)에 입력
 4. Auth → 이메일 가입을 사용하면 됩니다(기본). 확인 메일 설정은 Supabase Auth 설정에서 조정
 
@@ -126,6 +127,18 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 - 유입 경로는 `utm_source` → 인앱 브라우저(카카오톡·인스타) → referrer 순으로 판별합니다. 성과 화면의
   **채널별 공유 링크**(utm 자동 부착)를 쓰면 경로가 정확해집니다. 신청에도 같은 경로가 기록돼 경로별 전환율이 나옵니다.
 
+## 외국인 손님 패키지
+
+- **매장 정보**(편집 화면 '🌏 매장 정보 · 외국인 손님용 번역'): 상호·주소·전화·영업시간을 넣으면 공개 페이지에 '매장 안내'와
+  네이버·구글 지도 링크가 붙고, 검색엔진·AI용 구조화 데이터(JSON-LD `LocalBusiness`)가 함께 나갑니다.
+- **번역본**: 버튼 하나로 영어·일본어·중국어(간체·번체) 번역(`/api/translate`, 언어별 병렬 — 모델 체인 `translate`).
+  원문 뜻만 옮기고 새 주장·효능·후기를 더하지 않도록 지시하며, 게시 승인은 원문(한국어) 검사 결과 기준입니다.
+  문구를 다시 생성하면 번역은 지워집니다. 미리보기에서 언어를 바꿔 볼 수 있습니다.
+- **공개 페이지**: `?lang=en|ja|zh-CN|zh-TW` 로 같은 페이지를 그 언어로 보여 주고, 상단 언어 전환 링크와 `hreflang` 대체 링크를 냅니다.
+  템플릿 라벨·신청 폼·개인정보 동의 고지·AI 생성 표시·매장 안내도 같은 언어로 바뀝니다.
+- **구글 비즈니스 프로필용 문구**: 언어별 소개문(750자 이내)과 해시태그를 복사 버튼으로 제공합니다(프로필 자동 연동은 아님).
+- 매장 정보·번역본도 공개 내용이라 바뀌면 게시 승인을 다시 받고, 사장님 승인 요청 링크에도 함께 담깁니다.
+
 ## 여러 매장·대행사 모드
 
 - **매장 묶음**: 대시보드에서 매장을 추가하고 페이지마다 소속 매장을 고르면(드롭다운) 매장별로 필터하고
@@ -166,6 +179,6 @@ ChatGPT·Claude 등 MCP 를 지원하는 AI 비서가 연결해 쓰는 도구 �
 
 ## 다음 단계 (로드맵)
 
-- **2차**: 이미지 생성, 다국어, 광고 픽셀, GEO 고급(llms.txt/스키마), 프로젝트 재편집
+- **2차**: 이미지 생성, 광고 픽셀, 문구 직접 편집, OAuth 기반 AI 비서 연동, 카카오톡 승인 알림(비즈메시지 계약 필요)
 - **3차**: 결제(Toss/Lemon Squeezy), 커스텀 도메인
 ```

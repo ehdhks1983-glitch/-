@@ -154,6 +154,9 @@ export function isMockMode(): boolean {
 
 /** 키 없이도 파이프라인을 돌릴 수 있게 하는 결정적 목 응답. system 스키마로 작업을 구분. */
 function mockResponse(system: string): string {
+  if (system.includes('"hashtags"')) {
+    return JSON.stringify({ copy: MOCK_COPY, summary: "(목 번역) 퇴근 후 30분 화상 PT 코칭.", hashtags: ["#mock", "#PT"], hours: "" });
+  }
   if (system.includes('"hero"')) return JSON.stringify(MOCK_COPY);
   if (system.includes('"options"')) return JSON.stringify(MOCK_CLARIFY);
   return JSON.stringify(MOCK_BIZ);

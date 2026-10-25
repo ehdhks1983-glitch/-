@@ -11,6 +11,8 @@ import { sanitizeCopy } from "@/lib/sanitize";
 import TemplateRenderer from "@/components/templates/TemplateRenderer";
 import ComplianceFooter from "@/components/ComplianceFooter";
 import ClientApproveForm from "@/components/ClientApproveForm";
+import PlaceSection from "@/components/PlaceSection";
+import { FOREIGN_LANGS, LANG_NAMES } from "@/lib/i18n/langs";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "게시 승인 요청", robots: { index: false, follow: false } };
@@ -46,6 +48,7 @@ export default async function ApprovePage({ params }: { params: Promise<{ token:
   const findings = checkCopy(sanitizeCopy(request.copy), industry);
   const blocked = hasBlocking(findings);
   const lang = biz?.language ?? "ko";
+  const translated = FOREIGN_LANGS.filter((l) => request.draft.translations?.[l]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -76,6 +79,12 @@ export default async function ApprovePage({ params }: { params: Promise<{ token:
           {blocked && <p className="mt-3 font-medium text-red-700">게시할 수 없는 표현이 있어요. 담당자에게 수정을 요청해 주세요.</p>}
         </section>
 
+        {translated.length > 0 && (
+          <p className="mt-3 text-sm text-slate-500">
+            외국인 손님용 번역본도 함께 게시돼요: {translated.map((l) => LANG_NAMES[l]).join(", ")} (원문과 같은 뜻으로만 번역)
+          </p>
+        )}
+
         <div className="mt-5">
           <ClientApproveForm token={token} disabled={blocked} />
         </div>
@@ -83,6 +92,7 @@ export default async function ApprovePage({ params }: { params: Promise<{ token:
         <h2 className="mt-8 text-sm font-semibold text-slate-500">페이지 미리보기</h2>
         <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <TemplateRenderer templateId={request.template} copy={request.copy} lang={lang} biz={biz} />
+          <PlaceSection place={request.draft.place ?? {}} lang={lang} />
           <ComplianceFooter lang={lang} aiLabel={request.draft.ai_label} industry={industry} disclosures={request.draft.disclosures} />
         </div>
       </div>

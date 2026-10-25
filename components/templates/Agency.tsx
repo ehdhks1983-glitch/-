@@ -2,17 +2,13 @@
 // 대행/컨설팅/전문 서비스 템플릿. 신뢰 중심 split 히어로 + 번호 프로세스 + FAQ 2열 느낌.
 // 순수 프레젠테이션(훅 없음). dangerouslySetInnerHTML 미사용.
 
-import type { Lang } from "@/lib/ai/types";
+import { uiText } from "@/lib/i18n/ui";
 import { THEMES } from "@/lib/ai/theme";
 import type { TemplateProps } from "./SaasLaunch";
 import { FeatureIcon } from "./icons";
 
 export default function Agency({ copy, lang = "ko", theme = THEMES.violet, brand = "", signupSlot }: TemplateProps) {
-  const t =
-    lang === "en"
-      ? { faq: "FAQ", process: "How we work", consult: "Free consultation" }
-      : { faq: "자주 묻는 질문", process: "진행 방식", consult: "부담 없는 상담부터" };
-  const langTyped: Lang = lang;
+  const t = uiText(lang).template;
 
   return (
     <div className="bg-white text-slate-900">
@@ -164,7 +160,7 @@ export default function Agency({ copy, lang = "ko", theme = THEMES.violet, brand
             {brand}
           </span>
           <span>
-            © {new Date().getFullYear()} {brand || (langTyped === "en" ? "Agency" : "에이전시")}. All rights reserved.
+            © {new Date().getFullYear()} {brand || t.agencyBrand}. All rights reserved.
           </span>
         </div>
       </footer>

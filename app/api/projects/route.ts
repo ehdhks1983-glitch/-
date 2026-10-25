@@ -9,6 +9,8 @@ import { insertProject } from "@/lib/db/projects";
 import { logApproval } from "@/lib/db/complianceLogs";
 import { rateLimit, clientKey, sweep } from "@/lib/rateLimit";
 import { parseApproval, validateApproval } from "@/lib/compliance/approval";
+import { parsePlace } from "@/lib/i18n/place";
+import { parseTranslations } from "@/lib/i18n/translations";
 import type { BizInfo, SectionCopy, TemplateId } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
@@ -70,6 +72,8 @@ export async function POST(req: Request) {
       biz_info: biz,
       copy,
       compliance: record,
+      place: parsePlace(body.place),
+      translations: parseTranslations(body.translations),
       publish: true,
     });
     await logApproval(supabase, { projectId: project.id, owner: user.id, record, template, copy });

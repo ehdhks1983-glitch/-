@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SectionCopy, TemplateId } from "@/lib/ai/types";
 import type { Disclosures, IndustryId } from "@/lib/compliance/industries";
+import type { PlaceInfo, Translations } from "@/lib/i18n/langs";
 import { hashToken } from "./apiTokens";
 
 /** 요청 시점의 게시 설정 스냅샷. */
@@ -13,6 +14,9 @@ export interface ApprovalDraft {
   ai_label: boolean;
   label_off_ack: boolean;
   disclosures: Disclosures;
+  /** 매장 정보·번역본도 승인 대상 내용이다 */
+  place?: PlaceInfo;
+  translations?: Translations;
 }
 
 export interface ApprovalRequestRow {

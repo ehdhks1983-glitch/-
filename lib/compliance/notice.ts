@@ -4,7 +4,7 @@
 //  - 결과물 표시: 서비스 밖으로 나가는 결과물(공개 페이지)에 AI 생성임을 표시한다.
 // 문구를 바꾸면 AI_NOTICE_VERSION 을 올린다(승인 기록에 버전이 남는다).
 
-import type { Lang } from "@/lib/ai/types";
+import type { PageLang } from "@/lib/i18n/langs";
 
 export const AI_NOTICE_VERSION = "2026-10-24";
 
@@ -18,8 +18,14 @@ export const AI_PRE_NOTICE =
 
 export const AI_PRE_NOTICE_SHORT = "생성형 AI로 문구를 만듭니다. 게시 전에 내용을 꼭 확인해 주세요.";
 
-export function aiOutputLabel(lang: Lang): string {
-  return lang === "en"
-    ? "The copy on this page was written with generative AI and reviewed by the operator before publishing."
-    : "이 페이지의 문구는 생성형 AI로 작성되었으며, 운영자가 검토한 뒤 게시했습니다.";
+const AI_OUTPUT_LABELS: Record<PageLang, string> = {
+  ko: "이 페이지의 문구는 생성형 AI로 작성되었으며, 운영자가 검토한 뒤 게시했습니다.",
+  en: "The copy on this page was written with generative AI and reviewed by the operator before publishing.",
+  ja: "このページの文章は生成AIで作成され、運営者が確認したうえで掲載しています。",
+  "zh-CN": "本页面文字由生成式AI撰写，并经运营者审核后发布。",
+  "zh-TW": "本頁面文字由生成式AI撰寫，並經營運者審核後發布。",
+};
+
+export function aiOutputLabel(lang: PageLang): string {
+  return AI_OUTPUT_LABELS[lang] ?? AI_OUTPUT_LABELS.ko;
 }

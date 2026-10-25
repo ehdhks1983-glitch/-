@@ -3,23 +3,22 @@
 // 순수 프레젠테이션(훅 없음). dangerouslySetInnerHTML 미사용.
 
 import type { ReactNode } from "react";
-import type { Lang, SectionCopy } from "@/lib/ai/types";
+import type { SectionCopy } from "@/lib/ai/types";
+import type { PageLang } from "@/lib/i18n/langs";
+import { uiText } from "@/lib/i18n/ui";
 import { THEMES, type Theme } from "@/lib/ai/theme";
 import { FeatureIcon } from "./icons";
 
 export interface TemplateProps {
   copy: SectionCopy;
-  lang?: Lang;
+  lang?: PageLang;
   theme?: Theme;
   brand?: string;
   signupSlot?: ReactNode;
 }
 
 export default function SaasLaunch({ copy, lang = "ko", theme = THEMES.indigo, brand = "", signupSlot }: TemplateProps) {
-  const t =
-    lang === "en"
-      ? { faq: "FAQ", features: "Features", free: "No credit card required" }
-      : { faq: "자주 묻는 질문", features: "핵심 기능", free: "부담 없이 시작하세요" };
+  const t = uiText(lang).template;
 
   return (
     <div className="bg-white text-slate-900">

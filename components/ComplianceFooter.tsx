@@ -3,7 +3,7 @@
 // (학원 등록번호·교습비, 건기식 자율심의 번호). 미리보기에도 같은 모양으로 보여 준다.
 // 훅 없음 → 서버/클라이언트 양쪽에서 렌더 가능.
 
-import type { Lang } from "@/lib/ai/types";
+import type { PageLang } from "@/lib/i18n/langs";
 import { DISCLOSURE_META, getIndustry, type Disclosures, type IndustryId } from "@/lib/compliance/industries";
 import { aiOutputLabel } from "@/lib/compliance/notice";
 import { sanitizeText } from "@/lib/sanitize";
@@ -14,7 +14,7 @@ export default function ComplianceFooter({
   industry = "general",
   disclosures,
 }: {
-  lang?: Lang;
+  lang?: PageLang;
   aiLabel?: boolean;
   industry?: IndustryId;
   disclosures?: Disclosures;

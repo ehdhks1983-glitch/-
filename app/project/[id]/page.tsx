@@ -11,6 +11,9 @@ import { useParams } from "next/navigation";
 import TemplateRenderer from "@/components/templates/TemplateRenderer";
 import ComplianceFooter from "@/components/ComplianceFooter";
 import PublishReview from "@/components/PublishReview";
+import ForeignPackagePanel from "@/components/ForeignPackagePanel";
+import PlaceSection from "@/components/PlaceSection";
+import { isForeignLang, type ForeignLang, type PageLang, type PlaceInfo, type Translations } from "@/lib/i18n/langs";
 import { TEMPLATE_META } from "@/lib/ai/renderPage";
 import { INDUSTRIES, detectIndustry, isIndustryId, type Disclosures, type IndustryId } from "@/lib/compliance/industries";
 import { checkCopy } from "@/lib/compliance/check";
@@ -71,6 +74,12 @@ export default function ProjectPage() {
   const [disclosures, setDisclosures] = useState<Disclosures>({});
   const [reviewOpen, setReviewOpen] = useState(false);
 
+  // 외국인 손님 패키지: 매장 정보 + 번역본 + 미리보기 언어
+  const [place, setPlace] = useState<PlaceInfo>({});
+  const [translations, setTranslations] = useState<Translations>({});
+  const [previewLang, setPreviewLang] = useState<PageLang>("ko");
+  const [translating, setTranslating] = useState(false);
+
   const [publishing, setPublishing] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState("");
   const [copied, setCopied] = useState(false);
@@ -118,6 +127,9 @@ export default function ProjectPage() {
               setIndustry(draft.industry);
               setAiLabel(draft.aiLabel);
               setDisclosures(draft.disclosures);
+              setPlace(project.place ?? {});
+              setTranslations(project.translations ?? {});
+              setPreviewLang(project.biz_info?.language ?? "ko");
               persist(project.id, { biz: project.biz_info, template: project.template, copy: project.copy, compliance: draft });
               setPhase("preview");
             }
@@ -169,6 +181,9 @@ export default function ProjectPage() {
       setPhase("clarify");
     } else if (r.copy) {
       setCopy(r.copy);
+      // 문구가 바뀌면 이전 번역은 맞지 않으므로 지운다
+      setTranslations({});
+      setPreviewLang(r.biz.language);
       persist(projectId, {
         biz: r.biz,
         template: r.template,
@@ -230,6 +245,27 @@ export default function ProjectPage() {
     }
   }
 
+  async function translate(langs: ForeignLang[]) {
+    if (!copy || !biz) return;
+    setError("");
+    setTranslating(true);
+    try {
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ copy, service_name: place.name || biz.service_name, hours: place.hours ?? "", langs }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { translations?: Translations; failed?: ForeignLang[]; error?: string };
+      if (!res.ok || !data.translations) throw new Error(data.error || "번역에 실패했어요.");
+      setTranslations((cur) => ({ ...cur, ...data.translations }));
+      if (data.failed?.length) setError(`일부 언어 번역에 실패했어요: ${data.failed.join(", ")} — 다시 시도해 주세요.`);
+    } catch (e) {
+      setError(toMessage(e));
+    } finally {
+      setTranslating(false);
+    }
+  }
+
   function openReview() {
     setError("");
     setReviewOpen(true);
@@ -253,6 +289,8 @@ export default function ProjectPage() {
         template,
         biz_info: { ...biz, industry },
         copy,
+        place,
+        translations,
         draft: { industry, ai_label: aiLabel, label_off_ack: labelOffAck, disclosures },
       }),
     });
@@ -278,8 +316,8 @@ export default function ProjectPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           isUpdate
-            ? { template, copy, published: true, title: biz.service_name, compliance }
-            : { prompt, title: biz.service_name, template, biz_info: { ...biz, industry }, copy, compliance },
+            ? { template, copy, place, translations, published: true, title: biz.service_name, compliance }
+            : { prompt, title: biz.service_name, template, biz_info: { ...biz, industry }, copy, place, translations, compliance },
         ),
       });
       const data = (await res.json().catch(() => ({}))) as { id?: string; slug?: string; error?: string };
@@ -338,6 +376,9 @@ export default function ProjectPage() {
     setAiLabel(true);
     setDisclosures({});
     setReviewOpen(false);
+    setPlace({});
+    setTranslations({});
+    setPreviewLang("ko");
   }
 
   if (bootLoading) {
@@ -612,9 +653,31 @@ export default function ProjectPage() {
               )}
             </div>
 
+            <ForeignPackagePanel
+              place={place}
+              onPlaceChange={setPlace}
+              serviceName={biz?.service_name ?? ""}
+              translations={translations}
+              translating={translating}
+              onTranslate={translate}
+              previewLang={previewLang}
+              onPreviewLangChange={setPreviewLang}
+              sourceLang={biz?.language ?? "ko"}
+            />
+
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <TemplateRenderer templateId={template} copy={copy} lang={biz?.language ?? "ko"} biz={biz} />
-              <ComplianceFooter lang={biz?.language ?? "ko"} aiLabel={aiLabel} industry={industry} disclosures={disclosures} />
+              <TemplateRenderer
+                templateId={template}
+                copy={isForeignLang(previewLang) && translations[previewLang] ? translations[previewLang]!.copy : copy}
+                lang={previewLang}
+                biz={biz}
+              />
+              <PlaceSection
+                place={{ name: biz?.service_name, ...place }}
+                lang={previewLang}
+                hours={isForeignLang(previewLang) ? translations[previewLang]?.hours : undefined}
+              />
+              <ComplianceFooter lang={previewLang} aiLabel={aiLabel} industry={industry} disclosures={disclosures} />
             </div>
           </div>
         )}
@@ -648,6 +711,8 @@ interface ProjectShape {
   copy: SectionCopy;
   prompt: string;
   compliance?: Partial<ComplianceRecord>;
+  place?: PlaceInfo;
+  translations?: Translations;
 }
 
 function toMessage(e: unknown): string {

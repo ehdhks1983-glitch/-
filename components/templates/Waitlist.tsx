@@ -2,17 +2,13 @@
 // 사전 등록/대기자 모집 템플릿. 다크·미니멀, 글로우 히어로 + 체크리스트 + FAQ.
 // 순수 프레젠테이션(훅 없음). dangerouslySetInnerHTML 미사용.
 
-import type { Lang } from "@/lib/ai/types";
+import { uiText } from "@/lib/i18n/ui";
 import { THEMES } from "@/lib/ai/theme";
 import type { TemplateProps } from "./SaasLaunch";
 import { CheckIcon } from "./icons";
 
 export default function Waitlist({ copy, lang = "ko", theme = THEMES.indigo, brand = "", signupSlot }: TemplateProps) {
-  const t =
-    lang === "en"
-      ? { badge: "Coming soon", why: "Why join", faq: "FAQ", spots: "Early access — limited spots" }
-      : { badge: "곧 출시", why: "왜 지금인가", faq: "자주 묻는 질문", spots: "사전 등록자에게 가장 먼저 알려드려요" };
-  const langTyped: Lang = lang;
+  const t = uiText(lang).template;
 
   return (
     <div className="bg-slate-950 text-slate-100">
@@ -153,7 +149,7 @@ export default function Waitlist({ copy, lang = "ko", theme = THEMES.indigo, bra
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-sm text-slate-500 sm:flex-row">
           <span className="font-semibold text-slate-400">{brand}</span>
           <span>
-            © {new Date().getFullYear()} {brand || (langTyped === "en" ? "Waitlist" : "사전등록")}. All rights reserved.
+            © {new Date().getFullYear()} {brand || t.waitlistBrand}. All rights reserved.
           </span>
         </div>
       </footer>

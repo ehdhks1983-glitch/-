@@ -6,6 +6,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { BizInfo, SectionCopy, TemplateId } from "@/lib/ai/types";
 import type { ComplianceRecord } from "@/lib/compliance/approval";
+import type { PlaceInfo, Translations } from "@/lib/i18n/langs";
 
 export interface ProjectRow {
   id: string;
@@ -21,6 +22,10 @@ export interface ProjectRow {
   compliance: Partial<ComplianceRecord>;
   /** 소속 매장(없으면 null) */
   store_id: string | null;
+  /** 매장 정보(빈 객체 가능) */
+  place: PlaceInfo;
+  /** 외국인 손님용 번역본(빈 객체 가능) */
+  translations: Translations;
   created_at: string;
   updated_at: string;
 }
@@ -33,6 +38,8 @@ export interface NewProject {
   copy: SectionCopy;
   /** 게시 승인 기록. 비공개 초안(publish=false)은 승인 전이라 없다. */
   compliance?: ComplianceRecord;
+  place?: PlaceInfo;
+  translations?: Translations;
   publish?: boolean;
 }
 
@@ -43,6 +50,8 @@ export interface ProjectPatch {
   title?: string;
   compliance?: ComplianceRecord;
   store_id?: string | null;
+  place?: PlaceInfo;
+  translations?: Translations;
 }
 
 /** 사람이 읽기 쉬운 + 충돌 적은 slug 생성(ASCII 영숫자 + 랜덤 접미). */
@@ -73,6 +82,8 @@ export async function insertProject(
       biz_info: input.biz_info,
       copy: input.copy,
       compliance: input.compliance,
+      place: input.place,
+      translations: input.translations,
       published: input.publish ?? true,
     })
     .select()

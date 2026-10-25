@@ -11,7 +11,8 @@
     "demo": "tsx scripts/build-demo.tsx",
     "test:compliance": "tsx scripts/test-compliance.ts",
     "test:analytics": "tsx scripts/test-analytics.ts",
-    "test:mcp": "tsx scripts/test-mcp.ts"
+    "test:mcp": "tsx scripts/test-mcp.ts",
+    "test:i18n": "tsx scripts/test-i18n.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

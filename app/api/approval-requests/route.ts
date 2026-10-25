@@ -10,6 +10,8 @@ import { insertProject, selectMyProjectById } from "@/lib/db/projects";
 import { createApprovalRequest } from "@/lib/db/approvalRequests";
 import { parseApproval, validateApproval } from "@/lib/compliance/approval";
 import { rateLimit, clientKey, sweep } from "@/lib/rateLimit";
+import { parsePlace } from "@/lib/i18n/place";
+import { parseTranslations } from "@/lib/i18n/translations";
 import type { BizInfo, SectionCopy, TemplateId } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
@@ -79,6 +81,8 @@ export async function POST(req: Request) {
         ai_label: approval.ai_label,
         label_off_ack: approval.label_off_ack,
         disclosures: approval.disclosures,
+        place: parsePlace(body.place),
+        translations: parseTranslations(body.translations),
       },
     });
     return NextResponse.json({ url: `${new URL(req.url).origin}/approve/${token}`, expiresAt, projectId });

@@ -245,3 +245,9 @@ alter table public.approval_requests enable row level security;
 drop policy if exists "approval_requests_owner_all" on public.approval_requests;
 create policy "approval_requests_owner_all" on public.approval_requests
   for all using (auth.uid() = owner) with check (auth.uid() = owner);
+
+-- ───────────────────────── 외국인 손님 패키지 ─────────────────────────
+-- 매장 정보(상호·주소·전화·영업시간)와 외국어 번역본(en·ja·zh-CN·zh-TW: 페이지 문구 + 구글 비즈니스 프로필 소개문·해시태그).
+-- 게시된 내용의 일부라 게시 승인 대상이다.
+alter table public.projects add column if not exists place jsonb not null default '{}'::jsonb;
+alter table public.projects add column if not exists translations jsonb not null default '{}'::jsonb;
