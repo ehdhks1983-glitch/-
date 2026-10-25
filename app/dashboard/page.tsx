@@ -44,6 +44,12 @@ export default async function DashboardPage() {
             Prompt<span className="text-indigo-600">Site</span>
           </Link>
           <div className="flex items-center gap-2">
+            <Link
+              href="/dashboard/integrations"
+              className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium transition hover:bg-slate-50"
+            >
+              AI 연동
+            </Link>
             <LogoutButton />
             <Link
               href="/project/new"

@@ -47,9 +47,18 @@ function flatten(copy: SectionCopy): { field: string; label: string; text: strin
 
 /** 업종 규칙 검사. block 이 먼저 오도록 정렬해 반환한다. */
 export function checkCopy(copy: SectionCopy, industry: IndustryId): Finding[] {
+  return checkFields(flatten(copy), industry);
+}
+
+/** 자유 텍스트(블로그 글·SNS 문구 등) 검사 — MCP·다른 프로그램용. */
+export function checkText(text: string, industry: IndustryId): Finding[] {
+  return checkFields([{ field: "text", label: "본문", text }], industry);
+}
+
+function checkFields(fields: { field: string; label: string; text: string }[], industry: IndustryId): Finding[] {
   const rules = RULES.filter((r) => r.industries === "all" || r.industries.includes(industry));
   const findings: Finding[] = [];
-  for (const { field, label, text } of flatten(copy)) {
+  for (const { field, label, text } of fields) {
     for (const rule of rules) {
       const m = rule.pattern.exec(text);
       if (!m) continue;

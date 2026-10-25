@@ -29,6 +29,7 @@ npm run dev                  # http://localhost:3000
 - 파이프라인만 콘솔로 확인: `npm run test:ai "온라인 PT 코칭 랜딩, 30대 직장인, 무료 상담"`
 - 업종 감지·금칙어·게시 승인·규제 피드 검증: `npm run test:compliance` (키·DB 불필요)
 - 유입 경로 판별·성과 집계 검증: `npm run test:analytics` (키·DB 불필요)
+- MCP(AI 비서 연동) 프로토콜 검증: `npm run test:mcp` (키·DB 불필요)
 
 ### 목(mock) 모드
 
@@ -44,7 +45,7 @@ AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적
 | `OPENAI_API_KEY` | 선택 | OpenAI 폴백(최후순위) |
 | `NEXT_PUBLIC_SUPABASE_URL` | 게시 기능 | Supabase 프로젝트 URL (클라이언트 노출 안전) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | 게시 기능 | Supabase anon 키 (클라이언트 노출 안전) |
-| `SUPABASE_SERVICE_ROLE_KEY` | 선택 | 서버 전용 관리자 작업용. **절대 클라이언트 노출 금지** |
+| `SUPABASE_SERVICE_ROLE_KEY` | 선택 | 서버 전용 관리자 작업용(AI 비서 연동의 계정 도구에 필요). **절대 클라이언트 노출 금지** |
 | `OPENAI_TEXT_MODEL` 등 | 선택 | 모델 ID override (기본값은 `lib/ai/config.ts`) |
 
 > 키가 전부 비어 있어도 앱은 정상 빌드/구동됩니다. 생성은 목 모드, 인증/저장/게시는 안내 메시지로 비활성화됩니다.
@@ -54,7 +55,7 @@ AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적
 1. [supabase.com](https://supabase.com) 에서 프로젝트 생성
 2. **SQL Editor** 에 `database/schema.sql` 전체를 붙여 실행 (profiles/projects/leads + RLS + 가입 트리거)
    - 이미 배포한 DB도 다시 실행하면 됩니다(재실행 안전). 게시 승인 기록용 `projects.compliance` 컬럼, `compliance_logs`(승인 감사 로그),
-     `page_stats`(방문 집계)와 `record_page_view()` 함수가 추가됩니다.
+     `page_stats`(방문 집계)와 `record_page_view()` 함수, `api_tokens`(AI 비서 연동 토큰)가 추가됩니다.
 3. **Project Settings → API** 에서 URL·anon 키를 복사해 `.env.local`(또는 Vercel)에 입력
 4. Auth → 이메일 가입을 사용하면 됩니다(기본). 확인 메일 설정은 Supabase Auth 설정에서 조정
 
@@ -123,6 +124,25 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
   IP·UA 원문은 저장하지 않고 일·경로 단위 카운터만 올립니다(`record_page_view()` — 게시된 페이지만 반영).
 - 유입 경로는 `utm_source` → 인앱 브라우저(카카오톡·인스타) → referrer 순으로 판별합니다. 성과 화면의
   **채널별 공유 링크**(utm 자동 부착)를 쓰면 경로가 정확해집니다. 신청에도 같은 경로가 기록돼 경로별 전환율이 나옵니다.
+
+## AI 비서 연동 (MCP, `/api/mcp`)
+
+ChatGPT·Claude 등 MCP 를 지원하는 AI 비서가 연결해 쓰는 도구 서버입니다(Streamable HTTP, stateless JSON-RPC).
+
+| 도구 | 토큰 | 하는 일 |
+|---|---|---|
+| `check_ad_copy` | 불필요 | 자유 문구를 업종 광고 규정으로 검사(block/warn) |
+| `get_compliance_rules` | 불필요 | 규제 피드와 같은 규칙·업종 프리셋 |
+| `list_pages` | 필요 | 내 페이지 목록·게시 상태·최근 7일 방문/신청·주소 |
+| `get_page_stats` | 필요 | 페이지 하나의 7/30일 성과·유입 경로 |
+| `create_draft_page` | 필요 | 설명 한 줄 → 문구 생성 → **비공개 초안** 저장(1시간 10개) |
+
+- **게시는 하지 않습니다.** 초안은 사장님이 편집 화면에서 검사 결과를 보고 승인해야 공개됩니다(게시 전 승인 원칙 유지).
+- 신청자 이메일 등 개인정보를 돌려주는 도구는 없습니다.
+- 인증: 대시보드 → **AI 연동**에서 개인 액세스 토큰을 발급해 `Authorization: Bearer <토큰>` 헤더로 보냅니다.
+  토큰은 SHA-256 해시만 저장하며(원문은 발급 시 1회 표시), 계정 도구는 서버의 `SUPABASE_SERVICE_ROLE_KEY` 가 필요합니다.
+- Claude Code: `claude mcp add --transport http promptsite https://<도메인>/api/mcp --header "Authorization: Bearer <토큰>"`
+- OAuth 기반 연결(ChatGPT 커넥터 등 헤더를 넣을 수 없는 앱)은 아직 지원하지 않습니다.
 
 ## 보안
 

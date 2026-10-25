@@ -178,3 +178,25 @@ $$;
 
 revoke all on function public.record_page_view(uuid, text) from public;
 grant execute on function public.record_page_view(uuid, text) to anon, authenticated;
+
+-- ───────────────────────── api_tokens ─────────────────────────
+-- AI 에이전트(MCP) 연동용 개인 액세스 토큰. 원문은 발급 순간에만 보여 주고 SHA-256 해시만 저장한다.
+-- MCP 서버는 service_role 키로 해시를 조회해 소유자를 찾고, 이후 모든 조회를 owner 로 명시 필터한다.
+create table if not exists public.api_tokens (
+  id            uuid primary key default gen_random_uuid(),
+  owner         uuid not null references auth.users (id) on delete cascade,
+  name          text not null default '',
+  token_hash    text not null unique,
+  prefix        text not null default '',
+  created_at    timestamptz not null default now(),
+  last_used_at  timestamptz,
+  revoked_at    timestamptz
+);
+
+create index if not exists api_tokens_owner_idx on public.api_tokens (owner);
+
+alter table public.api_tokens enable row level security;
+
+drop policy if exists "api_tokens_owner_all" on public.api_tokens;
+create policy "api_tokens_owner_all" on public.api_tokens
+  for all using (auth.uid() = owner) with check (auth.uid() = owner);

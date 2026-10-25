@@ -29,7 +29,8 @@ export interface NewProject {
   template: TemplateId;
   biz_info: BizInfo;
   copy: SectionCopy;
-  compliance: ComplianceRecord;
+  /** 게시 승인 기록. 비공개 초안(publish=false)은 승인 전이라 없다. */
+  compliance?: ComplianceRecord;
   publish?: boolean;
 }
 
