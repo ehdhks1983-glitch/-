@@ -7,6 +7,7 @@ import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { deleteProject, selectMyProjectById, updateProject, type ProjectPatch } from "@/lib/db/projects";
 import { logApproval } from "@/lib/db/complianceLogs";
+import { isMyStore } from "@/lib/db/stores";
 import { parseApproval, validateApproval } from "@/lib/compliance/approval";
 import type { SectionCopy, TemplateId } from "@/lib/ai/types";
 
@@ -57,6 +58,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (body.copy && typeof body.copy === "object") patch.copy = body.copy as SectionCopy;
   if (typeof body.published === "boolean") patch.published = body.published;
   if (typeof body.title === "string") patch.title = body.title;
+  // 매장 지정(내 매장 id) 또는 해제(null). 내용이 바뀌지 않으므로 게시 승인은 필요 없다.
+  if (body.store_id === null) patch.store_id = null;
+  else if (typeof body.store_id === "string") {
+    if (!(await isMyStore(supabase, body.store_id, user.id))) {
+      return NextResponse.json({ error: "매장을 찾을 수 없어요." }, { status: 400 });
+    }
+    patch.store_id = body.store_id;
+  }
 
   try {
     const current = await selectMyProjectById(supabase, id, user.id);

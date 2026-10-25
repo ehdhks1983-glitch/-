@@ -55,7 +55,8 @@ AI 프로바이더 키가 **하나도 없으면** `lib/ai/core.ts` 가 결정적
 1. [supabase.com](https://supabase.com) 에서 프로젝트 생성
 2. **SQL Editor** 에 `database/schema.sql` 전체를 붙여 실행 (profiles/projects/leads + RLS + 가입 트리거)
    - 이미 배포한 DB도 다시 실행하면 됩니다(재실행 안전). 게시 승인 기록용 `projects.compliance` 컬럼, `compliance_logs`(승인 감사 로그),
-     `page_stats`(방문 집계)와 `record_page_view()` 함수, `api_tokens`(AI 비서 연동 토큰)가 추가됩니다.
+     `page_stats`(방문 집계)와 `record_page_view()` 함수, `api_tokens`(AI 비서 연동 토큰),
+     `stores`·`projects.store_id`(여러 매장), `approval_requests`(사장님 승인 요청)가 추가됩니다.
 3. **Project Settings → API** 에서 URL·anon 키를 복사해 `.env.local`(또는 Vercel)에 입력
 4. Auth → 이메일 가입을 사용하면 됩니다(기본). 확인 메일 설정은 Supabase Auth 설정에서 조정
 
@@ -124,6 +125,18 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
   IP·UA 원문은 저장하지 않고 일·경로 단위 카운터만 올립니다(`record_page_view()` — 게시된 페이지만 반영).
 - 유입 경로는 `utm_source` → 인앱 브라우저(카카오톡·인스타) → referrer 순으로 판별합니다. 성과 화면의
   **채널별 공유 링크**(utm 자동 부착)를 쓰면 경로가 정확해집니다. 신청에도 같은 경로가 기록돼 경로별 전환율이 나옵니다.
+
+## 여러 매장·대행사 모드
+
+- **매장 묶음**: 대시보드에서 매장을 추가하고 페이지마다 소속 매장을 고르면(드롭다운) 매장별로 필터하고
+  묶음의 최근 7일 방문·신청을 볼 수 있습니다. 매장을 지워도 페이지는 '매장 미지정'으로 남습니다.
+- **사장님 승인 요청 링크**: 게시 전 확인 창의 '승인 요청 링크 만들기' → `/approve/<토큰>` 링크를 카카오톡 등으로 보냅니다.
+  - 요청 시점의 문구·템플릿·업종·표시 설정을 스냅샷으로 저장하므로, 게시 중인 페이지는 승인 전까지 바뀌지 않습니다.
+  - 사장님은 로그인 없이 미리보기와 광고 문구 검사 결과를 보고, 이름을 적고 확인에 체크해 승인합니다.
+    서버가 같은 검사를 다시 통과시킨 뒤에만 게시하고, 승인 기록에 `approved_via: client_link`·승인자 이름을 남깁니다(감사 로그 포함).
+  - 유효기간 7일, 같은 페이지에 새 요청을 만들면 이전 링크는 취소됩니다. 게시 불가 표현이 있으면 링크를 만들 수 없습니다.
+  - 링크 열람·승인은 서버의 `SUPABASE_SERVICE_ROLE_KEY` 가 필요합니다(토큰은 해시만 저장).
+- 대시보드에 `비공개`·`사장님 승인 대기` 배지가 표시됩니다.
 
 ## AI 비서 연동 (MCP, `/api/mcp`)
 

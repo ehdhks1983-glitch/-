@@ -39,6 +39,10 @@ export interface ComplianceRecord {
   notice_version: string;
   /** 승인 당시 남아 있던 경고(warn) 규칙 — 감사용 */
   warnings: string[];
+  /** 승인 경로: 계정 주인이 직접(owner) / 대행사가 보낸 링크로 사장님이(client_link) */
+  approved_via?: "owner" | "client_link";
+  /** client_link 승인 시 사장님이 적은 이름 */
+  approver_name?: string;
 }
 
 export function parseApproval(input: unknown): ApprovalInput | null {

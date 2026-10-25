@@ -3,6 +3,7 @@
 // components/PublishReview.tsx  [신규 — 컴플라이언스 P0]
 // 게시 전 확인 창. 금칙어 검사 결과 · 업종 필수 표시 항목 · AI 표시 설정 · 사장님 승인을 한 화면에서 받는다.
 // block 이 남아 있으면 게시 버튼을 막고 '다시 생성'을 안내한다. 서버도 같은 검사를 다시 한다.
+// 대행사는 직접 게시 대신 '사장님 승인 요청 링크'를 만들어 보낼 수 있다(사장님이 링크에서 승인하면 게시).
 
 import { useState } from "react";
 import type { Finding } from "@/lib/compliance/check";
@@ -27,6 +28,7 @@ export default function PublishReview({
   onCancel,
   onConfirm,
   onRegenerate,
+  onRequestApproval,
 }: {
   findings: Finding[];
   industry: IndustryId;
@@ -41,15 +43,44 @@ export default function PublishReview({
   onCancel: () => void;
   onConfirm: (opts: { labelOffAck: boolean }) => void;
   onRegenerate: () => void;
+  /** 사장님 승인 요청 링크 생성. 성공 시 링크 주소를 돌려준다(실패 시 throw). */
+  onRequestApproval: (opts: { labelOffAck: boolean }) => Promise<string>;
 }) {
   const [approved, setApproved] = useState(false);
   const [labelOffAck, setLabelOffAck] = useState(false);
+  const [requestUrl, setRequestUrl] = useState("");
+  const [requesting, setRequesting] = useState(false);
+  const [requestError, setRequestError] = useState("");
+  const [copied, setCopied] = useState(false);
 
   const preset = getIndustry(industry);
   const blocks = findings.filter((f) => f.severity === "block");
   const warns = findings.filter((f) => f.severity === "warn");
   const missing = missingDisclosures(industry, disclosures);
-  const canPublish = blocks.length === 0 && missing.length === 0 && approved && (aiLabel || labelOffAck) && !publishing;
+  const canRequest = blocks.length === 0 && missing.length === 0 && (aiLabel || labelOffAck) && !publishing && !requesting;
+  const canPublish = canRequest && approved;
+
+  async function requestApproval() {
+    setRequesting(true);
+    setRequestError("");
+    try {
+      setRequestUrl(await onRequestApproval({ labelOffAck }));
+    } catch (e) {
+      setRequestError(e instanceof Error ? e.message : "링크를 만들지 못했어요.");
+    } finally {
+      setRequesting(false);
+    }
+  }
+
+  async function copyRequestUrl() {
+    try {
+      await navigator.clipboard.writeText(requestUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard 불가 환경 무시
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-6" role="dialog" aria-modal="true">
@@ -142,6 +173,34 @@ export default function PublishReview({
         </section>
 
         {error && <p className="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+
+        {/* 대행사: 사장님 승인 요청 */}
+        <section className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+          <p className="font-semibold">대행사라면: 사장님께 승인 요청</p>
+          <p className="mt-1 text-slate-500">
+            링크를 보내면 사장님이 로그인 없이 내용과 검사 결과를 보고 이름을 적어 승인해요. 승인하면 게시됩니다(유효기간 7일).
+          </p>
+          {requestUrl ? (
+            <div className="mt-3 flex items-center gap-2">
+              <code className="flex-1 break-all rounded bg-white px-2 py-1.5 text-xs">{requestUrl}</code>
+              <button
+                onClick={copyRequestUrl}
+                className="shrink-0 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium"
+              >
+                {copied ? "복사됨!" : "복사"}
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={requestApproval}
+              disabled={!canRequest}
+              className="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium transition hover:bg-slate-100 disabled:opacity-40"
+            >
+              {requesting ? "만드는 중…" : "승인 요청 링크 만들기"}
+            </button>
+          )}
+          {requestError && <p className="mt-2 text-red-700">{requestError}</p>}
+        </section>
 
         <div className="mt-6 flex justify-end gap-2">
           <button

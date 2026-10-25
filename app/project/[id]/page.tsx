@@ -240,6 +240,32 @@ export default function ProjectPage() {
     await onRegenerate();
   }
 
+  /** 대행사 모드: 사장님 승인 요청 링크. 새 페이지면 비공개 초안으로 먼저 저장된다. */
+  async function requestApproval(labelOffAck: boolean): Promise<string> {
+    if (!biz || !copy) throw new Error("페이지를 먼저 만들어 주세요.");
+    const res = await fetch("/api/approval-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: savedProjectId || undefined,
+        prompt,
+        title: biz.service_name,
+        template,
+        biz_info: { ...biz, industry },
+        copy,
+        draft: { industry, ai_label: aiLabel, label_off_ack: labelOffAck, disclosures },
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { url?: string; projectId?: string; error?: string };
+    if (res.status === 401) {
+      window.location.href = "/login";
+      throw new Error("로그인이 필요합니다.");
+    }
+    if (!res.ok || !data.url) throw new Error(data.error || "링크를 만들지 못했어요.");
+    if (data.projectId) setSavedProjectId(data.projectId);
+    return data.url;
+  }
+
   async function publish(labelOffAck: boolean) {
     if (!biz || !copy) return;
     setError("");
@@ -607,6 +633,7 @@ export default function ProjectPage() {
             onCancel={() => setReviewOpen(false)}
             onConfirm={({ labelOffAck }) => publish(labelOffAck)}
             onRegenerate={regenerateFromReview}
+            onRequestApproval={({ labelOffAck }) => requestApproval(labelOffAck)}
           />
         )}
       </main>

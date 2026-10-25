@@ -19,6 +19,8 @@ export interface ProjectRow {
   published: boolean;
   /** 게시 전 승인 기록. 이 기능 이전에 게시된 행은 빈 객체. */
   compliance: Partial<ComplianceRecord>;
+  /** 소속 매장(없으면 null) */
+  store_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +42,7 @@ export interface ProjectPatch {
   published?: boolean;
   title?: string;
   compliance?: ComplianceRecord;
+  store_id?: string | null;
 }
 
 /** 사람이 읽기 쉬운 + 충돌 적은 slug 생성(ASCII 영숫자 + 랜덤 접미). */

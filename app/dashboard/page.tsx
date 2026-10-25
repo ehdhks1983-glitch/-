@@ -1,17 +1,22 @@
 // app/dashboard/page.tsx  [신규] — 내 프로젝트 목록(서버 컴포넌트).
+// 매장 필터(?store=<id>|none), 최근 7일 방문·신청, 사장님 승인 대기 표시.
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isSupabaseConfigured } from "@/lib/db/supabase";
 import { createSupabaseServer } from "@/lib/db/supabase-server";
 import { selectMyProjects } from "@/lib/db/projects";
 import { selectLeadStats, selectStats } from "@/lib/db/stats";
+import { selectMyStores, type StoreRow } from "@/lib/db/stores";
+import { selectPendingProjectIds } from "@/lib/db/approvalRequests";
 import { lastDays, leadsSinceIso, totalsByProject } from "@/lib/analytics/report";
 import LogoutButton from "@/components/LogoutButton";
 import DeleteProjectButton from "@/components/DeleteProjectButton";
+import StoreBar from "@/components/StoreBar";
+import StoreSelect from "@/components/StoreSelect";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ store?: string }> }) {
   if (!isSupabaseConfigured()) {
     return (
       <Centered>
@@ -33,8 +38,17 @@ export default async function DashboardPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const projects = await selectMyProjects(supabase, user.id);
+  const allProjects = await selectMyProjects(supabase, user.id);
+  // 매장·승인 요청 테이블이 없는 DB(스키마 미적용)에서도 목록은 보이도록 실패를 삼킨다
+  const stores = await safe(() => selectMyStores(supabase, user.id), null as StoreRow[] | null);
+  const pending = await safe(() => selectPendingProjectIds(supabase, user.id), new Set<string>());
+
+  const { store: storeParam } = await searchParams;
+  const current = stores && storeParam && (storeParam === "none" || stores.some((s) => s.id === storeParam)) ? storeParam : "all";
+  const projects =
+    current === "all" ? allProjects : allProjects.filter((p) => (current === "none" ? !p.store_id : p.store_id === current));
   const totals = await recentTotals(supabase, projects.map((p) => p.id));
+  const sum = totals && [...totals.values()].reduce((a, t) => ({ views: a.views + t.views, leads: a.leads + t.leads }), { views: 0, leads: 0 });
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -63,6 +77,12 @@ export default async function DashboardPage() {
 
       <main className="mx-auto max-w-4xl px-5 py-8">
         <h1 className="text-2xl font-bold">내 페이지</h1>
+        {stores && <StoreBar stores={stores} current={current} />}
+        {current !== "all" && sum && (
+          <p className="mt-3 text-sm text-slate-500">
+            이 묶음 최근 {SUMMARY_DAYS}일: 방문 {sum.views} · 신청 {sum.leads} · 페이지 {projects.length}개
+          </p>
+        )}
         {projects.length === 0 ? (
           <p className="mt-6 rounded-xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center text-slate-500">
             아직 만든 페이지가 없어요. “+ 새 페이지”로 시작해 보세요.
@@ -75,9 +95,18 @@ export default async function DashboardPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <h2 className="font-semibold">{p.title || "제목 없음"}</h2>
-                      {p.published && (
+                      {p.published ? (
                         <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
                           게시중
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                          비공개
+                        </span>
+                      )}
+                      {pending.has(p.id) && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                          사장님 승인 대기
                         </span>
                       )}
                     </div>
@@ -89,6 +118,7 @@ export default async function DashboardPage() {
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2 text-sm">
+                    {stores && stores.length > 0 && <StoreSelect projectId={p.id} stores={stores} value={p.store_id ?? null} />}
                     <Link
                       href={`/project/${p.id}`}
                       className="rounded-lg border border-slate-200 px-3 py-1.5 font-medium transition hover:bg-slate-50"
@@ -139,6 +169,15 @@ async function recentTotals(supabase: Awaited<ReturnType<typeof createSupabaseSe
   } catch (err) {
     console.error("[dashboard] 성과 요약 조회 실패:", err);
     return null;
+  }
+}
+
+async function safe<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    console.error("[dashboard] 부가 정보 조회 실패:", err);
+    return fallback;
   }
 }
 

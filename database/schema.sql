@@ -200,3 +200,48 @@ alter table public.api_tokens enable row level security;
 drop policy if exists "api_tokens_owner_all" on public.api_tokens;
 create policy "api_tokens_owner_all" on public.api_tokens
   for all using (auth.uid() = owner) with check (auth.uid() = owner);
+
+-- ───────────────────────── stores (여러 매장) ─────────────────────────
+-- 한 계정(사장님·대행사)이 여러 매장의 페이지를 묶어 관리한다. 프로젝트는 매장 하나에 속하거나 미지정.
+create table if not exists public.stores (
+  id          uuid primary key default gen_random_uuid(),
+  owner       uuid not null references auth.users (id) on delete cascade,
+  name        text not null,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists stores_owner_idx on public.stores (owner);
+
+alter table public.stores enable row level security;
+
+drop policy if exists "stores_owner_all" on public.stores;
+create policy "stores_owner_all" on public.stores
+  for all using (auth.uid() = owner) with check (auth.uid() = owner);
+
+alter table public.projects add column if not exists store_id uuid references public.stores (id) on delete set null;
+
+-- ───────────────────────── approval_requests (대행사 → 사장님 승인 요청) ─────────────────────────
+-- 대행사가 만든 내용(카피·템플릿·업종·표시 설정)의 스냅샷을 링크로 보내 사장님이 로그인 없이 승인한다.
+-- 링크 토큰은 해시만 저장. 승인 처리는 서버(service_role)가 같은 금칙어 검사를 다시 통과시킨 뒤에만 게시한다.
+create table if not exists public.approval_requests (
+  id             uuid primary key default gen_random_uuid(),
+  project_id     uuid not null references public.projects (id) on delete cascade,
+  owner          uuid not null references auth.users (id) on delete cascade,
+  token_hash     text not null unique,
+  template       text not null,
+  copy           jsonb not null,
+  draft          jsonb not null,
+  status         text not null default 'pending' check (status in ('pending', 'approved', 'cancelled')),
+  created_at     timestamptz not null default now(),
+  expires_at     timestamptz not null,
+  approved_at    timestamptz,
+  approver_name  text
+);
+
+create index if not exists approval_requests_project_idx on public.approval_requests (project_id);
+
+alter table public.approval_requests enable row level security;
+
+drop policy if exists "approval_requests_owner_all" on public.approval_requests;
+create policy "approval_requests_owner_all" on public.approval_requests
+  for all using (auth.uid() = owner) with check (auth.uid() = owner);
