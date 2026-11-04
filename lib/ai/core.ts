@@ -160,23 +160,39 @@ function mockResponse(opts: CallOptions): string {
   return JSON.stringify(MOCK_BIZ);
 }
 
-/** 워드프레스 블로그 글 목 응답 — user 페이로드의 주제를 반영해 그럴듯한 초안을 돌려준다. */
+/** 워드프레스 블로그 글 목 응답 — user 페이로드의 주제(와 기존 글 목록)를 반영해 그럴듯한 초안을 돌려준다. */
 function mockPost(user: string): Record<string, unknown> {
   let topic = "블로그 글쓰기";
+  let link: { title: string; url: string } | null = null;
   try {
     const parsed = JSON.parse(user) as Record<string, unknown>;
     if (typeof parsed["주제_키워드"] === "string" && parsed["주제_키워드"].trim()) {
       topic = parsed["주제_키워드"].trim();
     }
+    const links = parsed["기존_글_목록"];
+    if (Array.isArray(links) && links.length) {
+      const first = links[0] as { title?: unknown; url?: unknown };
+      if (typeof first?.title === "string" && typeof first?.url === "string") {
+        link = { title: first.title, url: first.url };
+      }
+    }
   } catch {
     // user가 JSON이 아니면 기본 주제 사용
   }
+  const related = link
+    ? `<p>관련해서 이전에 정리한 <a href="${link.url}">${link.title}</a> 글도 함께 보면 흐름이 이어집니다.</p>`
+    : "";
   return {
     title: `${topic}, 처음이라면 이 순서대로 시작하세요`,
+    slug: "getting-started-step-by-step",
+    seoTitle: `${topic} 시작 가이드 — 준비 체크리스트와 단계별 방법`,
+    metaDescription: `${topic}을 처음 시작할 때 필요한 준비물, 단계별 실행 순서, 자주 하는 실수와 FAQ까지 한 번에 정리했습니다.`,
+    focusKeyword: topic,
     html:
       `<p>${topic}에 관심은 있는데 어디서부터 손대야 할지 막막했다면, 이 글 하나로 큰 그림을 잡을 수 있습니다. 복잡한 이론 대신 오늘 바로 해볼 수 있는 것들만 정리했습니다.</p>` +
       `<h2>${topic}, 왜 지금 시작해야 할까</h2>` +
       `<p>미루는 이유는 대부분 정보가 없어서가 아니라 순서가 없어서입니다. 처음 기준을 잡아두면 그다음부터는 반복만 하면 됩니다.</p>` +
+      related +
       `<h2>시작 전 준비 체크리스트</h2>` +
       `<ul><li>목표를 한 줄로 적어보기 — 무엇이 되면 성공인지</li><li>일주일에 쓸 수 있는 시간 정하기</li><li>참고할 만한 사례 2~3개 모아두기</li></ul>` +
       `<h2>단계별 실행 방법</h2>` +
@@ -184,10 +200,13 @@ function mockPost(user: string): Record<string, unknown> {
       `<ol><li>가장 작은 단위로 첫 시도를 해봅니다.</li><li>결과를 기록하고 잘된 것 하나, 아쉬운 것 하나를 남깁니다.</li><li>일주일 뒤 같은 작업을 반복하며 개선합니다.</li></ol>` +
       `<h2>자주 하는 실수</h2>` +
       `<p>한 번에 모든 걸 갖추려는 욕심이 가장 큰 걸림돌입니다. <strong>도구보다 꾸준함</strong>이 결과를 좌우합니다.</p>` +
+      `<h2>자주 묻는 질문</h2>` +
+      `<h3>처음에 돈이 얼마나 드나요?</h3><p>대부분 무료 도구로 시작할 수 있습니다. 결과가 보이기 시작한 뒤에 유료 도구를 검토해도 늦지 않습니다.</p>` +
+      `<h3>하루에 얼마나 시간을 써야 하나요?</h3><p>매일 20~30분이면 충분합니다. 양보다 '매일'이 중요합니다.</p>` +
       `<h2>정리</h2>` +
       `<p>${topic}은 시작이 절반입니다. 오늘 체크리스트의 첫 항목 하나만 실행해 보세요. (이 글은 AI 키가 없어 생성된 예시 초안입니다.)</p>`,
     excerpt: `${topic}을 처음 시작하는 사람을 위한 준비 체크리스트와 단계별 실행 방법을 정리했습니다.`,
-    tags: [topic, "초보 가이드", "시작하는 법"],
+    tags: [topic, "초보 가이드", "시작하는 법", "체크리스트"],
   };
 }
 

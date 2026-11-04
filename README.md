@@ -78,11 +78,12 @@ app/
   wordpress/                   ★워드프레스 자동 발행(연결/카테고리/글쓰기/대량/현황)
   (auth)/login·signup
   api/generate · api/projects · api/leads
-  api/wp/                      WP REST 프록시(test·categories·posts·generate)
+  api/wp/                      WP REST 프록시(test·categories·posts·media·generate)
 components/templates/          SaasLaunch · Waitlist · Agency + TemplateRenderer
 components/wp/                 WpNav · NotConnected
 lib/ai/                        types·config·core + analyze/clarify/generate/select/render/generatePost
-lib/wp/                        types·connection·guard(SSRF)·client(WP REST)·sanitizeHtml·clientStore
+lib/wp/                        types·connection·guard(SSRF)·client(WP REST)·sanitizeHtml·blocks·quality·clientStore
+docs/wp-automation-research-2026.md  2026년 기준 조사 메모(출처 포함)
 lib/db/                        supabase(브라우저/서버) + projects/leads
 lib/sanitize.ts · lib/rateLimit.ts · lib/seo/meta.ts
 database/schema.sql            테이블 + RLS
@@ -95,11 +96,12 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 
 | 메뉴 | 기능 |
 |---|---|
-| 연결 설정 | 사이트 주소 + 아이디 + **응용 프로그램 비밀번호**로 연결 테스트·저장 |
+| 입문 가이드 | 네이버 블로그 비교, 워드프레스 구조, 자동 발행 원리, 2026년 기준 알아둘 점 |
+| 연결 설정 | 사이트 주소 + 아이디 + **응용 프로그램 비밀번호**로 연결 테스트·저장. **여러 사이트** 저장·전환, SEO 플러그인·타임존 자동 감지 |
 | 카테고리 관리 | 트리(글 개수 포함) 보기, 추가/수정/삭제, 슬러그·설명·상위 카테고리 |
-| AI 글쓰기 | 키워드 → AI 초안(제목·본문·요약·태그) → 검토·수정 → 즉시/임시/예약 발행 |
-| 대량 자동화 | 키워드 여러 개(최대 20)를 매일/2·3일/매주 간격으로 자동 생성·예약 등록 |
-| 발행 현황 | 발행/예약/임시글 필터, 즉시 발행·삭제, WP 관리자 편집 링크 |
+| AI 글쓰기 | 키워드 → AI 초안(제목·본문·요약·태그·**영문 슬러그·SEO 제목·메타 설명**) → 내부 링크·**대표 이미지** → **품질 체크 11항목** → 즉시/임시/예약 발행(블록 에디터 형식) |
+| 대량 자동화 | 키워드 여러 개(최대 20) → **중복 주제 건너뛰기** → 검토용 임시글(기본) 또는 매일/2·3일/매주 간격 예약 |
+| 발행 현황 | 발행/예약/임시글 필터·검색, **예약 지연 감지**, 즉시 발행·삭제, WP 관리자 편집 링크 |
 
 ### 연결 준비 (1분)
 
@@ -118,9 +120,12 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 - **SSRF 가드**(`lib/wp/guard.ts`): https 강제, 내부망 도메인/사설·예약 IP 차단(리터럴 + DNS 조회
   검사), 리다이렉트 미추적. (DNS 리바인딩까지 완전 차단하지는 않는 1차 방어입니다)
 - **본문 HTML 정화**(`lib/wp/sanitizeHtml.ts`): AI 본문은 허용 태그(h2·h3·p·ul·ol·li·strong·em 등)만
-  **속성 없이 재조립**합니다. 미리보기 렌더와 WP 전송 모두 이 결과만 사용하므로 스크립트/이벤트
-  속성이 끼어들 수 없습니다.
-- **비용 방어**: 글 생성 분당 12회, 프록시 분당 90회, 연결 테스트 분당 20회(IP 기준).
+  **속성 없이 재조립**합니다. 링크는 **연결된 사이트 호스트의 http(s) 주소만** `<a href>`로 허용(내부
+  링크), 외부·`javascript:` 링크는 태그만 벗깁니다. 미리보기 렌더와 WP 전송 모두 이 결과만 사용합니다.
+- **블록 마크업 변환**(`lib/wp/blocks.ts`): 정화된 HTML을 블록 에디터 직렬화 형식으로 바꿔 보냅니다
+  (HTML만 보내면 WP가 "클래식" 콘텐츠로 저장). 글쓰기 화면에서 끌 수 있습니다.
+- **대표 이미지**(`app/api/wp/media`): JPG/PNG/WEBP/GIF 8MB 이하만, 파일명 정화 후 WP 미디어로 업로드.
+- **비용 방어**: 글 생성 분당 12회, 프록시 분당 90회, 업로드 분당 30회, 연결 테스트 분당 20회(IP 기준).
 - AI 키가 없으면 글 생성은 **목 모드**(예시 초안)로 동작 — 발행 파이프라인은 그대로 테스트 가능.
 
 ### 알아둘 점
@@ -130,16 +135,32 @@ middleware.ts                  Supabase 세션 갱신(미설정 시 no-op)
 - 대량 자동화 실행 중에는 탭을 닫지 마세요(등록이 끝나면 닫아도 예약은 유지됩니다).
 - 카테고리 삭제 시 소속 글은 WP 기본 카테고리로 이동합니다(글은 삭제되지 않음).
 
+### 2026년 조사 반영 (v2) — 자세한 출처는 `docs/wp-automation-research-2026.md`
+
+| 조사 결과 | 반영 |
+|---|---|
+| WordPress 7.0(2026.5) — 관리자 개편·AI 커넥터, 외부 발행 경로(REST + 응용 프로그램 비밀번호)는 동일 | 연결 안내·입문 가이드 갱신 |
+| REST로 HTML만 보내면 "클래식" 콘텐츠로 저장됨 | `lib/wp/blocks.ts` 블록 마크업 변환(기본 ON) |
+| 구글 "대량 생산형 콘텐츠 남용" 정책 2026년 집중 단속(생산 방식 무관, AI Overviews에도 적용) | 대량 자동화 기본값 **임시글 후 검토**, 중복 주제 건너뛰기, 품질 체크리스트, 프롬프트 원칙, AI 안내 문구 옵션 |
+| 대표 이미지는 `media` 업로드 → `featured_media` | 글쓰기 화면 이미지 업로드 |
+| Yoast 메타 키는 REST 쓰기 가능, Rank Math는 브리지 플러그인 필요, 미등록 키는 조용히 무시 | 연결 시 플러그인 감지, 양쪽 키 동시 전송, Rank Math 안내 |
+
+**Rank Math 사용자**: SEO 제목·메타 설명이 반영되려면 `rank_math_title` / `rank_math_description` /
+`rank_math_focus_keyword` 를 REST에 등록하는 브리지 플러그인(예: Odiseo SEO Bridge, 42flows SEO Meta)이
+필요합니다. 없어도 글은 정상 발행되고 SEO 칸만 비어 있습니다.
+
 ## 모델 폴백 체인 (`lib/ai/config.ts`)
 
 - **copy**(핵심 IP, 품질 우선): Claude Opus → Claude Sonnet → Gemini Pro → OpenAI
 - **analyze/clarify**(비용·속도 우선): Claude Sonnet → Gemini Flash → OpenAI
+- **post**(워드프레스 블로그 글): copy와 같은 품질 우선 체인, 긴 본문이라 토큰 상한 8192
 - 상위 모델 실패/타임아웃 시 자동으로 하위로 폴백. 키 없는 프로바이더는 건너뜀.
 - 모델 ID·타임아웃·재시도는 전부 `config.ts`(또는 env)에서만 관리(하드코딩 금지).
 
 ## 보안
 
-- AI 생성 텍스트는 React 자동 이스케이프 + `sanitizeCopy` 이중 방어. `dangerouslySetInnerHTML` 미사용.
+- AI 생성 텍스트는 React 자동 이스케이프 + `sanitizeCopy` 이중 방어. 랜딩페이지에는 `dangerouslySetInnerHTML` 미사용.
+  (워드프레스 본문 미리보기만 예외 — 허용 태그를 속성 없이 재조립한 `sanitizeWpHtml` 결과만 렌더)
 - Supabase RLS: 프로젝트/리드는 소유자만, 게시물은 공개 read, 리드는 게시된 프로젝트에만 insert.
 - 생성/저장/신청 엔드포인트에 IP 기준 rate limit (토큰 비용·스팸 방지).
 - `service_role` 키는 서버 전용. `.env*` 는 커밋 금지(`.env.example` 만 예외).

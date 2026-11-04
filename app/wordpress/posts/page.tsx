@@ -1,11 +1,12 @@
 "use client";
 
-// app/wordpress/posts/page.tsx  [신규 — 워드프레스 자동 발행]
-// 발행 현황: 발행·예약·임시글을 필터로 보고, 예약/임시글은 즉시 발행하거나 삭제한다.
+// app/wordpress/posts/page.tsx  [업데이트 — 워드프레스 자동 발행 v2]
+// 발행 현황: 발행·예약·임시글을 필터·검색으로 보고, 예약/임시글은 즉시 발행하거나 삭제한다.
+// v2: 예약 시각이 지났는데 아직 future 인 글을 "예약 지연"으로 표시(WP-Cron 미작동 감지).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import NotConnected from "@/components/wp/NotConnected";
-import { useWpConnection, wpApi, formatWpDate } from "@/lib/wp/clientStore";
+import { useWpConnection, wpApi, formatWpDate, isWpDatePast } from "@/lib/wp/clientStore";
 import type { WpCategory, WpPostSummary } from "@/lib/wp/types";
 
 const FILTERS = [
@@ -36,6 +37,8 @@ export default function WpPostsPage() {
 
   const [filter, setFilter] = useState<FilterKey>("all");
   const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
   const [posts, setPosts] = useState<WpPostSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -54,7 +57,9 @@ export default function WpPostsPage() {
   // 스피너가 필요한 재조회는 호출부(이벤트 핸들러)에서 setLoading(true)를 먼저 켠다.
   const load = useCallback(() => {
     const statuses = FILTERS.find((f) => f.key === filter)?.statuses ?? "all";
-    return wpApi<ListRes>(`/api/wp/posts?status=${statuses}&page=${page}`)
+    const q = new URLSearchParams({ status: statuses, page: String(page) });
+    if (search) q.set("search", search);
+    return wpApi<ListRes>(`/api/wp/posts?${q.toString()}`)
       .then((data) => {
         setPosts(data.posts);
         setTotal(data.total);
@@ -68,7 +73,7 @@ export default function WpPostsPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, [filter, page]);
+  }, [filter, page, search]);
 
   useEffect(() => {
     if (conn) void load();
@@ -123,7 +128,14 @@ export default function WpPostsPage() {
     setPage(next);
   }
 
+  function applySearch() {
+    setLoading(true);
+    setSearch(searchInput.trim());
+    setPage(1);
+  }
+
   const editUrl = (id: number) => `${conn.url}/wp-admin/post.php?post=${id}&action=edit`;
+  const delayedCount = posts.filter((p) => p.status === "future" && isWpDatePast(p.dateGmt)).length;
 
   return (
     <div>
@@ -145,24 +157,55 @@ export default function WpPostsPage() {
         </button>
       </div>
 
-      <div className="mt-4 flex gap-1.5">
-        {FILTERS.map((f) => (
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <div className="flex gap-1.5">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => changeFilter(f.key)}
+              className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
+                filter === f.key
+                  ? "bg-slate-900 text-white"
+                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            applySearch();
+          }}
+          className="flex gap-1.5"
+        >
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="제목·본문 검색"
+            className="w-48 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
+          />
           <button
-            key={f.key}
-            onClick={() => changeFilter(f.key)}
-            className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
-              filter === f.key
-                ? "bg-slate-900 text-white"
-                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-            }`}
+            type="submit"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
           >
-            {f.label}
+            검색
           </button>
-        ))}
+        </form>
       </div>
 
       {error && (
         <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{error}</p>
+      )}
+
+      {delayedCount > 0 && (
+        <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          ⏰ 예약 시각이 지났는데 아직 발행되지 않은 글이 <b>{delayedCount}개</b> 있어요. 워드프레스 예약
+          발행(WP-Cron)은 사이트 방문이 있어야 돌아가요. [지금 발행]으로 바로 올리거나, 호스팅에서
+          크론 설정을 확인해 주세요.
+        </p>
       )}
 
       <section className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -175,10 +218,10 @@ export default function WpPostsPage() {
         ) : (
           <ul className="divide-y divide-slate-100">
             {posts.map((p) => {
-              const badge = STATUS_BADGE[p.status] ?? {
-                label: p.status,
-                cls: "bg-slate-100 text-slate-600",
-              };
+              const delayed = p.status === "future" && isWpDatePast(p.dateGmt);
+              const badge = delayed
+                ? { label: "예약 지연", cls: "bg-amber-100 text-amber-800" }
+                : (STATUS_BADGE[p.status] ?? { label: p.status, cls: "bg-slate-100 text-slate-600" });
               const canPublishNow = p.status === "future" || p.status === "draft" || p.status === "pending";
               const busy = busyId === p.id;
               return (
@@ -207,6 +250,7 @@ export default function WpPostsPage() {
                           {p.categories.map((id) => catName.get(id) ?? `#${id}`).join(", ")}
                         </>
                       )}
+                      {delayed && <span className="ml-2 text-amber-600">· 시각 경과, 미발행</span>}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">

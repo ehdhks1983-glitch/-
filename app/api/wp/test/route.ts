@@ -1,5 +1,5 @@
-// app/api/wp/test/route.ts  [신규 — 워드프레스 자동 발행]
-// 연결 테스트: 주소 정규화 → SSRF 가드 → 인증 확인(users/me) → 사이트 이름 조회.
+// app/api/wp/test/route.ts  [업데이트 — 워드프레스 자동 발행 v2]
+// 연결 테스트: 주소 정규화 → SSRF 가드 → 인증 확인(users/me) → 사이트 이름·SEO 플러그인·타임존 조회.
 // 성공 시 정규화된 주소를 돌려줘 클라이언트가 그 값을 저장하게 한다.
 
 import { NextResponse } from "next/server";
@@ -42,7 +42,13 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       connection: { url, user },
-      site: { name: info.siteName, url: info.siteUrl },
+      site: {
+        name: info.siteName,
+        url: info.siteUrl,
+        seoPlugin: info.seoPlugin,
+        timezone: info.timezone,
+        gmtOffset: info.gmtOffset,
+      },
       wpUser: { name: info.userName },
     });
   } catch (err) {

@@ -1,11 +1,11 @@
-// app/api/wp/posts/route.ts  [신규 — 워드프레스 자동 발행]
+// app/api/wp/posts/route.ts  [업데이트 — 워드프레스 자동 발행 v2]
 // GET: 글 목록(상태 필터·검색·페이지) / POST: 글 등록(즉시·임시·예약).
-// 본문 HTML은 서버에서 한 번 더 정화한 뒤 WP로 보낸다.
+// v2: 본문은 내부 링크만 허용해 정화 → 블록 마크업으로 변환(기본) → 슬러그·대표 이미지·SEO 메타 동봉.
 
 import { NextResponse } from "next/server";
 import { createPost, listPosts } from "@/lib/wp/client";
-import { sanitizeWpHtml, wpHtmlToText } from "@/lib/wp/sanitizeHtml";
-import type { WpPostStatus } from "@/lib/wp/types";
+import { sanitizeWpHtml, siteHostOf, wpHtmlToText } from "@/lib/wp/sanitizeHtml";
+import type { WpPostStatus, WpSeoFields } from "@/lib/wp/types";
 import {
   readConnection,
   needConnection,
@@ -24,7 +24,18 @@ const WP_PROXY_LIMIT = 90;
 const WP_PROXY_WINDOW_MS = 60_000;
 
 const ALL_STATUSES: WpPostStatus[] = ["publish", "future", "draft", "pending", "private"];
-const FIELD_LIMITS = { title: 200, excerpt: 300, tag: 50, maxTags: 10, search: 100 };
+const FIELD_LIMITS = {
+  title: 200,
+  excerpt: 300,
+  tag: 50,
+  maxTags: 10,
+  search: 100,
+  slug: 70,
+  seoTitle: 70,
+  metaDescription: 160,
+  focusKeyword: 60,
+};
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** 예약 시각 하한: 과거로 예약하면 WP가 즉시 발행해버리므로 서버에서 막는다(시계 오차 허용 2분). */
 const SCHEDULE_MIN_AHEAD_MS = -2 * 60_000;
 
@@ -49,6 +60,8 @@ export async function GET(req: Request) {
 
   const pageRaw = Number(sp.get("page") ?? "1");
   const page = Number.isInteger(pageRaw) && pageRaw >= 1 && pageRaw <= 500 ? pageRaw : 1;
+  const perPageRaw = Number(sp.get("per_page") ?? "20");
+  const perPage = Number.isInteger(perPageRaw) && perPageRaw >= 1 && perPageRaw <= 50 ? perPageRaw : 20;
   const search = sanitizeText(sp.get("search") ?? "", FIELD_LIMITS.search);
   const categoryRaw = Number(sp.get("category") ?? "0");
   const categoryId =
@@ -58,6 +71,7 @@ export async function GET(req: Request) {
     const result = await listPosts(conn, {
       statuses,
       page,
+      perPage,
       ...(search ? { search } : {}),
       ...(categoryId ? { categoryId } : {}),
     });
@@ -82,7 +96,8 @@ export async function POST(req: Request) {
   const title = strField(body, "title", FIELD_LIMITS.title);
   if (!title) return badRequest("제목을 입력해 주세요.");
 
-  const html = sanitizeWpHtml(body.html);
+  const siteHost = siteHostOf(conn.url);
+  const html = sanitizeWpHtml(body.html, { allowLinkHosts: siteHost ? [siteHost] : [] });
   if (wpHtmlToText(html).length < 10) return badRequest("본문 내용이 너무 짧아요.");
 
   const statusRaw = strField(body, "status", 20);
@@ -104,6 +119,7 @@ export async function POST(req: Request) {
 
   const excerpt = strField(body, "excerpt", FIELD_LIMITS.excerpt);
   const categoryId = intField(body, "categoryId");
+  const featuredMediaId = intField(body, "featuredMediaId");
   const tags = Array.isArray(body.tags)
     ? body.tags
         .filter((t): t is string => typeof t === "string")
@@ -111,6 +127,18 @@ export async function POST(req: Request) {
         .filter(Boolean)
         .slice(0, FIELD_LIMITS.maxTags)
     : [];
+
+  const slugRaw = strField(body, "slug", FIELD_LIMITS.slug).toLowerCase();
+  const slug = SLUG_RE.test(slugRaw) ? slugRaw : "";
+
+  const seo: WpSeoFields = {
+    seoTitle: strField(body, "seoTitle", FIELD_LIMITS.seoTitle),
+    metaDescription: strField(body, "metaDescription", FIELD_LIMITS.metaDescription),
+    focusKeyword: strField(body, "focusKeyword", FIELD_LIMITS.focusKeyword),
+  };
+  const hasSeo = Boolean(seo.seoTitle || seo.metaDescription || seo.focusKeyword);
+
+  const format = body.format === "classic" ? "classic" : "blocks";
 
   try {
     const post = await createPost(conn, {
@@ -121,6 +149,10 @@ export async function POST(req: Request) {
       ...(dateGmt ? { dateGmt } : {}),
       ...(categoryId ? { categoryId } : {}),
       tags,
+      ...(slug ? { slug } : {}),
+      ...(featuredMediaId ? { featuredMediaId } : {}),
+      ...(hasSeo ? { seo } : {}),
+      format,
     });
     return NextResponse.json({ post });
   } catch (err) {

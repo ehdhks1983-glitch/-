@@ -221,6 +221,38 @@ export default function WpGuidePage() {
         </div>
       </section>
 
+      {/* 6. 2026 기준 */}
+      <section className="mt-10">
+        <h2 className="text-xl font-bold">6. 2026년 기준으로 알아둘 점</h2>
+        <div className="mt-4 space-y-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <h3 className="font-semibold">워드프레스 7.0 (2026년 5월 출시)</h3>
+            <p className="mt-1.5 text-sm leading-6 text-slate-600">
+              관리자 화면이 새 디자인으로 바뀌고 AI 연결 기능이 코어에 들어왔지만, 외부 프로그램이 글을
+              올리는 공식 문(REST API + 응용 프로그램 비밀번호)은 그대로예요. 이 도구는 글을{" "}
+              <strong>블록 에디터 형식</strong>으로 저장해서 워드프레스 편집 화면에서도 자연스럽게
+              수정할 수 있습니다.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <h3 className="font-semibold">구글의 &lsquo;대량 생산형 저품질 콘텐츠&rsquo; 정책</h3>
+            <p className="mt-1.5 text-sm leading-6 text-slate-600">
+              2024년 도입 후 2026년 업데이트들에서 단속이 강화됐어요. AI 글 자체를 벌주는 게 아니라{" "}
+              <strong>독자 가치 없이 양만 늘린 글</strong>을 거릅니다. 그래서 대량 자동화는 기본값이
+              &lsquo;임시글로 저장 후 검토&rsquo;이고, 중복 주제 건너뛰기·내부 링크·품질 체크를 자동으로 넣어요.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <h3 className="font-semibold">SEO 플러그인 연동</h3>
+            <p className="mt-1.5 text-sm leading-6 text-slate-600">
+              연결할 때 Yoast / Rank Math / All in One SEO를 자동 감지해요. Yoast는 SEO 제목·메타 설명이
+              바로 반영되고, Rank Math는 REST 메타 등록(브리지 플러그인)이 필요합니다. 플러그인이
+              없어도 영문 슬러그와 요약은 항상 반영돼요.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* CTA */}
       <div className="mt-10 rounded-2xl border border-indigo-100 bg-indigo-50/70 p-8 text-center">
         <h2 className="text-lg font-bold">이제 구조가 보이시죠?</h2>

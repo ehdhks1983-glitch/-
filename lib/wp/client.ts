@@ -1,25 +1,32 @@
-// lib/wp/client.ts  [신규 — 워드프레스 자동 발행] ※ 서버 전용(guard가 node:dns 사용)
+// lib/wp/client.ts  [업데이트 — 워드프레스 자동 발행 v2] ※ 서버 전용(guard가 node:dns 사용)
 // WP REST API 호출의 단일 통로. 인증(Basic/응용 프로그램 비밀번호)·타임아웃·에러 정규화 담당.
 // 고정 링크(퍼머링크)가 꺼진 사이트를 위해 /wp-json 실패 시 ?rest_route= 로 1회 폴백한다.
 // 리다이렉트는 따라가지 않는다(SSRF 우회 방지) — 사용자에게 최종 주소 입력을 안내.
+// v2: SEO 플러그인 감지·사이트 타임존, 미디어 업로드(대표 이미지), 블록 마크업 전송,
+//     슬러그·SEO 메타(Yoast/RankMath 키) 동시 전송.
 
 import { toBase64Utf8 } from "./connection";
 import { assertPublicSiteUrl } from "./guard";
+import { htmlToBlocks } from "./blocks";
 import type {
+  SeoPlugin,
   WpCategory,
   WpConnection,
   WpNewPost,
   WpPostStatus,
   WpPostSummary,
+  WpSeoFields,
 } from "./types";
 
 /** 호출 동작 파라미터(매직넘버 금지 → 여기로) */
 const WP_CONFIG = {
   requestTimeoutMs: 20_000,
+  uploadTimeoutMs: 60_000,
   /** 카테고리 전체 조회 시 페이지 상한(100개/페이지 × 10 = 1,000개) */
   maxCategoryPages: 10,
   categoryPerPage: 100,
   postsPerPage: 20,
+  postsPerPageMax: 50,
   maxTags: 10,
 };
 
@@ -37,7 +44,11 @@ export class WpApiError extends Error {
 
 interface WpFetchOptions {
   method?: "GET" | "POST" | "DELETE";
+  /** JSON 본문 */
   body?: unknown;
+  /** 멀티파트 본문(폴백 재시도를 위해 매번 새로 만든다) */
+  form?: () => FormData;
+  timeoutMs?: number;
 }
 
 interface WpFetchResult<T> {
@@ -71,17 +82,18 @@ async function wpFetch<T>(
   const auth = `Basic ${toBase64Utf8(`${conn.user}:${conn.appPassword}`)}`;
 
   const attempt = async (queryFallback: boolean) => {
+    const form = opts.form?.();
     const res = await fetch(buildRestUrl(conn.url, path, queryFallback), {
       method: opts.method ?? "GET",
       headers: {
         Authorization: auth,
         Accept: "application/json",
-        ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(opts.body !== undefined && !form ? { "Content-Type": "application/json" } : {}),
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: form ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
       cache: "no-store",
       redirect: "manual",
-      signal: AbortSignal.timeout(WP_CONFIG.requestTimeoutMs),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? WP_CONFIG.requestTimeoutMs),
     });
     if (res.status >= 300 && res.status < 400) {
       throw new WpApiError(
@@ -126,16 +138,43 @@ export interface WpSiteInfo {
   siteName: string;
   siteUrl: string;
   userName: string;
+  /** REST 인덱스 namespaces 로 감지한 SEO 플러그인 */
+  seoPlugin: SeoPlugin;
+  /** 사이트 타임존(예: "Asia/Seoul"). 설정 안 됐으면 빈 문자열 */
+  timezone: string;
+  /** 사이트 GMT 오프셋(시간). 타임존 미설정 사이트용 */
+  gmtOffset: number;
 }
 
-/** 연결 테스트: REST 인덱스(사이트 이름) + users/me(인증 확인)를 함께 조회. */
+interface RestIndex {
+  name?: string;
+  namespaces?: string[];
+  timezone_string?: string;
+  gmt_offset?: number | string;
+}
+
+function detectSeoPlugin(namespaces: string[]): SeoPlugin {
+  if (namespaces.some((n) => n.startsWith("yoast/"))) return "yoast";
+  if (namespaces.some((n) => n.startsWith("rankmath/"))) return "rankmath";
+  if (namespaces.some((n) => n.startsWith("aioseo/"))) return "aioseo";
+  return null;
+}
+
+/** 연결 테스트: users/me(인증 확인) + REST 인덱스(사이트 이름·플러그인·타임존). */
 export async function testConnection(conn: WpConnection): Promise<WpSiteInfo> {
   const me = await wpFetch<{ name?: string; slug?: string }>(conn, "/wp/v2/users/me?context=edit");
 
   let siteName = "";
+  let seoPlugin: SeoPlugin = null;
+  let timezone = "";
+  let gmtOffset = 0;
   try {
-    const index = await wpFetch<{ name?: string }>(conn, "/");
-    siteName = typeof index.data.name === "string" ? index.data.name : "";
+    const { data } = await wpFetch<RestIndex>(conn, "/");
+    siteName = typeof data.name === "string" ? data.name : "";
+    seoPlugin = detectSeoPlugin(Array.isArray(data.namespaces) ? data.namespaces : []);
+    timezone = typeof data.timezone_string === "string" ? data.timezone_string : "";
+    const off = Number(data.gmt_offset);
+    gmtOffset = Number.isFinite(off) ? off : 0;
   } catch {
     // 인덱스 조회 실패는 치명적이지 않음(인증은 이미 확인됨)
   }
@@ -144,6 +183,9 @@ export async function testConnection(conn: WpConnection): Promise<WpSiteInfo> {
     siteName: siteName || conn.url,
     siteUrl: conn.url,
     userName: me.data.name || me.data.slug || conn.user,
+    seoPlugin,
+    timezone,
+    gmtOffset,
   };
 }
 
@@ -216,6 +258,37 @@ export async function deleteCategory(conn: WpConnection, id: number): Promise<vo
   await wpFetch(conn, `/wp/v2/categories/${id}?force=true`, { method: "DELETE" });
 }
 
+// ───────────────────────── 미디어(대표 이미지) ─────────────────────────
+
+export interface UploadMediaInput {
+  data: ArrayBuffer;
+  filename: string;
+  mimeType: string;
+  altText?: string;
+  title?: string;
+}
+
+export interface UploadedMedia {
+  id: number;
+  url: string;
+}
+
+/** 이미지 업로드 → 미디어 id (글 생성 시 featured_media 로 사용) */
+export async function uploadMedia(conn: WpConnection, input: UploadMediaInput): Promise<UploadedMedia> {
+  const { data } = await wpFetch<{ id: number; source_url?: string }>(conn, "/wp/v2/media", {
+    method: "POST",
+    form: () => {
+      const fd = new FormData();
+      fd.append("file", new Blob([input.data], { type: input.mimeType }), input.filename);
+      if (input.altText) fd.append("alt_text", input.altText);
+      if (input.title) fd.append("title", input.title);
+      return fd;
+    },
+    timeoutMs: WP_CONFIG.uploadTimeoutMs,
+  });
+  return { id: data.id, url: data.source_url ?? "" };
+}
+
 // ───────────────────────── 글 ─────────────────────────
 
 interface RawPost {
@@ -244,6 +317,7 @@ export interface ListPostsQuery {
   /** 콤마 없이 배열로 — 내부에서 조인 */
   statuses: WpPostStatus[];
   page: number;
+  perPage?: number;
   search?: string;
   categoryId?: number;
 }
@@ -255,9 +329,10 @@ export interface ListPostsResult {
 }
 
 export async function listPosts(conn: WpConnection, q: ListPostsQuery): Promise<ListPostsResult> {
+  const perPage = Math.min(Math.max(q.perPage ?? WP_CONFIG.postsPerPage, 1), WP_CONFIG.postsPerPageMax);
   const params = new URLSearchParams({
     context: "edit",
-    per_page: String(WP_CONFIG.postsPerPage),
+    per_page: String(perPage),
     page: String(q.page),
     orderby: "date",
     order: "desc",
@@ -307,6 +382,28 @@ async function ensureTagIds(conn: WpConnection, names: string[]): Promise<number
   return ids;
 }
 
+/**
+ * SEO 메타 → Yoast·RankMath 양쪽 키로 동시 전송.
+ * WP REST는 show_in_rest 로 등록되지 않은 meta 키를 조용히 무시하므로 양쪽을 보내도 안전하다.
+ * (Yoast는 기본 등록, RankMath는 브리지 플러그인으로 등록 필요 — README 참고)
+ */
+function buildSeoMeta(seo: WpSeoFields): Record<string, string> {
+  const m: Record<string, string> = {};
+  if (seo.seoTitle) {
+    m._yoast_wpseo_title = seo.seoTitle;
+    m.rank_math_title = seo.seoTitle;
+  }
+  if (seo.metaDescription) {
+    m._yoast_wpseo_metadesc = seo.metaDescription;
+    m.rank_math_description = seo.metaDescription;
+  }
+  if (seo.focusKeyword) {
+    m._yoast_wpseo_focuskw = seo.focusKeyword;
+    m.rank_math_focus_keyword = seo.focusKeyword;
+  }
+  return m;
+}
+
 export interface CreatedPost {
   id: number;
   link: string;
@@ -320,13 +417,19 @@ export async function createPost(conn: WpConnection, input: WpNewPost): Promise<
 
   const body: Record<string, unknown> = {
     title: input.title,
-    content: input.html,
+    content: input.format === "classic" ? input.html : htmlToBlocks(input.html),
     excerpt: input.excerpt,
     status: input.status,
   };
   if (input.categoryId) body.categories = [input.categoryId];
   if (tagIds.length) body.tags = tagIds;
   if (input.status === "future" && input.dateGmt) body.date_gmt = input.dateGmt;
+  if (input.slug) body.slug = input.slug;
+  if (input.featuredMediaId) body.featured_media = input.featuredMediaId;
+  if (input.seo) {
+    const meta = buildSeoMeta(input.seo);
+    if (Object.keys(meta).length) body.meta = meta;
+  }
 
   const { data } = await wpFetch<RawPost>(conn, "/wp/v2/posts", { method: "POST", body });
   const mapped = mapPost(data);
